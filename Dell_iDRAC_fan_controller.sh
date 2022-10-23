@@ -65,8 +65,8 @@ while true; do
   CPU1_TEMPERATURE=$(echo $CPU_DATA | awk '{print $1;}')
   CPU2_TEMPERATURE=$(echo $CPU_DATA | awk '{print $2;}')
 
-  CPU1_OVERHEAT () { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]; }
-  CPU2_OVERHEAT () { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]; }
+  CPU1_OVERHEAT () { [[ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]]; }
+  CPU2_OVERHEAT () { [[ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]]; }
 
   COMMENT=" -"
   if CPU1_OVERHEAT
@@ -110,8 +110,9 @@ while true; do
     echo "   Date & time     Inlet  CPU 1  CPU 2  Exhaust          Active fan speed profile          Comment"
     i=0
   fi
-  printf "%12s  %3d°C  %3d°C  %3d°C  %5d°C  %40s  %s\n" "$(date +"%d-%m-%y %H:%M:%S")" $INLET_TEMPERATURE $CPU1_TEMPERATURE $CPU2_TEMPERATURE $EXHAUST_TEMPERATURE "$CURRENT_FAN_CONTROL_PROFILE" "$COMMENT"
-
+   printf "%12s  %3d  C  %3d  C  %3d  C  %5d  C" "$(date +"%d-%m-%y %H:%M:%S")" $INLET_TEMPERATURE $CPU1_TEMPERATURE $CPU2_TEMPERATURE
+   printf " %s %s\n" "$CURRENT_FAN_CONTROL_PROFILE" "$COMMENT"
+ 
   ((i++))
   wait $SLEEP_PROCESS_PID
 done
