@@ -1,6 +1,3 @@
-Sure, here is an improved version of the script with added comments:
-
-Copy code
 #!/bin/bash
 
 # Define global functions
