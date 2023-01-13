@@ -1,12 +1,19 @@
+Sure, here is an improved version of the script with added comments:
+
+Copy code
 #!/bin/bash
 
 # Define global functions
+# This function applies Dell's default dynamic fan control profile
 apply_Dell_profile () {
+  # Use ipmitool to send the raw command to set fan control to Dell default
   ipmitool -I $LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
+# This function applies a user-specified static fan control profile
 apply_user_profile () {
+  # Use ipmitool to send the raw command to set fan control to user-specified value
   ipmitool -I $LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
   ipmitool -I $LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
@@ -19,12 +26,12 @@ gracefull_exit () {
   exit 0
 }
 
+# Trap the signals for container exit and run gracefull_exit function
 trap 'gracefull_exit' SIGQUIT SIGKILL SIGTERM
 
 # Prepare, format and define initial variables
 
-#readonly DELL_FRESH_AIR_COMPLIANCE=45
-
+# Check if FAN_SPEED variable is in hexadecimal format, if not convert it to hexadecimal
 if [[ $FAN_SPEED == 0x* ]]
 then
   DECIMAL_FAN_SPEED=$(printf '%d' $FAN_SPEED)
@@ -36,6 +43,8 @@ fi
 
 # Log main informations given to the container
 echo "Idrac/IPMI host: $IDRAC_HOST"
+
+# Check if the Idrac host is set to 'local', and set the LOGIN_STRING accordingly
 if [[ $IDRAC_HOST == "local" ]]
 then
   LOGIN_STRING='open'
@@ -44,11 +53,14 @@ else
   echo "Idrac/IPMI password: $IDRAC_PASSWORD"
   LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
 fi
+
+# Log the fan speed objective, CPU temperature threshold, and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature treshold: $CPU_TEMPERATURE_TRESHOLD°C"
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
 
+# Define the interval for printing
 readonly TABLE_HEADER_PRINT_INTERVAL=10
 i=$TABLE_HEADER_PRINT_INTERVAL
 IS_DELL_PROFILE_APPLIED=true
