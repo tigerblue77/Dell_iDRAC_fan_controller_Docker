@@ -67,9 +67,11 @@ IS_DELL_PROFILE_APPLIED=true
 
 # Start monitoring
 while true; do
+  # Sleep for the specified interval before taking another reading
   sleep $CHECK_INTERVAL &
   SLEEP_PROCESS_PID=$!
 
+  # Retrieve sensor data using ipmitool
   DATA=$(ipmitool -I $LOGIN_STRING sdr type temperature | grep degrees)
   INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | grep -Po '\d{2}' | tail -1)
   EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | grep -Po '\d{2}' | tail -1)
@@ -77,10 +79,13 @@ while true; do
   CPU1_TEMPERATURE=$(echo $CPU_DATA | awk '{print $1;}')
   CPU2_TEMPERATURE=$(echo $CPU_DATA | awk '{print $2;}')
 
+  # Define functions to check if CPU1 and CPU2 temperatures are above the threshold
   CPU1_OVERHEAT () { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]; }
   CPU2_OVERHEAT () { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]; }
 
+  # Initialize a variable to store comments
   COMMENT=" -"
+  # Check if CPU1 is overheating and apply Dell profile if true
   if CPU1_OVERHEAT
   then
     apply_Dell_profile
