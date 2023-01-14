@@ -86,46 +86,45 @@ while true; do
   if CPU1_OVERHEAT
   then
     apply_Dell_profile
-
+    # Set the flag to indicate that Dell profile is applied
     if ! $IS_DELL_PROFILE_APPLIED
     then
       IS_DELL_PROFILE_APPLIED=true
-
-      if CPU2_OVERHEAT
-      then
-        COMMENT="CPU 1 and CPU 2 temperatures are too high. Dell default dynamic fan control profile applied."
-      else
-        COMMENT="CPU 1 temperature is too high. Dell default dynamic fan control profile applied."
-      fi
     fi
-  elif CPU2_OVERHEAT
-  then
-    apply_Dell_profile
 
-    if ! $IS_DELL_PROFILE_APPLIED
+    if CPU2_OVERHEAT
     then
-      IS_DELL_PROFILE_APPLIED=true
-      COMMENT="CPU 2 temperature is too high. Dell default dynamic fan control profile applied."
+      COMMENT="CPU 1 and CPU 2 temperatures are too high, Dell default dynamic fan control profile applied for safety"
+    else
+      COMMENT="CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
   else
-    apply_user_profile
-
-    if $IS_DELL_PROFILE_APPLIED
+    # Check if CPU2 is overheating and apply Dell profile if true
+    if CPU2_OVERHEAT
     then
-      COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_TRESHOLD°C). User's fan control profile applied."
-      IS_DELL_PROFILE_APPLIED=false
+      apply_Dell_profile
+      if ! $IS_DELL_PROFILE_APPLIED
+      then
+        IS_DELL_PROFILE_APPLIED=true
+      fi
+      COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
+    else
+      # Check if user profile is applied and apply it if not
+      if $IS_DELL_PROFILE_APPLIED
+      then
+        apply_user_profile
+        IS_DELL_PROFILE_APPLIED=false
+      fi
     fi
   fi
-
-  # Print temperatures array
-  if [ $i -ge $TABLE_HEADER_PRINT_INTERVAL ]
+  # Print the results, including the current fan control profile and comment
+  if [ $i -eq $TABLE_HEADER_PRINT_INTERVAL ]
   then
-    echo "                   ------- Temperatures -------"
-    echo "   Date & time     Inlet  CPU 1  CPU 2  Exhaust          Active fan speed profile          Comment"
+    echo "Time                CPU1    CPU2    Inlet    Exhaust    Fan Control Profile                                 Comment"
     i=0
   fi
-  printf "%12s  %3d°C  %3d°C  %3d°C  %5d°C  %40s  %s\n" "$(date +"%d-%m-%y %H:%M:%S")" $INLET_TEMPERATURE $CPU1_TEMPERATURE $CPU2_TEMPERATURE $EXHAUST_TEMPERATURE "$CURRENT_FAN_CONTROL_PROFILE" "$COMMENT"
-
-  ((i++))
+  echo "$(date +%T)    $CPU1_TEMPERATURE°C    $CPU2_TEMPERATURE°C    $INLET_TEMPERATURE°C    $EXHAUST_TEMPERATURE°C    $CURRENT_FAN_CONTROL_PROFILE    $COMMENT"
+  i=$(($i+1))
   wait $SLEEP_PROCESS_PID
 done
+
