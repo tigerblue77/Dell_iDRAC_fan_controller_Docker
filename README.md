@@ -61,7 +61,7 @@ docker run -d \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
   -e CPU_TEMPERATURE_TRESHOLD=<decimal temperature treshold> \
   -e CHECK_INTERVAL=<seconds between each check> \
-  -e DISABLE_THIRD_PARTY=<true or false> \
+  -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   --device=/dev/ipmi0:/dev/ipmi0:rw \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
@@ -78,7 +78,7 @@ docker run -d \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
   -e CPU_TEMPERATURE_TRESHOLD=<decimal temperature treshold> \
   -e CHECK_INTERVAL=<seconds between each check> \
-  -e DISABLE_THIRD_PARTY=<true or false> \
+  -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
 
@@ -99,7 +99,7 @@ services:
       - FAN_SPEED=<decimal or hexadecimal fan speed>
       - CPU_TEMPERATURE_TRESHOLD=<decimal temperature treshold>
       - CHECK_INTERVAL=<seconds between each check>
-      - DISABLE_THIRD_PARTY=<true or false>
+      - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
     devices:
       - /dev/ipmi0:/dev/ipmi0:rw
 ```
@@ -121,7 +121,7 @@ services:
       - FAN_SPEED=<decimal or hexadecimal fan speed>
       - CPU_TEMPERATURE_TRESHOLD=<decimal temperature treshold>
       - CHECK_INTERVAL=<seconds between each check>
-      - DISABLE_THIRD_PARTY=<true or false>
+      - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 ```
 
 <p align="right">(<a href="#top">back to top</a>)</p>
@@ -137,7 +137,7 @@ All parameters are optional as they have default values (including default iDRAC
 - `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%).
 - `CPU_TEMPERATURE_TRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 50(°C).
 - `CHECK_INTERVAL` parameter is the time (in seconds) between each temperature check and potential profile change. **Default** value is 60(s).
-- `DISABLE_THIRD_PARTY` parameter is the boolean to disable the Third-Party PCIe Card Default Cooling Response. **Default** value is false.
+- `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
