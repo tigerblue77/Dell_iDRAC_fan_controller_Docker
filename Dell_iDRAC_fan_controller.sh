@@ -12,9 +12,18 @@ apply_user_profile () {
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
+disable_third_party_profile () {
+  ipmitool -I $LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null
+}
+
+enable_third_party_profile () {
+  ipmitool -I $LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
+}
+
 # Prepare traps in case of container exit
 gracefull_exit () {
   apply_Dell_profile
+  enable_third_party_profile
   echo "/!\ WARNING /!\ Container stopped, Dell default dynamic fan control profile applied for safety."
   exit 0
 }
@@ -48,6 +57,14 @@ echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature treshold: $CPU_TEMPERATURE_TRESHOLD°C"
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
+
+# run on start up to disable third party pci-e fan profile
+if [[ $DISABLE_THIRD_PARTY == "true" ]]
+then
+  echo "Disabling Third Party Fan Control: $DISABLE_THIRD_PARTY"
+  disable_third_party_profile
+  echo "Disabled"
+fi
 
 readonly TABLE_HEADER_PRINT_INTERVAL=10
 i=$TABLE_HEADER_PRINT_INTERVAL
