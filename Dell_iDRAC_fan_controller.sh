@@ -150,7 +150,7 @@ while true; do
     echo "   Date & time     Inlet  CPU 1  CPU 2  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
     i=0
   fi
-  printf "%12s  %3d\xe2\x84\x83   %3d\xe2\x84\x83   %3d\xe2\x84\x83   %5d\xe2\x84\x83   %40s  %51s  %s\n" "$(date +"%d-%m-%y %H:%M:%S")" "$INLET_TEMPERATURE" "$CPU1_TEMPERATURE" "$CPU2_TEMPERATURE" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
+  printf "%12s  %3d\xe2\x84\x83   %3d\xe2\x84\x83   %3d\xe2\x84\x83   %5d\xe2\x84\x83   %40s  %51s  %s\n" "$(date +"%d-%m-%y %H:%M:%S")" $INLET_TEMPERATURE $CPU1_TEMPERATURE $CPU2_TEMPERATURE $EXHAUST_TEMPERATURE "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
 
   ((i++))
   wait $SLEEP_PROCESS_PID
