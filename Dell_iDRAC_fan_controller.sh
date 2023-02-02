@@ -14,7 +14,7 @@ function apply_user_profile () {
 
 function enable_third_party_PCIe_card_Dell_default_cooling_response () {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  ipmitool -I $LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x050x00 0x00 0x00 0x00 > /dev/null
+  ipmitool -I $LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
 }
 
 function disable_third_party_PCIe_card_Dell_default_cooling_response () {
