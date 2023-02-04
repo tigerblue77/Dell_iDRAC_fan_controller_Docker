@@ -48,6 +48,24 @@ ipmitool -I lanplus \
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
+<!-- PREREQUISITES -->
+## Prerequisites
+### To access iDRAC over LAN (not needed in "local" mode) :
+
+1. Log into your iDRAC web console
+
+![001](https://user-images.githubusercontent.com/37409593/210168273-7d760e47-143e-4a6e-aca7-45b483024139.png)
+
+2. In the left side menu, expand "iDRAC settings", click "Network" then click "IPMI Settings" link at the top of the web page.
+
+![002](https://user-images.githubusercontent.com/37409593/210168249-994f29cc-ac9e-4667-84f7-07f6d9a87522.png)
+
+3. Check the "Enable IPMI over LAN" checkbox then click "Apply" button.
+
+![003](https://user-images.githubusercontent.com/37409593/210168248-a68982c4-9fe7-40e7-8b2c-b3f06fbfee62.png)
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 <!-- USAGE -->
 ## Usage
 
