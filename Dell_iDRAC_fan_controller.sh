@@ -12,6 +12,34 @@ function apply_user_profile () {
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
+# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+retrieve_temperatures () {
+  if (( $# != 2 ))
+  then
+    printf "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT" >&2
+    return 1
+  fi
+  local IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
+  local IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
+
+  local DATA=$(ipmitool -I $LOGIN_STRING sdr type temperature | grep degrees)
+  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | grep -Po '\d{2}' | tail -1)
+  if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+  then
+    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | grep -Po '\d{2}' | tail -1)
+  else
+    EXHAUST_TEMPERATURE="-"
+  fi
+  local CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
+  CPU1_TEMPERATURE=$(echo $CPU_DATA | awk '{print $1;}')
+  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  then
+    CPU2_TEMPERATURE=$(echo $CPU_DATA | awk '{print $2;}')
+  else
+    CPU2_TEMPERATURE="-"
+  fi
+}
+
 # Prepare traps in case of container exit
 function gracefull_exit () {
   apply_Dell_profile
@@ -54,20 +82,38 @@ readonly TABLE_HEADER_PRINT_INTERVAL=10
 i=$TABLE_HEADER_PRINT_INTERVAL
 IS_DELL_PROFILE_APPLIED=true
 
+# Check present sensors
+IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
+IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
+retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+if [ -z "$EXHAUST_TEMPERATURE" ]
+then
+  echo "No exhaust temperature sensor detected."
+  IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
+fi
+if [ -z "$CPU2_TEMPERATURE" ]
+then
+  echo "No CPU2 temperature sensor detected."
+  IS_CPU2_TEMPERATURE_SENSOR_PRESENT=false
+fi
+# Output new line to beautify output if one of the previous conditions have echoed
+if ! $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT || ! $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+then
+  echo ""
+fi
+
 # Start monitoring
 while true; do
   sleep $CHECK_INTERVAL &
   SLEEP_PROCESS_PID=$!
 
-  DATA=$(ipmitool -I $LOGIN_STRING sdr type temperature | grep degrees)
-  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | grep -Po '\d{2}' | tail -1)
-  EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | grep -Po '\d{2}' | tail -1)
-  CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
-  CPU1_TEMPERATURE=$(echo $CPU_DATA | awk '{print $1;}')
-  CPU2_TEMPERATURE=$(echo $CPU_DATA | awk '{print $2;}')
+  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 
   CPU1_OVERHEAT () { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]; }
-  CPU2_OVERHEAT () { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]; }
+  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  then
+    CPU2_OVERHEAT () { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_TRESHOLD ]; }
+  fi
 
   COMMENT=" -"
   if CPU1_OVERHEAT
@@ -78,14 +124,14 @@ while true; do
     then
       IS_DELL_PROFILE_APPLIED=true
 
-      if CPU2_OVERHEAT
+      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT
       then
         COMMENT="CPU 1 and CPU 2 temperatures are too high. Dell default dynamic fan control profile applied."
       else
         COMMENT="CPU 1 temperature is too high. Dell default dynamic fan control profile applied."
       fi
     fi
-  elif CPU2_OVERHEAT
+  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT
   then
     apply_Dell_profile
 
@@ -111,7 +157,7 @@ while true; do
     echo "   Date & time     Inlet  CPU 1  CPU 2  Exhaust          Active fan speed profile          Comment"
     i=0
   fi
-  printf "%12s  %3d°C  %3d°C  %3d°C  %5d°C  %40s  %s\n" "$(date +"%d-%m-%y %H:%M:%S")" $INLET_TEMPERATURE $CPU1_TEMPERATURE $CPU2_TEMPERATURE $EXHAUST_TEMPERATURE "$CURRENT_FAN_CONTROL_PROFILE" "$COMMENT"
+  printf "%12s  %3d°C  %3d°C  %3s°C  %5s°C  %40s  %s\n" "$(date +"%d-%m-%y %H:%M:%S")" $INLET_TEMPERATURE $CPU1_TEMPERATURE $CPU2_TEMPERATURE $EXHAUST_TEMPERATURE "$CURRENT_FAN_CONTROL_PROFILE" "$COMMENT"
 
   ((i++))
   wait $SLEEP_PROCESS_PID
