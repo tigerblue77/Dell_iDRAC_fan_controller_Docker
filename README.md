@@ -14,6 +14,7 @@ Download Docker image from :
     <li><a href="#container-console-log-example">Container console log example</a></li>
     <li><a href="#usage">Usage</a></li>
     <li><a href="#parameters">Parameters</a></li>
+    <li><a href="#updating-from-previous-version">Updating from Previous Version</a></li>
     <li><a href="#troubleshooting">Troubleshooting</a></li>
     <li><a href="#contributing">Contributing</a></li>
   </ol>
@@ -68,7 +69,9 @@ docker run -d \
   --restart=unless-stopped \
   -e IDRAC_HOST=local \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
+  -e BOOST_SPEED=<decimal or hexadecimal fan speed> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
+  -e CPU_CRITICAL_THRESHOLD=<decimal temperature threshold> \ 
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   --device=/dev/ipmi0:/dev/ipmi0:rw \
@@ -86,6 +89,9 @@ docker run -d \
   -e IDRAC_PASSWORD=<iDRAC password> \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
+  -e BOOST_SPEED=<decimal or hexadecimal fan speed> \
+  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \ 
+  -e CPU_CRITICAL_THRESHOLD=<decimal temperature threshold> \  
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   tigerblue77/dell_idrac_fan_controller:latest
@@ -106,7 +112,9 @@ services:
     environment:
       - IDRAC_HOST=local
       - FAN_SPEED=<decimal or hexadecimal fan speed>
+      - BOOST_SPEED=<decimal or hexadecimal fan speed>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+      - CPU_CRITICAL_THRESHOLD=<decimal temperature threshold>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
     devices:
@@ -128,7 +136,9 @@ services:
       - IDRAC_USERNAME=<iDRAC username>
       - IDRAC_PASSWORD=<iDRAC password>
       - FAN_SPEED=<decimal or hexadecimal fan speed>
+      - BOOST_SPEED=<decimal or hexadecimal fan speed>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+      - CPU_CRITICAL_THRESHOLD=<decimal temperature threshold>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 ```
@@ -144,9 +154,24 @@ All parameters are optional as they have default values (including default iDRAC
 - `IDRAC_USERNAME` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "root".
 - `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "calvin".
 - `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%).
-- `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 50(°C).
+- `BOOST_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 25(%). 
+- `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the boost speed fan mode defined below will become active. **Default** value is 50(°C).
+- `CPU_CRITICAL_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 65(°C).
 - `CHECK_INTERVAL` parameter is the time (in seconds) between each temperature check and potential profile change. **Default** value is 60(s).
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- UPDATING FROM PREVIOUS VERSION -->
+## Updating from Previous Version
+
+When defining the new parameters, keep in mind these points: 
+- That `FAN_SPEED` is now the lower user-defined speed. 
+- That `BOOST_SPEED` is the new intermediate speed and should be higher.
+- The `CPU_TEMPERATURE_THRESHOLD` is now the threshold for the fan boost profile.
+- The `CPU_CRITICAL_THRESHOLD` is now the safety threshold that sets the dynamic Dell profile.
+
+When updating from the previous version without defining the new parameters, if the default  `CPU_CRITICAL_THRESHOLD` is lower than the `CPU_TEMPERATURE_THRESHOLD` you've set, it will be set to the higher value. Likewise, if the default `BOOST_SPEED` is lower than the `FAN_SPEED` you've set, it will be set to the higher value as well. This should be reflected at the start of the log output when the settings are listed. This will keep things running as they were previously, but may make log messages a bit confusing.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
