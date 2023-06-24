@@ -125,14 +125,14 @@ else
   HEXADECIMAL_BOOST_SPEED=$(printf '0x%02x' $BOOST_SPEED)
 fi
 
-# Checks if the boost dan speed is greater than the base fan speed, and if not, sets it to the higher value.
+# Checks if the boost fan speed is greater than the base fan speed, and if not, sets it to the higher value.
 if [[ $DECIMAL_FAN_SPEED -gt $DECIMAL_BOOST_SPEED ]]
 then
   DECIMAL_BOOST_SPEED=$DECIMAL_FAN_SPEED
   HEXADECIMAL_BOOST_SPEED=$HEXADECIMAL_FAN_SPEED
 fi 
 
-# Checks if the temperature threshold is greater than the critical threshold and sets the critical threshold to the higher value if it is. This prevents updating from previous versions breaking the script if the user doesn't change the default value.
+# Checks if the temperature threshold is greater than the critical threshold. If it is, sets critical threshold to the higher value. This ensures updating from previous versions doesn't break the logic.
 if [[ $CPU_TEMPERATURE_THRESHOLD -gt $CPU_CRITICAL_THRESHOLD ]]
 then 
   CPU_CRITICAL_THRESHOLD=$CPU_TEMPERATURE_THRESHOLD
@@ -256,7 +256,7 @@ while true; do
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED
     then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=false
-      COMMENT="CPU temperature decreased and is now OK (<= $CPU_CRITICAL_THRESHOLD°C), static fan boost profile applied."
+      COMMENT="CPU temperature decreased and is now OK (<= $CPU_CRITICAL_THRESHOLD°C), static fan control profile applied."
     elif $IS_USER_FAN_BOOST_PROFILE_APPLIED
     then
       IS_USER_FAN_BOOST_PROFILE_APPLIED=false
