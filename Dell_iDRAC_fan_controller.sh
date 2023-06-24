@@ -221,7 +221,7 @@ while true; do
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="Critical threshold reached, Dell default dynamic fan control profile applied for safety"
     fi 
-  # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true 
+  # Check if CPU 1 is overheating then apply user fan boost profile if true 
   elif CPU1_OVERHEAT
   then
       apply_user_fan_boost_profile
@@ -231,7 +231,7 @@ while true; do
       IS_USER_FAN_BOOST_PROFILE_APPLIED=true
 
       # If CPU 2 temperature sensor is present, check if it is overheating too.
-      # Do not apply Dell default dynamic fan control profile as it has already been applied before
+      # Do not apply user fan boost profile as it has already been applied before
       if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT
       then
         COMMENT="CPU 1 and CPU 2 temperatures are too high, user fan boost profile applied"
@@ -239,7 +239,7 @@ while true; do
         COMMENT="CPU 1 temperature is too high, user fan boost profile applied"
       fi
     fi
-  # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
+  # If CPU 2 temperature sensor is present, check if it is overheating then apply user fan boost profile if true
   elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT
   then
     apply_user_fan_boost_profile
