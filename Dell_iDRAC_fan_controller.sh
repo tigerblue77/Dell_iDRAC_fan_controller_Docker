@@ -20,6 +20,14 @@ function apply_user_fan_control_profile () {
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
+# This function applies a user-specified fan boost profile
+function apply_user_fan_boost_profile () {
+  # Use ipmitool to send the raw command to set fan control to user-specified boost value
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_BOOST_SPEED > /dev/null
+  CURRENT_FAN_CONTROL_PROFILE="User fan boost profile ($DECIMAL_BOOST_SPEED%)"
+}
+
 # Retrieve temperature sensors data using ipmitool
 # Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 function retrieve_temperatures () {
@@ -107,6 +115,29 @@ else
   HEXADECIMAL_FAN_SPEED=$(printf '0x%02x' $FAN_SPEED)
 fi
 
+# Check if BOOST_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
+if [[ $BOOST_SPEED == 0x* ]]
+then
+  DECIMAL_BOOST_SPEED=$(printf '%d' $BOOST_SPEED)
+  HEXADECIMAL_BOOST_SPEED=$BOOST_SPEED
+else
+  DECIMAL_BOOST_SPEED=$BOOST_SPEED
+  HEXADECIMAL_BOOST_SPEED=$(printf '0x%02x' $BOOST_SPEED)
+fi
+
+# Checks if the boost dan speed is greater than the base fan speed, and if not, sets it to the higher value.
+if [[ $DECIMAL_FAN_SPEED -gt $DECIMAL_BOOST_SPEED ]]
+then
+  DECIMAL_BOOST_SPEED=$DECIMAL_FAN_SPEED
+  HEXADECIMAL_BOOST_SPEED=$HEXADECIMAL_FAN_SPEED
+fi 
+
+# Checks if the temperature threshold is greater than the critical threshold and sets the critical threshold to the higher value if it is. This prevents updating from previous versions breaking the script if the user doesn't change the default value.
+if [[ $CPU_TEMPERATURE_THRESHOLD -gt $CPU_CRITICAL_THRESHOLD ]]
+then 
+  CPU_CRITICAL_THRESHOLD=$CPU_TEMPERATURE_THRESHOLD
+fi
+
 # Log main informations given to the container
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
@@ -125,9 +156,12 @@ else
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
 fi
 
+
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+echo "Boost speed objective: $DECIMAL_BOOST_SPEED%"
 echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+echo "CPU critical threshold: $CPU_CRITICAL_THRESHOLDºC"
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
 
@@ -171,36 +205,49 @@ while true; do
   then
     function CPU2_OVERHEAT () { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
   fi
-
+  
+  # Define function to check if critical threshold reached
+  function IS_SYSTEM_CRITICAL () { [ $CPU1_TEMPERATURE -gt $CPU_CRITICAL_THRESHOLD ] || [ $CPU2_TEMPERATURE -gt $CPU_CRITICAL_THRESHOLD ]; }
+  
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
-  # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
-  if CPU1_OVERHEAT
-  then
+  # Check if system has reached critical threshold then apply Dell default dynamic fan control profile if true
+  if IS_SYSTEM_CRITICAL
+  then 
     apply_Dell_fan_control_profile
-
+    
     if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED
     then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
+      COMMENT="Critical threshold reached, Dell default dynamic fan control profile applied for safety"
+    fi 
+  # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true 
+  elif CPU1_OVERHEAT
+  then
+      apply_user_fan_boost_profile
+
+    if ! $IS_USER_FAN_BOOST_PROFILE_APPLIED
+    then
+      IS_USER_FAN_BOOST_PROFILE_APPLIED=true
 
       # If CPU 2 temperature sensor is present, check if it is overheating too.
       # Do not apply Dell default dynamic fan control profile as it has already been applied before
       if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT
       then
-        COMMENT="CPU 1 and CPU 2 temperatures are too high, Dell default dynamic fan control profile applied for safety"
+        COMMENT="CPU 1 and CPU 2 temperatures are too high, user fan boost profile applied"
       else
-        COMMENT="CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
+        COMMENT="CPU 1 temperature is too high, user fan boost profile applied"
       fi
     fi
   # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
   elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT
   then
-    apply_Dell_fan_control_profile
+    apply_user_fan_boost_profile
 
-    if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED
+    if ! $IS_USER_FAN_BOOST_PROFILE_APPLIED
     then
-      IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
-      COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
+      IS_USER_FAN_BOOST_PROFILE_APPLIED=true
+      COMMENT="CPU 2 temperature is too high, user fan boost profile applied"
     fi
   else
     apply_user_fan_control_profile
@@ -209,8 +256,12 @@ while true; do
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED
     then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=false
-      COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
-    fi
+      COMMENT="CPU temperature decreased and is now OK (<= $CPU_CRITICAL_THRESHOLD°C), static fan boost profile applied."
+    elif $IS_USER_FAN_BOOST_PROFILE_APPLIED
+    then
+      IS_USER_FAN_BOOST_PROFILE_APPLIED=false
+      COMMENTS="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), static fan control profile applied."
+    fi 
   fi
 
   # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
