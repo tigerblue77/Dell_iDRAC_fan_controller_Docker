@@ -1,8 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Enable strict bash mode to stop the script if an uninitialized variable is used, if a command fails, or if a command with a pipe fails
 # Not working in some setups : https://github.com/tigerblue77/Dell_iDRAC_fan_controller/issues/48
 # set -euo pipefail
+
+# Default settings
+IDRAC_HOST=${IDRAC_HOST:-local}
+FAN_SPEED=${FAN_SPEED:-10}
+CPU_TEMPERATURE_THRESHOLD=${CPU_TEMPERATURE_THRESHOLD:-60}
+CHECK_INTERVAL=${CHECK_INTERVAL:-30}
+DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=${DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE:-true}
 
 # Define global functions
 # This function applies Dell's default dynamic fan control profile
@@ -34,7 +41,7 @@ function retrieve_temperatures () {
   local DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
 
   # Parse CPU data
-  local CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
+  local CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Eo '[[:digit:]]{2}')
   CPU1_TEMPERATURE=$(echo $CPU_DATA | awk '{print $1;}')
   if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
   then
@@ -44,12 +51,12 @@ function retrieve_temperatures () {
   fi
 
   # Parse inlet temperature data
-  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | grep -Po '\d{2}' | tail -1)
+  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | grep -Eo '[[:digit:]]{2}' | tail -1)
 
   # If exhaust temperature sensor is present, parse its temperature data
   if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   then
-    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | grep -Po '\d{2}' | tail -1)
+    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | grep -Eo '[[:digit:]]{2}' | tail -1)
   else
     EXHAUST_TEMPERATURE="-"
   fi
@@ -83,15 +90,15 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response () {
 # }
 
 # Prepare traps in case of container exit
-function gracefull_exit () {
+function graceful_exit () {
   apply_Dell_fan_control_profile
   enable_third_party_PCIe_card_Dell_default_cooling_response
   echo "/!\ WARNING /!\ Container stopped, Dell default dynamic fan control profile applied for safety."
   exit 0
 }
 
-# Trap the signals for container exit and run gracefull_exit function
-trap 'gracefull_exit' SIGQUIT SIGKILL SIGTERM
+# Trap the signals for container exit and run graceful_exit function
+trap 'graceful_exit' SIGQUIT SIGINT SIGKILL SIGTERM
 
 # Prepare, format and define initial variables
 
