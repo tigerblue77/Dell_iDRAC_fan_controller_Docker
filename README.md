@@ -67,6 +67,18 @@ This Docker container is currently built and available for the following CPU arc
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
+<!-- Prometheus Pushgateway -->
+## Prometheus Pushgateway
+
+For Support for export temperature to pushgateway add pushgateway address to PUSH_GATEWAY_URL environment variable 
+
+Example:
+```bash
+ -e PUSH_GATEWAY_URL=http://pushgateway-prometheus-pushgateway.pushgateway.svc:9091
+```
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 <!-- USAGE -->
 ## Usage
 

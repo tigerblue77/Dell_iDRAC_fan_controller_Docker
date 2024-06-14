@@ -38,6 +38,12 @@ else
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
 fi
 
+if [ -n "$PUSH_GATEWAY_URL" ]; then
+  echo "Pushgateway URL: $PUSH_GATEWAY_URL"
+else
+  echo "Pushgateway not configured"
+fi
+
 get_Dell_server_model
 
 if [[ ! $SERVER_MANUFACTURER == "DELL" ]]
@@ -158,5 +164,14 @@ while true; do
   fi
   printf "%19s  %3d°C  %3d°C  %3s°C  %5s°C  %40s  %51s  %s\n" "$(date +"%d-%m-%Y %T")" $INLET_TEMPERATURE $CPU1_TEMPERATURE "$CPU2_TEMPERATURE" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
   ((i++))
+  if [ -n "$PUSH_GATEWAY_URL" ]; then
+    cat <<EOF | curl -s -o /dev/null --data-binary @- $PUSH_GATEWAY_URL/metrics/job/dell_idrac_fan_controller
+      dell_idrac_fan_controller_inlet_temperature{host="$IDRAC_HOST"} $INLET_TEMPERATURE
+      dell_idrac_fan_controller_cpu_1_temperature{host="$IDRAC_HOST"} $CPU1_TEMPERATURE
+      dell_idrac_fan_controller_cpu_2_temperature{host="$IDRAC_HOST"} $CPU2_TEMPERATURE
+      dell_idrac_fan_controller_exhaust_temperature{host="$IDRAC_HOST"} $EXHAUST_TEMPERATURE
+      dell_idrac_fan_controller_threshold_temperature{host="$IDRAC_HOST"} $CPU_TEMPERATURE_THRESHOLD
+EOF
+  fi
   wait $SLEEP_PROCESS_PID
 done
