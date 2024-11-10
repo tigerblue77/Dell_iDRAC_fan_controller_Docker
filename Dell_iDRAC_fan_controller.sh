@@ -46,6 +46,18 @@ then
   exit 1
 fi
 
+# If server model is Gen 14 (*40) or newer
+if [[ $SERVER_MODEL =~ ^[RT][0-9][4-9]0$ ]]
+then
+  DELL_POWEREDGE_GEN_14_OR_NEWER=true
+  CPU1_TEMPERATURE_INDEX=2
+  CPU2_TEMPERATURE_INDEX=4
+else
+  DELL_POWEREDGE_GEN_14_OR_NEWER=false
+  CPU1_TEMPERATURE_INDEX=1
+  CPU2_TEMPERATURE_INDEX=2
+fi
+
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
@@ -138,15 +150,19 @@ while true; do
     fi
   fi
 
-  # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
-  # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
-  if $DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE
+  # If server model is Gen 14 (*40) or newer
+  if ! $DELL_POWEREDGE_GEN_14_OR_NEWER
   then
-    disable_third_party_PCIe_card_Dell_default_cooling_response
-    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
-  else
-    enable_third_party_PCIe_card_Dell_default_cooling_response
-    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
+    # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
+    # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
+    if $DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE
+    then
+      disable_third_party_PCIe_card_Dell_default_cooling_response
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
+    else
+      enable_third_party_PCIe_card_Dell_default_cooling_response
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
+    fi
   fi
 
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
