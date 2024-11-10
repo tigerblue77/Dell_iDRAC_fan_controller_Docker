@@ -91,6 +91,7 @@ function retrieve_temperatures () {
 function enable_third_party_PCIe_card_Dell_default_cooling_response () {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
   if ! $DELL_14_GEN
+  then
     # 13 Gen server or older
     ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
   fi
