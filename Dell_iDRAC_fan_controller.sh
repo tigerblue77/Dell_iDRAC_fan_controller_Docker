@@ -186,7 +186,7 @@ while true; do
         fi
         DECIMAL_CURRENT_FAN_SPEED="$((DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))"
       fi
-      $HEXADECIMAL_CURRENT_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $DECIMAL_CURRENT_FAN_SPEED)
+      HEXADECIMAL_CURRENT_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $DECIMAL_CURRENT_FAN_SPEED)
       apply_fan_speed_interpolation_fan_control_profile
     else
       apply_user_fan_control_profile
