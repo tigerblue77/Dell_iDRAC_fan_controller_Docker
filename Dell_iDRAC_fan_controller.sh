@@ -159,16 +159,18 @@ while true; do
     if $ENABLE_LINE_INTERPOLATION
     then    
       CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
-      if [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION ] || [$IS_CPU2_TEMPERATURE_SENSOR_PRESENT] && [$CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION]; 
+      
+      CPU_HIGHER_TEMP=$CPU1_TEMPERATURE
+      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
       then
-        CPU_HIGHER_TEMP=$CPU1_TEMPERATURE
-        if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+        if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ]; 
         then
-          if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ]; 
-          then
-            CPU_HIGHER_TEMP=$CPU2_TEMPERATURE
-          fi
+          CPU_HIGHER_TEMP=$CPU2_TEMPERATURE
         fi
+      fi
+      
+      if [ $CPU_HIGHER_TEMP -gt $CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION ]; 
+      then
         #
         # F1 - lower fan speed
         # F2 - higher fan speed
@@ -182,14 +184,14 @@ while true; do
         # Temperature above lower value
         TEMPERATURE_ABOVE_LOWER_THRESHOLD="$((CPU_HIGHER_TEMP - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))"
         # Difference between higher and lower fan speed
-        FAN_WINDOW="$((DECIMAL_HIGH_FAN_SPEED - FAN_SPEED))"
+        FAN_WINDOW="$((DECIMAL_HIGH_FAN_SPEED - DECIMAL_FAN_SPEED))"
         FAN_VALUE_TO_ADD=0
         # Check if TEMP_WINDOW is grater than 0
         if [ $TEMP_WINDOW -gt $FAN_VALUE_TO_ADD ];
         then
           FAN_VALUE_TO_ADD="$((FAN_WINDOW * TEMPERATURE_ABOVE_LOWER_THRESHOLD / TEMP_WINDOW))"
         fi
-        CURRENT_FAN_SPEED="$((FAN_SPEED + FAN_VALUE_TO_ADD))"
+        CURRENT_FAN_SPEED="$((DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))"
       fi
       # Convert decimal to hexadecimal value of fan speed
       convert_current_fan_value_to_hexadecimal_format
