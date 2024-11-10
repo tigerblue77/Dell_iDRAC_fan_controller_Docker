@@ -46,6 +46,14 @@ then
   exit 1
 fi
 
+# If server model is Gen 14 (*40) or newer
+if [[ $SERVER_MODEL =~ ^[RT][0-9][4-9]0$ ]]
+then
+  DELL_POWEREDGE_GEN_14_OR_NEWER=true
+else
+  DELL_POWEREDGE_GEN_14_OR_NEWER=false
+fi
+
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"

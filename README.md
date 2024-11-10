@@ -162,7 +162,6 @@ All parameters are optional as they have default values (including default iDRAC
 - `CHECK_INTERVAL` parameter is the time (in seconds) between each temperature check and potential profile change. **Default** value is 60(s).
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
-- `DELL_POWEREDGE_GEN_14_OR_NEWER` parameter that disabled 3rd party PCI calls and outputs CPU temperatures correctly for 14th Gen Dell servers, ex Dell r640, 740 series. Must have idrac 3.30.30.30 or older. **Default** value is false.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
