@@ -192,7 +192,7 @@ while true; do
       DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
     fi
     HEXADECIMAL_CURRENT_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $DECIMAL_CURRENT_FAN_SPEED)
-    apply_fan_speed_interpolation_fan_control_profile
+    apply_user_fan_control_profile_with_interpolation
   else
     apply_user_fan_control_profile
 
