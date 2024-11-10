@@ -13,7 +13,12 @@ trap 'graceful_exit' SIGQUIT SIGTERM
 
 # readonly DELL_FRESH_AIR_COMPLIANCE=45
 
-# Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
+# Convert current fan value to hexadecimal
+function convert_current_fan_value_to_hexadecimal_format () {
+    HEXADECIMAL_CURRENT_FAN_SPEED=$(printf '0x%02x' $CURRENT_FAN_SPEED)
+}
+
+# Check if FAN_SPEED and HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ $FAN_SPEED == 0x* ]]
 then
   readonly DECIMAL_FAN_SPEED=$(printf '%d' $FAN_SPEED)
@@ -21,6 +26,18 @@ then
 else
   readonly DECIMAL_FAN_SPEED=$FAN_SPEED
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $FAN_SPEED)
+fi
+
+if $ENABLE_LINE_INTERPOLATION
+then
+  if [[ $HIGH_FAN_SPEED == 0x* ]]
+  then
+    DECIMAL_HIGH_FAN_SPEED=$(printf '%d' $HIGH_FAN_SPEED)
+    HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+  else
+    DECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+    HEXADECIMAL_HIGH_FAN_SPEED=$(printf '0x%02x' $HIGH_FAN_SPEED)
+  fi
 fi
 
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
@@ -51,10 +68,21 @@ echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
-echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
-echo "Check interval: ${CHECK_INTERVAL}s"
-echo ""
+echo "Line interpolation enable: $ENABLE_LINE_INTERPOLATION"
+if $ENABLE_LINE_INTERPOLATION
+then
+  echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
+  echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
+  echo "CPU lower temperature threshold: $CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION°C"
+  echo "CPU higher temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+  echo "Check interval: ${CHECK_INTERVAL}s"
+  echo ""
+else
+  echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+  echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+  echo "Check interval: ${CHECK_INTERVAL}s"
+  echo ""
+fi
 
 # Define the interval for printing
 readonly TABLE_HEADER_PRINT_INTERVAL=10
@@ -128,13 +156,53 @@ while true; do
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
   else
-    apply_user_fan_control_profile
-
-    # Check if user fan control profile is applied then apply it if not
-    if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED
-    then
-      IS_DELL_FAN_CONTROL_PROFILE_APPLIED=false
-      COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+    if $ENABLE_LINE_INTERPOLATION
+    then    
+      CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
+      if [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION ] || [$IS_CPU2_TEMPERATURE_SENSOR_PRESENT] && [$CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION]; 
+      then
+        CPU_HIGHER_TEMP=$CPU1_TEMPERATURE
+        if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+        then
+          if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ]; 
+          then
+            CPU_HIGHER_TEMP=$CPU2_TEMPERATURE
+          fi
+        fi
+        #
+        # F1 - lower fan speed
+        # F2 - higher fan speed
+        # T_CPU - higher temperature from both CPUs (if only one exist that will be CPU1 temp value)
+        # T1 - lower temperature threshold
+        # T2 - higher temperature threshold
+        # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
+        #
+        # Difference between higher and lower temperature
+        TEMP_WINDOW="$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))"
+        # Temperature above lower value
+        TEMPERATURE_ABOVE_LOWER_THRESHOLD="$((CPU_HIGHER_TEMP - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))"
+        # Difference between higher and lower fan speed
+        FAN_WINDOW="$((DECIMAL_HIGH_FAN_SPEED - FAN_SPEED))"
+        FAN_VALUE_TO_ADD=0
+        # Check if TEMP_WINDOW is grater than 0
+        if [ $TEMP_WINDOW -gt $FAN_VALUE_TO_ADD ];
+        then
+          FAN_VALUE_TO_ADD="$((FAN_WINDOW * TEMPERATURE_ABOVE_LOWER_THRESHOLD / TEMP_WINDOW))"
+        fi
+        CURRENT_FAN_SPEED="$((FAN_SPEED + FAN_VALUE_TO_ADD))"
+      fi
+      # Convert decimal to hexadecimal value of fan speed
+      convert_current_fan_value_to_hexadecimal_format
+      apply_line_interpolation_fan_control_profile
+    else
+      apply_user_fan_control_profile
+  
+      # Check if user fan control profile is applied then apply it if not
+      if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED
+      then
+        IS_DELL_FAN_CONTROL_PROFILE_APPLIED=false
+        COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+      fi
     fi
   fi
 
