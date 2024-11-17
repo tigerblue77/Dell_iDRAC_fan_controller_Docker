@@ -22,6 +22,24 @@ else
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $FAN_SPEED)
 fi
 
+# Check if fan speed interpolation is enabled
+if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]
+then
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=false
+else
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=true
+
+  # Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
+  if [[ $HIGH_FAN_SPEED == 0x* ]]
+  then
+    readonly DECIMAL_HIGH_FAN_SPEED=$(printf '%d' $HIGH_FAN_SPEED)
+    readonly HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+  else
+    readonly DECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+    readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $HIGH_FAN_SPEED)
+  fi
+fi
+
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
 if [[ $IDRAC_HOST == "local" ]]; then
   # Check that the Docker host IPMI device (the iDRAC) has been exposed to the Docker container
@@ -59,8 +77,17 @@ echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
-echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+echo "Fan speed interpolation enabled: $FAN_SPEED_INTERPOLATION_ENABLED"
+if $FAN_SPEED_INTERPOLATION_ENABLED
+then
+  echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
+  echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
+  echo "CPU lower temperature threshold: $CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION°C"
+  echo "CPU higher temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+else
+  echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+  echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+fi
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
 
@@ -126,6 +153,45 @@ while true; do
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
+  elif $FAN_SPEED_INTERPOLATION_ENABLED
+  then
+    HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
+    if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+    then
+      if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ];
+      then
+        HIGHEST_CPU_TEMPERATURE=$CPU2_TEMPERATURE
+      fi
+    fi
+
+    if [ $HIGHEST_CPU_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION ];
+    then
+      #
+      # F1 - lower fan speed
+      # F2 - higher fan speed
+      # T_CPU - highest temperature of both CPUs (if only one exists that will be CPU1 temp value)
+      # T1 - lower temperature threshold
+      # T2 - higher temperature threshold
+      # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
+      #
+      # Temperature interpolation activation range
+      TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+      FAN_VALUE_TO_ADD=0
+      # Check if TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE is > 0
+      if [ $TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE -gt $FAN_VALUE_TO_ADD ];
+      then
+        # Temperature above lower value
+        TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$((HIGHEST_CPU_TEMPERATURE - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+        # Difference between higher and lower fan speed
+        FAN_WINDOW=$((DECIMAL_HIGH_FAN_SPEED - DECIMAL_FAN_SPEED))
+        FAN_VALUE_TO_ADD=$((FAN_WINDOW * TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION / TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE))
+      fi
+      DECIMAL_CURRENT_FAN_SPEED=$((DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))
+    else
+      DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
+    fi
+    HEXADECIMAL_CURRENT_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $DECIMAL_CURRENT_FAN_SPEED)
+    apply_user_fan_control_profile_with_interpolation
   else
     apply_user_fan_control_profile
 
