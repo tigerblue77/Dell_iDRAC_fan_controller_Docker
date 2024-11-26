@@ -1,7 +1,5 @@
 <div id="top"></div>
 
-> **Warning** If you update to the latest version, be sure to replace "CPU_TEMPERATURE_TRESHOLD" environment variable with "CPU_TEMPERATURE_T<ins>H</ins>RESHOLD" which was a typo
-
 # Dell iDRAC fan controller Docker image
 Download Docker image from :
 - [Docker Hub](https://hub.docker.com/r/tigerblue77/dell_idrac_fan_controller)
