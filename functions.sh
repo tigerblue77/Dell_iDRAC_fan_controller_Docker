@@ -315,6 +315,20 @@ print_interpolated_fan_speeds() {
   echo -e "  \e[31mRed:\e[0m    > ${yellow_threshold}°C"
 }
 
+# Returns the maximum value among the given integer arguments.
+# Usage: max <integer1> <integer2> ... <integerN>
+function max() {
+  local highest_temp=$1
+  shift # Moves the arguments, the first one is now deleted
+
+  for temp in "$@"; do # Iterates over the remaining arguments
+    if [[ "$temp" -gt "$highest_temp" ]]; then
+      highest_temp="$temp"
+    fi
+  done
+  echo $highest_temp
+}
+
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
 function CPU1_OVERHEAT() { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
 function CPU2_OVERHEAT() { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
