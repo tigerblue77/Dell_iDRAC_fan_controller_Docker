@@ -15,11 +15,38 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ $FAN_SPEED == 0x* ]]; then
-  readonly DECIMAL_FAN_SPEED=$(printf '%d' $FAN_SPEED)
-  readonly HEXADECIMAL_FAN_SPEED=$FAN_SPEED
+  readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
+  # Unused
+  # readonly HEXADECIMAL_FAN_SPEED=$FAN_SPEED
 else
   readonly DECIMAL_FAN_SPEED=$FAN_SPEED
-  readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $FAN_SPEED)
+  # Unused
+  # readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
+fi
+
+# Check if fan speed interpolation is enabled
+if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=false
+  
+  # We define these variables to the same values than user fan control profile
+  readonly HIGH_FAN_SPEED=$FAN_SPEED
+  readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$CPU_TEMPERATURE_THRESHOLD
+elif [[ "$FAN_SPEED" -gt "$HIGH_FAN_SPEED" ]]; then
+  echo 'Error : $FAN_SPEED have to be less or equal to $HIGH_FAN_SPEED. Exiting.'
+  return 1
+else
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=true
+fi
+
+# Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
+if [[ $HIGH_FAN_SPEED == 0x* ]]; then
+  readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
+  # Unused
+  # readonly HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+else
+  readonly DECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+  # Unused
+  # readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
 fi
 
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
@@ -33,7 +60,7 @@ if [[ $IDRAC_HOST == "local" ]]; then
 else
   echo "iDRAC/IPMI username: $IDRAC_USERNAME"
   echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
-  IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
+  IDRAC_LOGIN_STRING="lanplus -H \"$IDRAC_HOST\" -U \"$IDRAC_USERNAME\" -P \"$IDRAC_PASSWORD\""
 fi
 
 get_Dell_server_model
@@ -45,23 +72,34 @@ fi
 
 # If server model is Gen 14 (*40) or newer
 if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  DELL_POWEREDGE_GEN_14_OR_NEWER=true
-  CPU1_TEMPERATURE_INDEX=2
-  CPU2_TEMPERATURE_INDEX=4
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
+  readonly CPU1_TEMPERATURE_INDEX=2
+  readonly CPU2_TEMPERATURE_INDEX=4
 else
-  DELL_POWEREDGE_GEN_14_OR_NEWER=false
-  CPU1_TEMPERATURE_INDEX=1
-  CPU2_TEMPERATURE_INDEX=2
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
+  readonly CPU1_TEMPERATURE_INDEX=1
+  readonly CPU2_TEMPERATURE_INDEX=2
 fi
 
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
-# Log the fan speed objective, CPU temperature threshold and check interval
-echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+# Log the check interval, fan speed objective and CPU temperature threshold
 echo "Check interval: ${CHECK_INTERVAL}s"
+echo "Fan speed interpolation enabled: $FAN_SPEED_INTERPOLATION_ENABLED"
+if $FAN_SPEED_INTERPOLATION_ENABLED; then
+  echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
+  echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
+  echo "CPU lower temperature threshold: $CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION°C"
+  echo "CPU higher temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+  echo ""
+  # Print interpolated fan speeds for demonstration
+  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED"
+else
+  echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+  echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+fi
 echo ""
 
 # Define the interval for printing
@@ -73,7 +111,7 @@ IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
@@ -93,12 +131,12 @@ while true; do
   sleep $CHECK_INTERVAL &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
-  if CPU1_OVERHEAT; then
+  if CPU1_OVERHEATING; then
     apply_Dell_fan_control_profile
 
     if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
@@ -106,22 +144,24 @@ while true; do
 
       # If CPU 2 temperature sensor is present, check if it is overheating too.
       # Do not apply Dell default dynamic fan control profile as it has already been applied before
-      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT; then
+      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
         COMMENT="CPU 1 and CPU 2 temperatures are too high, Dell default dynamic fan control profile applied for safety"
       else
         COMMENT="CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
       fi
     fi
   # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
-  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT; then
+  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
     apply_Dell_fan_control_profile
 
     if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
+  elif CPU1_HEATING || CPU2_HEATING; then
+    apply_user_fan_control_profile 2 $(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED")
   else
-    apply_user_fan_control_profile
+    apply_user_fan_control_profile 1 $DECIMAL_FAN_SPEED
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
