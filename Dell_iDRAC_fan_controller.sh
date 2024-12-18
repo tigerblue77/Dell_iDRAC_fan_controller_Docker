@@ -43,7 +43,7 @@ if [[ $HIGH_FAN_SPEED == 0x* ]]; then
 else
   readonly DECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
   # Unused
-  # readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $HIGH_FAN_SPEED)
+  # readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
 fi
 
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
@@ -57,7 +57,7 @@ if [[ $IDRAC_HOST == "local" ]]; then
 else
   echo "iDRAC/IPMI username: $IDRAC_USERNAME"
   echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
-  IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
+  IDRAC_LOGIN_STRING="lanplus -H \"$IDRAC_HOST\" -U \"$IDRAC_USERNAME\" -P \"$IDRAC_PASSWORD\""
 fi
 
 get_Dell_server_model
@@ -69,13 +69,13 @@ fi
 
 # If server model is Gen 14 (*40) or newer
 if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  DELL_POWEREDGE_GEN_14_OR_NEWER=true
-  CPU1_TEMPERATURE_INDEX=2
-  CPU2_TEMPERATURE_INDEX=4
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
+  readonly CPU1_TEMPERATURE_INDEX=2
+  readonly CPU2_TEMPERATURE_INDEX=4
 else
-  DELL_POWEREDGE_GEN_14_OR_NEWER=false
-  CPU1_TEMPERATURE_INDEX=1
-  CPU2_TEMPERATURE_INDEX=2
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
+  readonly CPU1_TEMPERATURE_INDEX=1
+  readonly CPU2_TEMPERATURE_INDEX=2
 fi
 
 # Log main informations
@@ -108,7 +108,7 @@ IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
@@ -128,7 +128,7 @@ while true; do
   sleep $CHECK_INTERVAL &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"

@@ -13,8 +13,8 @@ function apply_Dell_fan_control_profile() {
 # The function then applies the fan control and updates the current fan control profile.
 #
 # Parameters:
-#   $1 (MODE): The fan control mode.
-#              1 for static fan speed, 2 for dynamic (interpolated) fan control.
+#   $1 (FAN_CONTROL_PROFILE): The fan control mode.
+#                             1 for static fan speed, 2 for dynamic (interpolated) fan control.
 #   $2 (LOCAL_FAN_SPEED): The desired fan speed. Can be in decimal (0-100) or hexadecimal (0x00-0x64) format.
 #
 # Global variables used:
@@ -23,24 +23,24 @@ function apply_Dell_fan_control_profile() {
 # Returns:
 #   None. In case of an invalid mode, it calls graceful_exit().
 function apply_user_fan_control_profile() {
-  local MODE=$1
+  local FAN_CONTROL_PROFILE=$1
   local LOCAL_FAN_SPEED=$2
 
   if [[ $LOCAL_FAN_SPEED == 0x* ]]; then
-    local LOCAL_DECIMAL_FAN_SPEED=$(printf '%d' "$LOCAL_FAN_SPEED")
+    local LOCAL_DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$LOCAL_FAN_SPEED")
     local LOCAL_HEXADECIMAL_FAN_SPEED=$LOCAL_FAN_SPEED
   else
     local LOCAL_DECIMAL_FAN_SPEED=$LOCAL_FAN_SPEED
     local LOCAL_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$LOCAL_FAN_SPEED")
   fi
 
-  case $MODE in
+  case $FAN_CONTROL_PROFILE in
     1)
-      apply_fan_control_to_specified_value "$LOCAL_HEXADECIMAL_FAN_SPEED"
+      set_fans_speed "$LOCAL_HEXADECIMAL_FAN_SPEED"
       CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($LOCAL_DECIMAL_FAN_SPEED%)"
       ;;
     2)
-      apply_fan_control_to_specified_value "$LOCAL_HEXADECIMAL_FAN_SPEED"
+      set_fans_speed "$LOCAL_HEXADECIMAL_FAN_SPEED"
       CURRENT_FAN_CONTROL_PROFILE="Interpolated fan control profile ($LOCAL_DECIMAL_FAN_SPEED%)"
       ;;
     *)
@@ -50,7 +50,7 @@ function apply_user_fan_control_profile() {
   esac
 }
 
-# Apply fan control to a specified value
+# Set fans speed to a specified value
 #
 # This function sets the fan speed to a user-specified value using ipmitool.
 # It first checks if the input value is in hexadecimal format, and converts it
@@ -65,17 +65,17 @@ function apply_user_fan_control_profile() {
 #
 # Note:
 #   This function uses the global variable $IDRAC_LOGIN_STRING for iDRAC login.
-function apply_fan_control_to_specified_value() {
-  local VALUE=$1
+function set_fans_speed() {
+  local FAN_SPEED_TO_APPLY=$1
 
   # Check if the input value is a hexadecimal number, if not, convert it to hexadecimal
-  if [[ $VALUE != 0x* ]]; then
-      VALUE=$(convert_decimal_value_to_hexadecimal "$VALUE")
+  if [[ $FAN_SPEED_TO_APPLY != 0x* ]]; then
+      FAN_SPEED_TO_APPLY=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED_TO_APPLY")
   fi
 
   # Use ipmitool to send the raw command to set fan control to user-specified value
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$VALUE" > /dev/null
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$FAN_SPEED_TO_APPLY" > /dev/null
 }
 
 # Calculate the interpolated fan speed based on CPU temperature
@@ -141,7 +141,7 @@ function calculate_interpolated_fan_speed() {
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
-# Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
+# Usage : convert_decimal_value_to_hexadecimal "$DECIMAL_NUMBER"
 # Returns : hexadecimal value of DECIMAL_NUMBER
 function convert_decimal_value_to_hexadecimal() {
   local DECIMAL_NUMBER=$1
@@ -159,7 +159,7 @@ function convert_hexadecimal_value_to_decimal() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+# Usage : retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
 function retrieve_temperatures() {
   if (( $# != 2 )); then
     printf "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT" >&2
