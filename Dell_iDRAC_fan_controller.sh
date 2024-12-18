@@ -15,6 +15,7 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ $FAN_SPEED == 0x* ]]; then
+  readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
   # Unused
   # readonly HEXADECIMAL_FAN_SPEED=$FAN_SPEED
 else
@@ -36,7 +37,7 @@ fi
 
 # Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ $HIGH_FAN_SPEED == 0x* ]]; then
-  readonly DECIMAL_HIGH_FAN_SPEED=$(printf '%d' $HIGH_FAN_SPEED)
+  readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
   # Unused
   # readonly HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
 else

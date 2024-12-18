@@ -149,6 +149,15 @@ function convert_decimal_value_to_hexadecimal() {
   echo $HEXADECIMAL_NUMBER
 }
 
+# Convert first parameter given ($HEXADECIMAL_NUMBER) to decimal
+# Usage : convert_hexadecimal_value_to_decimal "$HEXADECIMAL_NUMBER"
+# Returns : decimal value of HEXADECIMAL_NUMBER
+function convert_hexadecimal_value_to_decimal() {
+  local HEXADECIMAL_NUMBER=$1
+  local DECIMAL_NUMBER=$(printf '%d' $HEXADECIMAL_NUMBER)
+  echo $DECIMAL_NUMBER
+}
+
 # Retrieve temperature sensors data using ipmitool
 # Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 function retrieve_temperatures() {
