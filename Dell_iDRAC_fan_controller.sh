@@ -95,12 +95,6 @@ while true; do
 
   retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 
-  # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
-  function CPU1_OVERHEAT() { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
-  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-    function CPU2_OVERHEAT() { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
-  fi
-
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true

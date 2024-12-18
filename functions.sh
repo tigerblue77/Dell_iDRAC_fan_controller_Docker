@@ -114,3 +114,7 @@ function get_Dell_server_model() {
     SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2}')
   fi
 }
+
+# Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
+function CPU1_OVERHEAT() { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
+function CPU2_OVERHEAT() { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
