@@ -1,23 +1,19 @@
 <div id="top"></div>
 
 # Dell iDRAC fan controller Docker image
-Download Docker image from :
-- [Docker Hub](https://hub.docker.com/r/tigerblue77/dell_idrac_fan_controller)
-- [GitHub Containers Repository](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/pkgs/container/dell_idrac_fan_controller)
 
-<!-- TABLE OF CONTENTS -->
-<details>
-  <summary>Table of Contents</summary>
-  <ol>
-    <li><a href="#container-console-log-example">Container console log example</a></li>
-    <li><a href="#supported-architectures">Supported architectures</a></li>
-    <li><a href="#usage">Usage</a></li>
-    <li><a href="#parameters">Parameters</a></li>
-    <li><a href="#troubleshooting">Troubleshooting</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-    <li><a href="#license">License</a></li>
-  </ol>
-</details>
+## Table of contents
+<ol>
+  <li><a href="#container-console-log-example">Container console log example</a></li>
+  <li><a href="#requirements">Requirements</a></li>
+  <li><a href="#supported-architectures">Supported architectures</a></li>
+  <li><a href="#download-docker-image">Download Docker image</a></li>
+  <li><a href="#usage">Usage</a></li>
+  <li><a href="#parameters">Parameters</a></li>
+  <li><a href="#troubleshooting">Troubleshooting</a></li>
+  <li><a href="#contributing">Contributing</a></li>
+  <li><a href="#license">License</a></li>
+</ol>
 
 ## Container console log example
 
@@ -25,8 +21,8 @@ Download Docker image from :
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
-<!-- PREREQUISITES -->
-## Prerequisites
+<!-- REQUIREMENTS -->
+## Requirements
 ### iDRAC version
 
 This Docker container only works on Dell PowerEdge servers that support IPMI commands, i.e. < iDRAC 9 firmware 3.30.30.30.
@@ -63,6 +59,14 @@ ipmitool -I lanplus \
 This Docker container is currently built and available for the following CPU architectures :
 - AMD64
 - ARM64
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- DOWNLOAD DOCKER IMAGE -->
+## Download Docker image
+
+- [Docker Hub](https://hub.docker.com/r/tigerblue77/dell_idrac_fan_controller)
+- [GitHub Containers Repository](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/pkgs/container/dell_idrac_fan_controller)
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
