@@ -1,24 +1,19 @@
 <div id="top"></div>
 
-> **Warning** If you update to the latest version, be sure to replace "CPU_TEMPERATURE_TRESHOLD" environment variable with "CPU_TEMPERATURE_T<ins>H</ins>RESHOLD" which was a typo
-
 # Dell iDRAC fan controller Docker image
-Download Docker image from :
-- [Docker Hub](https://hub.docker.com/r/tigerblue77/dell_idrac_fan_controller)
-- [GitHub Containers Repository](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/pkgs/container/dell_idrac_fan_controller)
 
-<!-- TABLE OF CONTENTS -->
-<details>
-  <summary>Table of Contents</summary>
-  <ol>
-    <li><a href="#container-console-log-example">Container console log example</a></li>
-    <li><a href="#supported-architectures">Supported architectures</a></li>
-    <li><a href="#usage">Usage</a></li>
-    <li><a href="#parameters">Parameters</a></li>
-    <li><a href="#troubleshooting">Troubleshooting</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-  </ol>
-</details>
+## Table of contents
+<ol>
+  <li><a href="#container-console-log-example">Container console log example</a></li>
+  <li><a href="#requirements">Requirements</a></li>
+  <li><a href="#supported-architectures">Supported architectures</a></li>
+  <li><a href="#download-docker-image">Download Docker image</a></li>
+  <li><a href="#usage">Usage</a></li>
+  <li><a href="#parameters">Parameters</a></li>
+  <li><a href="#troubleshooting">Troubleshooting</a></li>
+  <li><a href="#contributing">Contributing</a></li>
+  <li><a href="#license">License</a></li>
+</ol>
 
 ## Container console log example
 
@@ -26,8 +21,8 @@ Download Docker image from :
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
-<!-- PREREQUISITES -->
-## Prerequisites
+<!-- REQUIREMENTS -->
+## Requirements
 ### iDRAC version
 
 This Docker container only works on Dell PowerEdge servers that support IPMI commands, i.e. < iDRAC 9 firmware 3.30.30.30.
@@ -79,6 +74,14 @@ Example:
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
+<!-- DOWNLOAD DOCKER IMAGE -->
+## Download Docker image
+
+- [Docker Hub](https://hub.docker.com/r/tigerblue77/dell_idrac_fan_controller)
+- [GitHub Containers Repository](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/pkgs/container/dell_idrac_fan_controller)
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
 <!-- USAGE -->
 ## Usage
 
@@ -93,6 +96,7 @@ docker run -d \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
+  -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   --device=/dev/ipmi0:/dev/ipmi0:rw \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
@@ -110,6 +114,7 @@ docker run -d \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
+  -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
 
@@ -131,6 +136,7 @@ services:
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
+      - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
     devices:
       - /dev/ipmi0:/dev/ipmi0:rw
 ```
@@ -153,6 +159,7 @@ services:
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
+      - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 ```
 
 <p align="right">(<a href="#top">back to top</a>)</p>
@@ -169,6 +176,7 @@ All parameters are optional as they have default values (including default iDRAC
 - `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 50(°C).
 - `CHECK_INTERVAL` parameter is the time (in seconds) between each temperature check and potential profile change. **Default** value is 60(s).
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
+- `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
@@ -195,5 +203,22 @@ Don't forget to give the project a star! Thanks again!
 3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- LICENSE -->
+## License
+
+Shield: [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
+
+This work is licensed under a
+[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa]. The full license description can be read [here][link-to-license-file].
+
+[![CC BY-NC-SA 4.0][cc-by-nc-sa-image]][cc-by-nc-sa]
+
+[cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
+[cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
+[cc-by-nc-sa-shield]: https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg
+[link-to-license-file]: ./LICENSE
 
 <p align="right">(<a href="#top">back to top</a>)</p>
