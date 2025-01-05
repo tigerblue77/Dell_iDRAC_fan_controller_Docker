@@ -2,7 +2,7 @@ name: Docker image CI
 
 on:
   push:
-    tags:
+    tags: '*'
 
 jobs:
   build:
@@ -13,12 +13,10 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Remove "_Docker" suffix from GitHub repository name to use it as image name
-      uses: mad9000/actions-find-and-replace-string@3
       id: docker_image_name
-      with:
-        source: ${{ github.repository }}
-        find: '_Docker'
-        replace: ''
+      run: |
+        REPO_NAME=$(echo "${GITHUB_REPOSITORY}" | sed 's/_Docker$//' | tr '[:upper:]' '[:lower:]')
+        echo "repo_name=${REPO_NAME}" >> $GITHUB_ENV
 
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
@@ -41,4 +39,4 @@ jobs:
         file: ./Dockerfile
         push: true
         tags: |
-          ghcr.io/${{ github.repository_owner }}/${{ steps.docker_image_name.outputs.value }}:${{ github.ref_name }}
+          ghcr.io/${{ env.repo_name }}:${{ github.ref_name }}
