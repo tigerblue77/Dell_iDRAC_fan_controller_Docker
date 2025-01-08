@@ -159,11 +159,16 @@ while true; do
   ((i++))
   if [ -n "$PUSH_GATEWAY_URL" ]; then
     cat <<EOF | curl -s -o /dev/null --data-binary @- $PUSH_GATEWAY_URL/metrics/job/dell_idrac_fan_controller
-      dell_idrac_fan_controller_inlet_temperature{host="$IDRAC_HOST"} $INLET_TEMPERATURE
-      dell_idrac_fan_controller_cpu_1_temperature{host="$IDRAC_HOST"} $CPU1_TEMPERATURE
-      dell_idrac_fan_controller_cpu_2_temperature{host="$IDRAC_HOST"} $CPU2_TEMPERATURE
-      dell_idrac_fan_controller_exhaust_temperature{host="$IDRAC_HOST"} $EXHAUST_TEMPERATURE
-      dell_idrac_fan_controller_threshold_temperature{host="$IDRAC_HOST"} $CPU_TEMPERATURE_THRESHOLD
+    # TYPE dell_idrac_fan_controller_inlet_temperature gauge
+    dell_idrac_fan_controller_inlet_temperature{host="$IDRAC_HOST"} $INLET_TEMPERATURE
+    # TYPE dell_idrac_fan_controller_cpu_1_temperature gauge
+    dell_idrac_fan_controller_cpu_1_temperature{host="$IDRAC_HOST"} $CPU1_TEMPERATURE
+    # TYPE dell_idrac_fan_controller_cpu_2_temperature gauge
+    dell_idrac_fan_controller_cpu_2_temperature{host="$IDRAC_HOST"} $CPU2_TEMPERATURE
+    # TYPE dell_idrac_fan_controller_exhaust_temperature gauge
+    dell_idrac_fan_controller_exhaust_temperature{host="$IDRAC_HOST"} $EXHAUST_TEMPERATURE
+    # TYPE dell_idrac_fan_controller_threshold_temperature gauge
+    dell_idrac_fan_controller_threshold_temperature{host="$IDRAC_HOST"} $CPU_TEMPERATURE_THRESHOLD
 EOF
   fi
   wait $SLEEP_PROCESS_PID
