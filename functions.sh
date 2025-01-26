@@ -81,21 +81,6 @@ function apply_fan_control_to_specified_value() {
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$VALUE" > /dev/null
 }
 
-# This function applies a user-specified static fan control profile
-#function apply_user_fan_control_profile() {
-#  # Use ipmitool to send the raw command to set fan control to user-specified value
-#  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-#  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
-#  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
-#}
-#
-## This function applies a user-specified interpolated fan control profile
-#function apply_user_fan_control_profile_with_interpolation () {
-#  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-#  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_CURRENT_FAN_SPEED > /dev/null
-#  CURRENT_FAN_CONTROL_PROFILE="Interpolated fan control profile ($DECIMAL_CURRENT_FAN_SPEED%)"
-#}
-
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
 # Returns : hexadecimal value of DECIMAL_NUMBER
