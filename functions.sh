@@ -25,7 +25,9 @@ function apply_Dell_fan_control_profile() {
 function apply_user_fan_control_profile() {
   local FAN_CONTROL_PROFILE=$1
   local LOCAL_FAN_SPEED=$2
-
+  # TODO Tigerblue77 : change in apply_fan_control_profile and include Dell default fan control profile as case 3 ?
+  # TODO Tigerblue77 : add column % and set comment on profile change (store current_applied_profile as 1 / 2 / 3)
+  # TODO Tigerblue77 : check and improve startup graph + show it even if not in interpolated mode
   if [[ $LOCAL_FAN_SPEED == 0x* ]]; then
     local LOCAL_DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$LOCAL_FAN_SPEED")
     local LOCAL_HEXADECIMAL_FAN_SPEED=$LOCAL_FAN_SPEED
