@@ -36,7 +36,7 @@ function convert_hexadecimal_value_to_decimal() {
 # Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 function retrieve_temperatures() {
   if (( $# != 2 )); then
-    printf "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT" >&2
+    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
     return 1
   fi
   local IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
@@ -88,7 +88,7 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 #   elif [ "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE" == "16 05 00 00 00 05 00 00 00 00" ]; then
 #     return 1
 #   else
-#     echo "Unexpected output: $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE" >&2
+#     print_error "Unexpected output: $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
 #     return 2
 #   fi
 # }
@@ -102,8 +102,7 @@ function graceful_exit() {
     enable_third_party_PCIe_card_Dell_default_cooling_response
   fi
 
-  echo "/!\ WARNING /!\ Container stopped, Dell default dynamic fan control profile applied for safety."
-  exit 0
+  print_warning_and_exit "Container stopped, Dell default dynamic fan control profile applied for safety"
 }
 
 # Helps debugging when people are posting their output
@@ -127,3 +126,27 @@ function get_Dell_server_model() {
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
 function CPU1_OVERHEATING() { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
 function CPU2_OVERHEATING() { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
+
+function print_error() {
+  local ERROR_MESSAGE="$1"
+  printf "/!\ Error /!\ %s." "$ERROR_MESSAGE" >&2
+}
+
+function print_error_and_exit() {
+  local ERROR_MESSAGE="$1"
+  print_error "$ERROR_MESSAGE"
+  printf " Exiting.\n" >&2
+  exit 1
+}
+
+function print_warning() {
+  local WARNING_MESSAGE="$1"
+  printf "/!\ Warning /!\ %s." "$WARNING_MESSAGE"
+}
+
+function print_warning_and_exit() {
+  local WARNING_MESSAGE="$1"
+  print_warning "$WARNING_MESSAGE"
+  printf " Exiting.\n"
+  exit 0
+}
