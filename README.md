@@ -1,3 +1,34 @@
+# THIS IS FORK FROM [tigerblue77/dell_idrac_fan_controller](https://github.com/tigerblue77/dell_idrac_fan_controller)
+
+Tagged images available on [Packages page](https://github.com/alexmorbo/Dell_iDRAC_fan_controller_Docker/pkgs/container/dell_idrac_fan_controller)
+
+# Tag Mismatch Notice
+
+Please note that the application tags do not match the original format. 
+The tags in this repository use a different naming convention.
+
+Example:
+Original tag: 1.6
+Current tag: 0.1.6
+
+This naming scheme reflects our versioning adjustments and may differ from upstream tags. 
+Please use the tags in this repository accordingly.
+
+## Background
+
+When this repository was forked, version `1.7` of the original project had not yet been published. 
+The latest available tag was `1.6`, along with some additional changes in the master branch.
+
+To ensure the fork started from the most up-to-date code, the decision was made to base our version on the latest master branch of the original repository. 
+This resulted in the creation of tag `0.1.6`.
+
+As a result, version `0.1.6` in this repository does not correspond to version `1.6` of the original project.
+
+Please keep this in mind when working with the versioning in this repository.
+
+
+# Upstream README
+
 <div id="top"></div>
 
 # Dell iDRAC fan controller Docker image
@@ -59,6 +90,18 @@ ipmitool -I lanplus \
 This Docker container is currently built and available for the following CPU architectures :
 - AMD64
 - ARM64
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- Prometheus Pushgateway -->
+## Prometheus Pushgateway
+
+For Support for export temperature to pushgateway add pushgateway address to PUSH_GATEWAY_URL environment variable 
+
+Example:
+```bash
+ -e PUSH_GATEWAY_URL=http://pushgateway-prometheus-pushgateway.pushgateway.svc:9091
+```
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
