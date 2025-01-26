@@ -21,7 +21,7 @@ function apply_user_fan_control_profile_with_interpolation () {
   CURRENT_FAN_CONTROL_PROFILE="Interpolated fan control profile ($DECIMAL_CURRENT_FAN_SPEED%)"
 }
 
-# Convert DECIMAL_NUMBER to hexadecimal
+# Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
 # Returns : hexadecimal value of DECIMAL_NUMBER
 function convert_decimal_value_to_hexadecimal () {
