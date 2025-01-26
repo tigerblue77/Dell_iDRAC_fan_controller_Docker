@@ -27,7 +27,7 @@ function apply_fan_speed_interpolation_fan_control_profile () {
 function convert_decimal_value_to_hexadecimal () {
   local DECIMAL_NUMBER=$1
   local HEXADECIMAL_NUMBER=$(printf '0x%02x' $DECIMAL_NUMBER)
-  return $HEXADECIMAL_NUMBER
+  echo $HEXADECIMAL_NUMBER
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
