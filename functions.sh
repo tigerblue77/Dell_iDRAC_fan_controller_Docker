@@ -18,8 +18,8 @@ function apply_user_fan_control_profile() {
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
 # Returns : hexadecimal value of DECIMAL_NUMBER
 function convert_decimal_value_to_hexadecimal() {
-  local DECIMAL_NUMBER=$1
-  local HEXADECIMAL_NUMBER=$(printf '0x%02x' $DECIMAL_NUMBER)
+  local -r DECIMAL_NUMBER=$1
+  local -r HEXADECIMAL_NUMBER=$(printf '0x%02x' $DECIMAL_NUMBER)
   echo $HEXADECIMAL_NUMBER
 }
 
@@ -27,8 +27,8 @@ function convert_decimal_value_to_hexadecimal() {
 # Usage : convert_hexadecimal_value_to_decimal "$HEXADECIMAL_NUMBER"
 # Returns : decimal value of HEXADECIMAL_NUMBER
 function convert_hexadecimal_value_to_decimal() {
-  local HEXADECIMAL_NUMBER=$1
-  local DECIMAL_NUMBER=$(printf '%d' $HEXADECIMAL_NUMBER)
+  local -r HEXADECIMAL_NUMBER=$1
+  local -r DECIMAL_NUMBER=$(printf '%d' $HEXADECIMAL_NUMBER)
   echo $DECIMAL_NUMBER
 }
 
@@ -39,13 +39,13 @@ function retrieve_temperatures() {
     print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
     return 1
   fi
-  local IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
-  local IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
+  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
+  local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
 
-  local DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
+  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
 
   # Parse CPU data
-  local CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
+  local -r CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
   CPU1_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU1_TEMPERATURE_INDEX;}")
   if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
     CPU2_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU2_TEMPERATURE_INDEX;}")
@@ -107,7 +107,7 @@ function graceful_exit() {
 
 # Helps debugging when people are posting their output
 function get_Dell_server_model() {
-  IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
+  local -r IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
 
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
@@ -128,24 +128,24 @@ function CPU1_OVERHEATING() { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD
 function CPU2_OVERHEATING() { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
 
 function print_error() {
-  local ERROR_MESSAGE="$1"
+  local -r ERROR_MESSAGE="$1"
   printf "/!\ Error /!\ %s." "$ERROR_MESSAGE" >&2
 }
 
 function print_error_and_exit() {
-  local ERROR_MESSAGE="$1"
+  local -r ERROR_MESSAGE="$1"
   print_error "$ERROR_MESSAGE"
   printf " Exiting.\n" >&2
   exit 1
 }
 
 function print_warning() {
-  local WARNING_MESSAGE="$1"
+  local -r WARNING_MESSAGE="$1"
   printf "/!\ Warning /!\ %s." "$WARNING_MESSAGE"
 }
 
 function print_warning_and_exit() {
-  local WARNING_MESSAGE="$1"
+  local -r WARNING_MESSAGE="$1"
   print_warning "$WARNING_MESSAGE"
   printf " Exiting.\n"
   exit 0
