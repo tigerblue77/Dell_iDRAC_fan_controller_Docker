@@ -88,20 +88,40 @@ function apply_fan_control_to_specified_value() {
 # within a specified range when the CPU temperature exceeds a certain threshold.
 #
 # Parameters:
-#   $1 (HIGHEST_CPU_TEMPERATURE): The current highest CPU temperature
-#   $2 (CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION): The lower temperature threshold for fan speed interpolation
-#   $3 (CPU_TEMPERATURE_THRESHOLD): The upper temperature threshold for fan speed interpolation
-#   $4 (LOCAL_DECIMAL_FAN_SPEED): The base fan speed (as a decimal percentage)
-#   $5 (LOCAL_DECIMAL_HIGH_FAN_SPEED): The maximum fan speed (as a decimal percentage)
+#   $1 (HIGHEST_CPU_TEMPERATURE): The current highest CPU temperature (in Celsius)
+#   $2 (CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION): The lower temperature threshold for fan speed interpolation (in Celsius)
+#   $3 (CPU_TEMPERATURE_THRESHOLD): The upper temperature threshold for fan speed interpolation (in Celsius)
+#   $4 (LOCAL_DECIMAL_FAN_SPEED): The base fan speed (as a decimal percentage, 0-100)
+#   $5 (LOCAL_DECIMAL_HIGH_FAN_SPEED): The maximum fan speed (as a decimal percentage, 0-100)
 #
 # Returns:
-#   The calculated interpolated fan speed as a decimal percentage
+#   The calculated interpolated fan speed as a decimal percentage (0-100)
+#   If the temperature is below or equal to the lower threshold, returns the base fan speed
+#   If the temperature is above or equal to the upper threshold, returns the maximum fan speed
+#
+# Usage:
+#   calculate_interpolated_fan_speed <highest_cpu_temp> <lower_threshold> <upper_threshold> <base_fan_speed> <max_fan_speed>
+#
+# Example:
+#   calculate_interpolated_fan_speed 70 60 80 30 100
 function calculate_interpolated_fan_speed() {
   local HIGHEST_CPU_TEMPERATURE=$1
   local CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$2
   local CPU_TEMPERATURE_THRESHOLD=$3
   local LOCAL_DECIMAL_FAN_SPEED=$4
   local LOCAL_DECIMAL_HIGH_FAN_SPEED=$5
+
+  # If temperature is below or equal to the lower threshold, return the base fan speed
+  if [ "$HIGHEST_CPU_TEMPERATURE" -le "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+    echo "$LOCAL_DECIMAL_FAN_SPEED"
+    return
+  fi
+
+  # If temperature is above or equal to the upper threshold, return the max fan speed
+  if [ "$HIGHEST_CPU_TEMPERATURE" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    echo "$LOCAL_DECIMAL_HIGH_FAN_SPEED"
+    return
+  fi
 
   # F1 - lower fan speed
   # F2 - higher fan speed
