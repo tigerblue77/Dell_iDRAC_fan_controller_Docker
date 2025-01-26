@@ -39,12 +39,12 @@ fi
 if [[ $HIGH_FAN_SPEED == 0x* ]]
 then
   readonly FAN_SPEED_INTERPOLATION_ENABLED=true
-
-  DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
-  HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+  readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
+  readonly HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
 else
-  DECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
-  HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=false
+  readonly DECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+  readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
 fi
 
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
