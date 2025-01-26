@@ -35,15 +35,13 @@ then
 fi
 
 # Check if fan speed interpolation is enabled
-if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]
-then
+if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
   readonly FAN_SPEED_INTERPOLATION_ENABLED=false
 else
   readonly FAN_SPEED_INTERPOLATION_ENABLED=true
 
   # Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
-  if [[ $HIGH_FAN_SPEED == 0x* ]]
-  then
+  if [[ $HIGH_FAN_SPEED == 0x* ]]; then
     readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
     readonly HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
   else
@@ -86,25 +84,22 @@ fi
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
-# Log the fan speed objective, CPU temperature threshold and check interval
+# Log the check interval, fan speed objective and CPU temperature threshold
+echo "Check interval: ${CHECK_INTERVAL}s"
 echo "Fan speed interpolation enabled: $FAN_SPEED_INTERPOLATION_ENABLED"
 if $FAN_SPEED_INTERPOLATION_ENABLED; then
   echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
   echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
   echo "CPU lower temperature threshold: $CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION°C"
   echo "CPU higher temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+  echo ""
+  # Print interpolated fan speeds for demonstration
+  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED"
 else
   echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
   echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
 fi
-echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
-
-if $FAN_SPEED_INTERPOLATION_ENABLED; then
-  # Print interpolated fan speeds for demonstration
-  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED"
-  echo ""
-fi
 
 # Define the interval for printing
 readonly TABLE_HEADER_PRINT_INTERVAL=10
@@ -175,9 +170,9 @@ while true; do
     else
       DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
     fi
-     apply_user_fan_control 2 "$DECIMAL_CURRENT_FAN_SPEED"
+    apply_user_fan_control_profile 2 "$DECIMAL_CURRENT_FAN_SPEED"
   else
-     apply_user_fan_control 1 "$DECIMAL_CURRENT_FAN_SPEED"
+    apply_user_fan_control_profile 1 "$DECIMAL_CURRENT_FAN_SPEED"
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
