@@ -2,41 +2,22 @@ name: Docker image CI
 
 on:
   push:
-    branches: [ master ]
-    paths-ignore:
-      - '**/README.md'
+    tags: '*'
 
 jobs:
   build:
-    name: Build and publish Docker image to Docker Hub and GitHub Containers Repository
+    name: Build and publish Docker image to GitHub Container Registry
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
     - name: Remove "_Docker" suffix from GitHub repository name to use it as image name
-      uses: mad9000/actions-find-and-replace-string@3
       id: docker_image_name
-      with:
-        source: ${{ github.repository }}
-        find: '_Docker'
-        replace: ''
-      
-    - name: Docker meta
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: |
-          ${{ steps.docker_image_name.outputs.value }}
-          ghcr.io/${{ steps.docker_image_name.outputs.value }}
-        tags: type=raw,value=latest
-        
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-    
+      run: |
+        REPO_NAME=$(echo "${GITHUB_REPOSITORY}" | sed 's/_Docker$//' | tr '[:upper:]' '[:lower:]')
+        echo "repo_name=${REPO_NAME}" >> $GITHUB_ENV
+
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
       with:
@@ -46,7 +27,7 @@ jobs:
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
-    
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -57,5 +38,5 @@ jobs:
         platforms: linux/amd64,linux/arm64
         file: ./Dockerfile
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        tags: |
+          ghcr.io/${{ env.repo_name }}:${{ github.ref_name }}
