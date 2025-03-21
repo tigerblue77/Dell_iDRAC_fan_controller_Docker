@@ -15,24 +15,23 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ $FAN_SPEED == 0x* ]]; then
-  readonly DECIMAL_FAN_SPEED=$(printf '%d' $FAN_SPEED)
+  readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
   readonly HEXADECIMAL_FAN_SPEED=$FAN_SPEED
 else
   readonly DECIMAL_FAN_SPEED=$FAN_SPEED
-  readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $FAN_SPEED)
+  readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
 if [[ $IDRAC_HOST == "local" ]]; then
   # Check that the Docker host IPMI device (the iDRAC) has been exposed to the Docker container
   if [ ! -e "/dev/ipmi0" ] && [ ! -e "/dev/ipmi/0" ] && [ ! -e "/dev/ipmidev/0" ]; then
-    echo "/!\ Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0, check that you added the device to your Docker container or stop using local mode. Exiting." >&2
-    exit 1
+    print_error_and_exit "Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0, check that you added the device to your Docker container or stop using local mode"
   fi
   IDRAC_LOGIN_STRING='open'
 else
   echo "iDRAC/IPMI username: $IDRAC_USERNAME"
-  echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
+  #echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
 fi
 
@@ -45,19 +44,18 @@ fi
 get_Dell_server_model
 
 if [[ ! $SERVER_MANUFACTURER == "DELL" ]]; then
-  echo "/!\ Your server isn't a Dell product. Exiting." >&2
-  exit 1
+  print_error_and_exit "Your server isn't a Dell product"
 fi
 
 # If server model is Gen 14 (*40) or newer
 if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  DELL_POWEREDGE_GEN_14_OR_NEWER=true
-  CPU1_TEMPERATURE_INDEX=2
-  CPU2_TEMPERATURE_INDEX=4
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
+  readonly CPU1_TEMPERATURE_INDEX=2
+  readonly CPU2_TEMPERATURE_INDEX=4
 else
-  DELL_POWEREDGE_GEN_14_OR_NEWER=false
-  CPU1_TEMPERATURE_INDEX=1
-  CPU2_TEMPERATURE_INDEX=2
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
+  readonly CPU1_TEMPERATURE_INDEX=1
+  readonly CPU2_TEMPERATURE_INDEX=2
 fi
 
 # Log main informations
@@ -104,7 +102,7 @@ while true; do
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
-  if CPU1_OVERHEAT; then
+  if CPU1_OVERHEATING; then
     apply_Dell_fan_control_profile
 
     if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
@@ -112,14 +110,14 @@ while true; do
 
       # If CPU 2 temperature sensor is present, check if it is overheating too.
       # Do not apply Dell default dynamic fan control profile as it has already been applied before
-      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT; then
+      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
         COMMENT="CPU 1 and CPU 2 temperatures are too high, Dell default dynamic fan control profile applied for safety"
       else
         COMMENT="CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
       fi
     fi
   # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
-  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEAT; then
+  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
     apply_Dell_fan_control_profile
 
     if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
