@@ -64,7 +64,7 @@ echo ""
 
 # Define the interval for printing
 readonly TABLE_HEADER_PRINT_INTERVAL=10
-i=$TABLE_HEADER_PRINT_INTERVAL
+TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 # Set the flag used to check if the active fan control profile has changed
 IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
 
@@ -142,12 +142,12 @@ while true; do
   fi
 
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
-  if [ $i -eq $TABLE_HEADER_PRINT_INTERVAL ]; then
+  if [ $TABLE_HEADER_PRINT_COUNTER -eq $TABLE_HEADER_PRINT_INTERVAL ]; then
     echo "                     ------- Temperatures -------"
     echo "    Date & time      Inlet  CPU 1  CPU 2  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
-    i=0
+    TABLE_HEADER_PRINT_COUNTER=0
   fi
   printf "%19s  %3d°C  %3d°C  %3s°C  %5s°C  %40s  %51s  %s\n" "$(date +"%d-%m-%Y %T")" $INLET_TEMPERATURE $CPU1_TEMPERATURE "$CPU2_TEMPERATURE" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
-  ((i++))
+  ((TABLE_HEADER_PRINT_COUNTER++))
   wait $SLEEP_PROCESS_PID
 done
