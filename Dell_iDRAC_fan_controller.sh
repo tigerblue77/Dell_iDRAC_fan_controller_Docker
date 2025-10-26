@@ -14,25 +14,25 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 # readonly DELL_FRESH_AIR_COMPLIANCE=45
 
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
-if [[ $FAN_SPEED == 0x* ]]; then
+if [[ "$FAN_SPEED" == 0x* ]]; then
   readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
-  readonly HEXADECIMAL_FAN_SPEED=$FAN_SPEED
+  readonly HEXADECIMAL_FAN_SPEED="$FAN_SPEED"
 else
-  readonly DECIMAL_FAN_SPEED=$FAN_SPEED
+  readonly DECIMAL_FAN_SPEED="$FAN_SPEED"
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
-if [[ $IDRAC_HOST == "local" ]]; then
+if [[ "$IDRAC_HOST" == "local" ]]; then
   # Check that the Docker host IPMI device (the iDRAC) has been exposed to the Docker container
   if [ ! -e "/dev/ipmi0" ] && [ ! -e "/dev/ipmi/0" ] && [ ! -e "/dev/ipmidev/0" ]; then
     print_error_and_exit "Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0, check that you added the device to your Docker container or stop using local mode"
   fi
   IDRAC_LOGIN_STRING='open'
 else
-  echo "iDRAC/IPMI username: $IDRAC_USERNAME"
-  #echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
-  IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
+  echo "iDRAC/IPMI username: \"$IDRAC_USERNAME\""
+  #echo "iDRAC/IPMI password: \"$IDRAC_PASSWORD\""
+  IDRAC_LOGIN_STRING="lanplus -H \"$IDRAC_HOST\" -U \"$IDRAC_USERNAME\" -P \"$IDRAC_PASSWORD\""
 fi
 
 get_Dell_server_model
@@ -54,11 +54,11 @@ fi
 
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
-echo "iDRAC/IPMI host: $IDRAC_HOST"
+echo "iDRAC/IPMI host: \"$IDRAC_HOST\""
 
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
 
@@ -88,7 +88,7 @@ fi
 # Start monitoring
 while true; do
   # Sleep for the specified interval before taking another reading
-  sleep $CHECK_INTERVAL &
+  sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
 
   retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
@@ -124,7 +124,7 @@ while true; do
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=false
-      COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+      COMMENT="CPU temperature decreased and is now OK (<= \"$CPU_TEMPERATURE_THRESHOLD\"°C), user's fan control profile applied."
     fi
   fi
 
@@ -132,7 +132,7 @@ while true; do
   if ! $DELL_POWEREDGE_GEN_14_OR_NEWER; then
     # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
-    if $DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE; then
+    if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
       disable_third_party_PCIe_card_Dell_default_cooling_response
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
     else
