@@ -32,6 +32,30 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
+# Set the IDRAC_LOGIN_STRING variable based on connection type
+# Usage : set_iDRAC_login_string $IDRAC_HOST $IDRAC_USERNAME $IDRAC_PASSWORD
+# Returns : IDRAC_LOGIN_STRING
+function set_iDRAC_login_string() {
+  local IDRAC_HOST="$1"
+  local IDRAC_USERNAME="$2"
+  local IDRAC_PASSWORD="$3"
+
+  IDRAC_LOGIN_STRING="" 
+
+  # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
+  if [[ "$IDRAC_HOST" == "local" ]]; then
+    # Check that the Docker host IPMI device (the iDRAC) has been exposed to the Docker container
+    if [ ! -e "/dev/ipmi0" ] && [ ! -e "/dev/ipmi/0" ] && [ ! -e "/dev/ipmidev/0" ]; then
+      print_error_and_exit "Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0, check that you added the device to your Docker container or stop using local mode"
+    fi
+    IDRAC_LOGIN_STRING='open'
+  else
+    echo "iDRAC/IPMI username: \"$IDRAC_USERNAME\""
+    #echo "iDRAC/IPMI password: \"$IDRAC_PASSWORD\""
+    IDRAC_LOGIN_STRING="lanplus -H \"$IDRAC_HOST\" -U \"$IDRAC_USERNAME\" -P \"$IDRAC_PASSWORD\""
+  fi
+}
+
 # Retrieve temperature sensors data using ipmitool
 # Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 function retrieve_temperatures() {
