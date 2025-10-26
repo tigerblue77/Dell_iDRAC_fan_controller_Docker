@@ -2,7 +2,7 @@ name: Docker image CI
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v[0-9]+.[0-9]+"]
     paths-ignore:
       - "**/README.md"
 
@@ -19,21 +19,15 @@ jobs:
         with:
           generate_release_notes: true
 
-      - name: Remove "_Docker" suffix from GitHub repository name to use it as image name
-        uses: mad9000/actions-find-and-replace-string@3
-        id: docker_image_name
-        with:
-          source: ${{ github.repository }}
-          find: "_Docker"
-          replace: ""
-
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ steps.docker_image_name.outputs.value }}
-            ghcr.io/${{ steps.docker_image_name.outputs.value }}
+            ${{ github.repository | replace('_Docker', '') }}
+            ghcr.io/${{ github.repository | replace('_Docker', '') }}
+          tags: |
+            type=ref,event=tag
           flavor: |
             latest=auto
 
