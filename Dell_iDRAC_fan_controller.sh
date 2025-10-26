@@ -128,7 +128,7 @@ while true; do
     fi
   fi
 
-  # If server model is Gen 14 (*40) or newer
+  # If server model is not Gen 14 (*40) or newer
   if ! $DELL_POWEREDGE_GEN_14_OR_NEWER; then
     # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
