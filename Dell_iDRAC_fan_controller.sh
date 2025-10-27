@@ -146,19 +146,19 @@ while true; do
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
   elif $FAN_SPEED_INTERPOLATION_ENABLED
-  then    
+  then
     DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
-    
+
     HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
     if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
     then
-      if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ]; 
+      if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ];
       then
         HIGHEST_CPU_TEMPERATURE=$CPU2_TEMPERATURE
       fi
     fi
-    
-    if [ $HIGHEST_CPU_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; 
+
+    if [ $HIGHEST_CPU_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ];
     then
       #
       # F1 - lower fan speed
