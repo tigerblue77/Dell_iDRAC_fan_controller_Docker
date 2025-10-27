@@ -201,6 +201,11 @@ function graceful_exit() {
 function get_Dell_server_model() {
   local -r IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
 
+  if [ $? -ne 0 ]; then
+    echo "Failed to retrieve iDRAC data, please check IP and credentials." >&2
+    return
+  fi
+
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
 
