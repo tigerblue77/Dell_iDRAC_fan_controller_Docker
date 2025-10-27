@@ -143,7 +143,7 @@ while true; do
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
-  elif CPU1_HEATING || CPU2_HEATING; then
+  elif CPU1_HEATING || $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_HEATING; then
     HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
     if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
       HIGHEST_CPU_TEMPERATURE=$(max $CPU1_TEMPERATURE $CPU2_TEMPERATURE)
