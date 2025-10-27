@@ -150,7 +150,44 @@ while true; do
     if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
       HIGHEST_CPU_TEMPERATURE=$(max $CPU1_TEMPERATURE $CPU2_TEMPERATURE)
     fi
-    apply_user_fan_control_profile 2 $(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_LOW_FAN_SPEED_OBJECTIVE" "$DECIMAL_HIGH_FAN_SPEED_OBJECTIVE")
+
+
+
+    # If temperature is below or equal to the lower threshold, return the base fan speed
+    if [ "$HIGHEST_CPU_TEMPERATURE" -le "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+      DECIMAL_FAN_SPEED_TO_APPLY="$DECIMAL_LOW_FAN_SPEED_OBJECTIVE"
+      return
+    fi
+
+    # If temperature is above or equal to the upper threshold, return the max fan speed
+    if [ "$HIGHEST_CPU_TEMPERATURE" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+      DECIMAL_FAN_SPEED_TO_APPLY="$DECIMAL_HIGH_FAN_SPEED_OBJECTIVE"
+      return
+    fi
+
+    # F1 - lower fan speed
+    # F2 - higher fan speed
+    # T_CPU - highest temperature of both CPUs (if only one exists that will be CPU1 temp value)
+    # T1 - lower temperature threshold
+    # T2 - higher temperature threshold
+    # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
+
+    TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+    FAN_VALUE_TO_ADD=0
+
+    if [ $TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE -gt $FAN_VALUE_TO_ADD ]; then
+      TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$((HIGHEST_CPU_TEMPERATURE - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+      FAN_WINDOW=$((DECIMAL_HIGH_FAN_SPEED_OBJECTIVE - DECIMAL_LOW_FAN_SPEED_OBJECTIVE))
+      FAN_VALUE_TO_ADD=$((FAN_WINDOW * TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION / TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE))
+    fi
+
+    DECIMAL_CURRENT_FAN_SPEED=$((DECIMAL_LOW_FAN_SPEED_OBJECTIVE + FAN_VALUE_TO_ADD))
+    DECIMAL_FAN_SPEED_TO_APPLY=$DECIMAL_CURRENT_FAN_SPEED 
+
+
+
+
+    apply_user_fan_control_profile 2 $DECIMAL_FAN_SPEED_TO_APPLY
   else
     apply_user_fan_control_profile 1 $DECIMAL_LOW_FAN_SPEED_OBJECTIVE
 

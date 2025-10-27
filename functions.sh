@@ -78,68 +78,6 @@ function set_fans_speed() {
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$FAN_SPEED_TO_APPLY" > /dev/null
 }
 
-# Calculate the interpolated fan speed based on CPU temperature
-#
-# This function calculates the interpolated fan speed based on the current CPU temperature
-# and predefined thresholds. It uses linear interpolation to adjust the fan speed
-# within a specified range when the CPU temperature exceeds a certain threshold.
-#
-# Parameters:
-#   $1 (HIGHEST_CPU_TEMPERATURE): The current highest CPU temperature (in Celsius)
-#   $2 (CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION): The lower temperature threshold for fan speed interpolation (in Celsius)
-#   $3 (CPU_TEMPERATURE_THRESHOLD): The upper temperature threshold for fan speed interpolation (in Celsius)
-#   $4 (LOCAL_DECIMAL_FAN_SPEED): The base fan speed (as a decimal percentage, 0-100)
-#   $5 (LOCAL_DECIMAL_HIGH_FAN_SPEED): The maximum fan speed (as a decimal percentage, 0-100)
-#
-# Returns:
-#   The calculated interpolated fan speed as a decimal percentage (0-100)
-#   If the temperature is below or equal to the lower threshold, returns the base fan speed
-#   If the temperature is above or equal to the upper threshold, returns the maximum fan speed
-#
-# Usage:
-#   calculate_interpolated_fan_speed <highest_cpu_temp> <lower_threshold> <upper_threshold> <base_fan_speed> <max_fan_speed>
-#
-# Example:
-#   calculate_interpolated_fan_speed 70 60 80 30 100
-function calculate_interpolated_fan_speed() {
-  local HIGHEST_CPU_TEMPERATURE=$1
-  local CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$2
-  local CPU_TEMPERATURE_THRESHOLD=$3
-  local LOCAL_DECIMAL_FAN_SPEED=$4
-  local LOCAL_DECIMAL_HIGH_FAN_SPEED=$5
-
-  # If temperature is below or equal to the lower threshold, return the base fan speed
-  if [ "$HIGHEST_CPU_TEMPERATURE" -le "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
-    echo "$LOCAL_DECIMAL_FAN_SPEED"
-    return
-  fi
-
-  # If temperature is above or equal to the upper threshold, return the max fan speed
-  if [ "$HIGHEST_CPU_TEMPERATURE" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
-    echo "$LOCAL_DECIMAL_HIGH_FAN_SPEED"
-    return
-  fi
-
-  # F1 - lower fan speed
-  # F2 - higher fan speed
-  # T_CPU - highest temperature of both CPUs (if only one exists that will be CPU1 temp value)
-  # T1 - lower temperature threshold
-  # T2 - higher temperature threshold
-  # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
-
-  local TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
-  local FAN_VALUE_TO_ADD=0
-
-  if [ $TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE -gt $FAN_VALUE_TO_ADD ]; then
-    local TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$((HIGHEST_CPU_TEMPERATURE - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
-    local FAN_WINDOW=$((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED))
-    FAN_VALUE_TO_ADD=$((FAN_WINDOW * TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION / TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE))
-  fi
-
-  local DECIMAL_CURRENT_FAN_SPEED=$((LOCAL_DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))
-  echo $DECIMAL_CURRENT_FAN_SPEED
-}
-
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal "$DECIMAL_NUMBER"
 # Returns : hexadecimal value of DECIMAL_NUMBER
@@ -322,7 +260,7 @@ print_interpolated_fan_speeds() {
     else
       temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
     fi
-    fan_speed=$(calculate_interpolated_fan_speed "$temperature" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$LOCAL_DECIMAL_FAN_SPEED" "$LOCAL_DECIMAL_HIGH_FAN_SPEED")
+    fan_speed=$((LOCAL_DECIMAL_FAN_SPEED + ((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED) * ((temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
     bar_length=$((fan_speed * chart_width / 100))
     empty_length=$((chart_width - bar_length))
 
