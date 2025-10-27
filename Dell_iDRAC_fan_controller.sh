@@ -146,8 +146,6 @@ while true; do
     fi
   elif $FAN_SPEED_INTERPOLATION_ENABLED
   then
-    DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
-
     HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
     if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
     then
@@ -179,11 +177,15 @@ while true; do
         FAN_VALUE_TO_ADD=$((FAN_WINDOW * TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION / TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE))
       fi
       DECIMAL_CURRENT_FAN_SPEED=$((DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))
+    else
+      DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
     fi
-    HEXADECIMAL_CURRENT_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $DECIMAL_CURRENT_FAN_SPEED)
-    apply_fan_speed_interpolation_fan_control_profile
+#    HEXADECIMAL_CURRENT_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $DECIMAL_CURRENT_FAN_SPEED)
+#    apply_user_fan_control_profile_with_interpolation
+     apply_user_fan_control 2 "$DECIMAL_CURRENT_FAN_SPEED"
   else
-    apply_user_fan_control_profile
+     apply_user_fan_control 1 "$DECIMAL_CURRENT_FAN_SPEED"
+#    apply_user_fan_control_profile
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
