@@ -54,7 +54,7 @@ function apply_user_fan_control_profile() {
 
 # Set fans speed to a specified value
 #
-# This function sets the fan speed to a user-specified value using ipmitool.
+# This function sets the fan speed to a specific value using ipmitool.
 # It first checks if the input value is in hexadecimal format, and converts it
 # if necessary. Then it sends raw commands to iDRAC to set the fan control.
 #
@@ -68,16 +68,17 @@ function apply_user_fan_control_profile() {
 # Note:
 #   This function uses the global variable $IDRAC_LOGIN_STRING for iDRAC login.
 function set_fans_speed() {
-  local FAN_SPEED_TO_APPLY=$1
+  local HEXADECIMAL_FAN_SPEED_TO_APPLY=$1
 
   # Check if the input value is a hexadecimal number, if not, convert it to hexadecimal
-  if [[ $FAN_SPEED_TO_APPLY != 0x* ]]; then
-      FAN_SPEED_TO_APPLY=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED_TO_APPLY")
+  if [[ $HEXADECIMAL_FAN_SPEED_TO_APPLY != 0x* ]]; then
+    HEXADECIMAL_FAN_SPEED_TO_APPLY=$(convert_decimal_value_to_hexadecimal "$HEXADECIMAL_FAN_SPEED_TO_APPLY")
   fi
 
-  # Use ipmitool to send the raw command to set fan control to user-specified value
+  # Enable manual fan control
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$FAN_SPEED_TO_APPLY" > /dev/null
+  # Set fans speed to a specific value
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$HEXADECIMAL_FAN_SPEED_TO_APPLY" > /dev/null
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
