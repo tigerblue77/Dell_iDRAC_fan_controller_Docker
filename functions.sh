@@ -98,7 +98,7 @@ function retrieve_temperatures() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  if "$DELL_14_GEN"
+  if ! "$DELL_POWEREDGE_GEN_14_OR_NEWER"
   then
     # 14 Gen server or newer
     continue
@@ -111,7 +111,7 @@ function enable_third_party_PCIe_card_Dell_default_cooling_response() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  if "$DELL_14_GEN"
+  if ! "$DELL_POWEREDGE_GEN_14_OR_NEWER"
   then
     # 14 Gen server or newer
     continue
