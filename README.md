@@ -84,6 +84,9 @@ docker run -d \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
+  -e ENABLE_LINE_INTERPOLATION=<true or false> \
+  -e CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature lower threshold, olny when interpolation enabled> \
+  -e HIGH_FAN_SPEED=<decimal or hexadecimal fan speed, only when interpolation enabled> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   --device=/dev/ipmi0:/dev/ipmi0:rw \
   tigerblue77/dell_idrac_fan_controller:latest
@@ -102,10 +105,12 @@ docker run -d \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
+  -e ENABLE_LINE_INTERPOLATION=<true or false> \
+  -e CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature lower threshold, only when interpolation enabled> \
+  -e HIGH_FAN_SPEED=<decimal or hexadecimal fan speed, only when interpolation enabled> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
-
 `docker-compose.yml` examples:
 
 1. to use with local iDRAC:
@@ -124,6 +129,9 @@ services:
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
+      - ENABLE_LINE_INTERPOLATION=<true or false>
+      - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature lower threshold, only when interpolation enabled>
+      - HIGH_FAN_SPEED=<decimal or hexadecimal fan speed when interpolation enabled>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
     devices:
       - /dev/ipmi0:/dev/ipmi0:rw
@@ -147,6 +155,9 @@ services:
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
+      - ENABLE_LINE_INTERPOLATION=<true or false>
+      - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature lower threshold, only when interpolation enabled>
+      - HIGH_FAN_SPEED=<decimal or hexadecimal fan speed when interpolation enabled>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 ```
 
@@ -164,6 +175,26 @@ All parameters are optional as they have default values (including default iDRAC
 - `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 50(°C).
 - `CHECK_INTERVAL` parameter is the time (in seconds) between each temperature check and potential profile change. **Default** value is 60(s).
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
+- `ENABLE_LINE_INTERPOLATION` parameter is a boolean that allows to enable line interpolation. If temperature value going above **CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION** they will proportionally increase fan speed to **HIGH_FAN_SPEED** when **CPU_TEMPERATURE_THRESHOLD** will reached. **Default** value is false.
+- `CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION` parameter is only necessary if you're using line interpolation. Must be lower than **CPU_TEMPERATURE_THRESHOLD**. **Default** value is 40(°C).
+- `HIGH_FAN_SPEED` parameter is only necessary if you're using line interpolation. It defines maximum fan speed before swiching to dell temperature control. **Default** value is 45(%).
+
+Example of how interpolation work:
+- `FAN_SPEED` = 10
+- `HIGH_FAN_SPEED` = 50
+- `CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION` = 30
+- `CPU_TEMPERATURE_THRESHOLD` = 70
+
+| CPU Temperature  | Fan Speed |
+| ------------- | ------------- |
+| 15 °C  | 10 %  |
+| 30 °C  | 10 %  |
+| 35 °C  | 15 %  |
+| 50 °C  | 30 %  |
+| 69 °C  | 49 %  |
+| 70 °C  | Dell fan control  |
+
+When using line interpolation it's recommended to lower **CHECK_INTERVAL** to value such as 3 seconds.
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
@@ -173,7 +204,7 @@ All parameters are optional as they have default values (including default iDRAC
 
 If your server frequently switches back to the default Dell fan mode:
 1. Check `Tcase` (case temperature) of your CPU on Intel Ark website and then set `CPU_TEMPERATURE_THRESHOLD` to a slightly lower value. Example with my CPUs ([Intel Xeon E5-2630L v2](https://www.intel.com/content/www/us/en/products/sku/75791/intel-xeon-processor-e52630l-v2-15m-cache-2-40-ghz/specifications.html)) : Tcase = 63°C, I set `CPU_TEMPERATURE_THRESHOLD` to 60(°C).
-2. If it's already good, adapt your `FAN_SPEED` value to increase the airflow and thus further decrease the temperature of your CPU(s)
+2. If it's already good, adapt your `FAN_SPEED` value to increase the airflow and thus further decrease the temperature of your CPU(s) or enable and experiment with line interpolation
 3. If neither increasing the fan speed nor increasing the threshold solves your problem, then it may be time to replace your thermal paste
 
 <p align="right">(<a href="#top">back to top</a>)</p>
