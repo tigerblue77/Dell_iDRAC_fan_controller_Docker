@@ -194,6 +194,7 @@ Example of how interpolation works:
 
 When using fan speed interpolation, we recommend decreasing **CHECK_INTERVAL**, for example "3" (seconds), to avoid the noise nuisance associated with a sudden increase in fan speed.
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
+- `14_GEN` parameter that disabled 3rd party PCI calls and outputs CPU temperatures correctly for 14th Gen Dell servers, ex Dell r640, 740 series. Must have idrac 3.30.30.30 or older. **Default** value is false.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
