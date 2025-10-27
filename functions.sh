@@ -1,21 +1,88 @@
 # Define global functions
 # This function applies Dell's default dynamic fan control profile
-function apply_Dell_fan_control_profile() {
+function apply_Dell_default_fan_control_profile() {
   # Use ipmitool to send the raw command to set fan control to Dell default
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
-# This function applies a user-specified static fan control profile
+# Apply user-defined fan control settings
+#
+# This function applies user-defined fan control settings based on the specified mode and fan speed.
+# It handles both decimal and hexadecimal fan speed inputs, converting between them as needed.
+# The function then applies the fan control and updates the current fan control profile.
+#
+# Parameters:
+#   $1 (FAN_CONTROL_PROFILE): The fan control mode.
+#                             1 for static fan speed, 2 for dynamic (interpolated) fan control.
+#   $2 (LOCAL_FAN_SPEED): The desired fan speed. Can be in decimal (0-100) or hexadecimal (0x00-0x64) format.
+#
+# Global variables used:
+#   CURRENT_FAN_CONTROL_PROFILE: Updated with the current fan control profile description.
+#
+# Returns:
+#   None. In case of an invalid mode, it calls graceful_exit().
 function apply_user_fan_control_profile() {
-  # Use ipmitool to send the raw command to set fan control to user-specified value
+  local FAN_CONTROL_PROFILE=$1
+  local LOCAL_FAN_SPEED=$2
+  # TODO Tigerblue77 : change in apply_fan_control_profile and include Dell default fan control profile as case 3 ?
+  # TODO Tigerblue77 : add column % and set comment on profile change (store current_applied_profile as 1 / 2 / 3)
+  # TODO Tigerblue77 : check and improve startup graph + show it even if not in interpolated mode
+  if [[ $LOCAL_FAN_SPEED == 0x* ]]; then
+    local LOCAL_DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$LOCAL_FAN_SPEED")
+    local LOCAL_HEXADECIMAL_FAN_SPEED=$LOCAL_FAN_SPEED
+  else
+    local LOCAL_DECIMAL_FAN_SPEED=$LOCAL_FAN_SPEED
+    local LOCAL_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$LOCAL_FAN_SPEED")
+  fi
+
+  case $FAN_CONTROL_PROFILE in
+    1)
+      set_fans_speed "$LOCAL_HEXADECIMAL_FAN_SPEED"
+      CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($LOCAL_DECIMAL_FAN_SPEED%)"
+      ;;
+    2)
+      set_fans_speed "$LOCAL_HEXADECIMAL_FAN_SPEED"
+      CURRENT_FAN_CONTROL_PROFILE="Interpolated fan control profile ($LOCAL_DECIMAL_FAN_SPEED%)"
+      ;;
+    *)
+      echo "Invalid mode selected. Please use 1 for static fan speed or 2 for dynamic fan control."
+      graceful_exit
+      ;;
+  esac
+}
+
+# Set fans speed to a specified value
+#
+# This function sets the fan speed to a specific value using ipmitool.
+# It first checks if the input value is in hexadecimal format, and converts it
+# if necessary. Then it sends raw commands to iDRAC to set the fan control.
+#
+# Parameters:
+#   $1 (VALUE): The desired fan speed value. Can be in decimal or hexadecimal format.
+#               If in decimal, it will be converted to hexadecimal.
+#
+# Returns:
+#   None
+#
+# Note:
+#   This function uses the global variable $IDRAC_LOGIN_STRING for iDRAC login.
+function set_fans_speed() {
+  local HEXADECIMAL_FAN_SPEED_TO_APPLY=$1
+
+  # Check if the input value is a hexadecimal number, if not, convert it to hexadecimal
+  if [[ $HEXADECIMAL_FAN_SPEED_TO_APPLY != 0x* ]]; then
+    HEXADECIMAL_FAN_SPEED_TO_APPLY=$(convert_decimal_value_to_hexadecimal "$HEXADECIMAL_FAN_SPEED_TO_APPLY")
+  fi
+
+  # Enable manual fan control
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
-  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
+  # Set fans speed to a specific value
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$HEXADECIMAL_FAN_SPEED_TO_APPLY" > /dev/null
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
-# Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
+# Usage : convert_decimal_value_to_hexadecimal "$DECIMAL_NUMBER"
 # Returns : hexadecimal value of DECIMAL_NUMBER
 function convert_decimal_value_to_hexadecimal() {
   local -r DECIMAL_NUMBER=$1
@@ -57,7 +124,7 @@ function set_iDRAC_login_string() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+# Usage : retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
 function retrieve_temperatures() {
   if (( $# != 2 )); then
     print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
@@ -119,7 +186,8 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 
 # Prepare traps in case of container exit
 function graceful_exit() {
-  apply_Dell_fan_control_profile
+  echo "Gracefully exiting as requested..."
+  apply_Dell_default_fan_control_profile
 
   # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at startup
   if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then
@@ -132,6 +200,11 @@ function graceful_exit() {
 # Helps debugging when people are posting their output
 function get_Dell_server_model() {
   local -r IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
+
+  if [ $? -ne 0 ]; then
+    echo "Failed to retrieve iDRAC data, please check IP and credentials." >&2
+    return
+  fi
 
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
@@ -147,8 +220,113 @@ function get_Dell_server_model() {
   fi
 }
 
+# Print interpolated fan speeds for a range of CPU temperatures
+#
+# This function generates 10 CPU temperatures between the lower and upper thresholds,
+# calculates the corresponding fan speeds using the calculate_interpolated_fan_speed function,
+# and displays the results.
+#
+# Parameters:
+#   $1 (CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION): The lower temperature threshold
+#   $2 (CPU_TEMPERATURE_THRESHOLD): The upper temperature threshold
+#   $3 (LOCAL_DECIMAL_FAN_SPEED): The base fan speed (as a decimal percentage)
+#   $4 (LOCAL_DECIMAL_HIGH_FAN_SPEED): The maximum fan speed (as a decimal percentage)
+#
+# Returns:
+#   None (prints the results to stdout)
+print_interpolated_fan_speeds() {
+  local CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$1
+  local CPU_TEMPERATURE_THRESHOLD=$2
+  local LOCAL_DECIMAL_FAN_SPEED=$3
+  local LOCAL_DECIMAL_HIGH_FAN_SPEED=$4
+
+  echo -e "\e[1mInterpolated Fan Speeds Chart\e[0m"
+  echo "=================================================================="
+
+  local temperature_range=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+  local step=$((temperature_range / 9))
+  local chart_width=50
+
+  # Calculate color thresholds
+  local green_threshold=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + temperature_range * 80 / 100))
+  local yellow_threshold=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + temperature_range * 90 / 100))
+
+  # Print column names
+  printf " Temp | Fan  | %-${chart_width}s\n" "Speed"
+  printf "======+======+"
+  printf '%0.s=' $(seq 1 $((chart_width + 2)))
+  printf "\n"
+
+  local highest_CPU_temperature
+  local fan_speed
+  local bar_length
+  local empty_length
+  # Print the chart
+  for i in {0..9}; do
+    if [ $i -eq 9 ]; then
+      highest_CPU_temperature="$CPU_TEMPERATURE_THRESHOLD"
+    else
+      highest_CPU_temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
+    fi
+    fan_speed=$(calculate_interpolated_fan_speed LOCAL_DECIMAL_FAN_SPEED LOCAL_DECIMAL_HIGH_FAN_SPEED highest_CPU_temperature CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION CPU_TEMPERATURE_THRESHOLD)
+    bar_length=$((fan_speed * chart_width / 100))
+    empty_length=$((chart_width - bar_length))
+
+    # Calculate color based on highest_CPU_temperature
+    if [ "$highest_CPU_temperature" -lt "$green_threshold" ]; then
+      color="\e[32m"  # Green
+    elif [ "$highest_CPU_temperature" -lt "$yellow_threshold" ]; then
+      color="\e[33m"  # Yellow
+    else
+      color="\e[31m"  # Red
+    fi
+    printf "%3d°C | %3d%% | ${color}%-${bar_length}s%-${empty_length}s\e[0m|\n" "$highest_CPU_temperature" "$fan_speed" "$(printf '%0.s█' $(seq 1 "$bar_length"))" "$(printf '%0.s ' $(seq 1 "$empty_length"))"
+  done
+
+  echo
+  echo -e "\e[1mLower Threshold:\e[0m ${CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION}°C"
+  echo -e "\e[1mUpper Threshold:\e[0m ${CPU_TEMPERATURE_THRESHOLD}°C"
+  echo -e "\e[1mBase Fan Speed:\e[0m ${LOCAL_DECIMAL_FAN_SPEED}%"
+  echo -e "\e[1mMax Fan Speed:\e[0m ${LOCAL_DECIMAL_HIGH_FAN_SPEED}%"
+  echo -e "\e[1mColor Thresholds:\e[0m"
+  echo -e "  \e[32mGreen:\e[0m  < ${green_threshold}°C"
+  echo -e "  \e[33mYellow:\e[0m ${green_threshold}°C - ${yellow_threshold}°C"
+  echo -e "  \e[31mRed:\e[0m    > ${yellow_threshold}°C"
+}
+
+# F1 - lower fan speed
+# F2 - higher fan speed
+# T_CPU - highest temperature of all CPUs (if only one present the value will be CPU1 temperature)
+# T1 - lower temperature threshold
+# T2 - higher temperature threshold
+# Fan speed = F1 + (( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ))
+function calculate_interpolated_fan_speed() {
+  local -r LOCAL_DECIMAL_FAN_SPEED=$1
+  local -r LOCAL_DECIMAL_HIGH_FAN_SPEED=$2
+  local -r highest_CPU_temperature=$3
+  local -r CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$4
+  local -r CPU_TEMPERATURE_THRESHOLD=$5
+  return $((LOCAL_DECIMAL_FAN_SPEED + ((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED) * ((highest_CPU_temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
+}
+
+# Returns the maximum value among the given integer arguments.
+# Usage: max <integer1> <integer2> ... <integerN>
+function max() {
+  local highest_temperature=$1
+  shift # Moves the arguments, the first one is now deleted
+
+  for temperature in "$@"; do # Iterates over the remaining arguments
+    if [ "$temperature" -gt "$highest_temperature" ]; then
+      highest_temperature="$temperature"
+    fi
+  done
+  echo $highest_temperature
+}
+
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
+function CPU1_HEATING() { [ $CPU1_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; }
 function CPU1_OVERHEATING() { [ $CPU1_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
+function CPU2_HEATING() { [ $CPU2_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; }
 function CPU2_OVERHEATING() { [ $CPU2_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
 
 function print_error() {
