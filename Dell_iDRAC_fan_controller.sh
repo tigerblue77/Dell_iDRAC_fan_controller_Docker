@@ -22,6 +22,18 @@ else
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
+if "$ENABLE_LINE_INTERPOLATION"
+then
+  if [[ "$HIGH_FAN_SPEED" == 0x* ]]
+  then
+    DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
+    HEXADECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
+  else
+    DECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
+    HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
+  fi
+fi
+
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 
 get_Dell_server_model
@@ -46,10 +58,21 @@ echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
-echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
-echo "Check interval: ${CHECK_INTERVAL}s"
-echo ""
+echo "Line interpolation enable: $ENABLE_LINE_INTERPOLATION"
+if "$ENABLE_LINE_INTERPOLATION"
+then
+  echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
+  echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
+  echo "CPU lower temperature threshold: $CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION°C"
+  echo "CPU higher temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+  echo "Check interval: ${CHECK_INTERVAL}s"
+  echo ""
+else
+  echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+  echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
+  echo "Check interval: ${CHECK_INTERVAL}s"
+  echo ""
+fi
 
 # Define the interval for printing
 readonly TABLE_HEADER_PRINT_INTERVAL=10
@@ -107,6 +130,44 @@ while true; do
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
+  elif "$ENABLE_LINE_INTERPOLATION"
+  then    
+    CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
+    if [ $CPU1_TEMPERATURE -gt "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" ] || [$IS_CPU2_TEMPERATURE_SENSOR_PRESENT] && [$CPU2_TEMPERATURE -gt "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION"]; 
+    then
+      CPU_HIGHER_TEMP=$CPU1_TEMPERATURE
+      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+      then
+        if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ]; 
+        then
+          CPU_HIGHER_TEMP=$CPU2_TEMPERATURE
+        fi
+      fi
+      #
+      # F1 - lower fan speed
+      # F2 - higher fan speed
+      # T_CPU - higher temperature from both CPUs (if only one exist that will be CPU1 temp value)
+      # T1 - lower temperature threshold
+      # T2 - higher temperature threshold
+      # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
+      #
+      # Difference between higher and lower temperature
+      TEMP_WINDOW="$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))"
+      # Temperature above lower value
+      TEMPERATURE_ABOVE_LOWER_THRESHOLD="$((CPU_HIGHER_TEMP - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))"
+      # Difference between higher and lower fan speed
+      FAN_WINDOW="$((DECIMAL_HIGH_FAN_SPEED - FAN_SPEED))"
+      FAN_VALUE_TO_ADD=0
+      # Check if TEMP_WINDOW is grater than 0
+      if [ $TEMP_WINDOW -gt $FAN_VALUE_TO_ADD ];
+      then
+        FAN_VALUE_TO_ADD="$((FAN_WINDOW * TEMPERATURE_ABOVE_LOWER_THRESHOLD / TEMP_WINDOW))"
+      fi
+      CURRENT_FAN_SPEED="$((FAN_SPEED + FAN_VALUE_TO_ADD))"
+    fi
+    # Convert decimal to hexadecimal value of fan speed
+    convert_current_fan_value_to_hexadecimal_format
+    apply_line_interpolation_fan_control_profile
   else
     apply_user_fan_control_profile
 
