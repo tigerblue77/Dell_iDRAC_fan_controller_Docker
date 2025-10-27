@@ -263,7 +263,7 @@ print_interpolated_fan_speeds() {
     else
       highest_CPU_temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
     fi
-    fan_speed=$((LOCAL_DECIMAL_FAN_SPEED + ((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED) * ((highest_CPU_temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
+    fan_speed=$(calculate_interpolated_fan_speed LOCAL_DECIMAL_FAN_SPEED LOCAL_DECIMAL_HIGH_FAN_SPEED highest_CPU_temperature CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION CPU_TEMPERATURE_THRESHOLD)
     bar_length=$((fan_speed * chart_width / 100))
     empty_length=$((chart_width - bar_length))
 
@@ -287,6 +287,21 @@ print_interpolated_fan_speeds() {
   echo -e "  \e[32mGreen:\e[0m  < ${green_threshold}°C"
   echo -e "  \e[33mYellow:\e[0m ${green_threshold}°C - ${yellow_threshold}°C"
   echo -e "  \e[31mRed:\e[0m    > ${yellow_threshold}°C"
+}
+
+# F1 - lower fan speed
+# F2 - higher fan speed
+# T_CPU - highest temperature of all CPUs (if only one present the value will be CPU1 temperature)
+# T1 - lower temperature threshold
+# T2 - higher temperature threshold
+# Fan speed = F1 + (( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ))
+function calculate_interpolated_fan_speed() {
+  local -r LOCAL_DECIMAL_FAN_SPEED=$1
+  local -r LOCAL_DECIMAL_HIGH_FAN_SPEED=$2
+  local -r highest_CPU_temperature=$3
+  local -r CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$4
+  local -r CPU_TEMPERATURE_THRESHOLD=$5
+  return $((LOCAL_DECIMAL_FAN_SPEED + ((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED) * ((highest_CPU_temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
 }
 
 # Returns the maximum value among the given integer arguments.

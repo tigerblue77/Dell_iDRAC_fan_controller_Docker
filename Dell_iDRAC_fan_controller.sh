@@ -151,13 +151,7 @@ while true; do
       HIGHEST_CPU_TEMPERATURE=$(max $CPU1_TEMPERATURE $CPU2_TEMPERATURE)
     fi
 
-    # F1 - lower fan speed
-    # F2 - higher fan speed
-    # T_CPU - highest temperature of both CPUs (if only one exists that will be CPU1 temp value)
-    # T1 - lower temperature threshold
-    # T2 - higher temperature threshold
-    # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
-    DECIMAL_FAN_SPEED_TO_APPLY=$((DECIMAL_LOW_FAN_SPEED_OBJECTIVE + ((DECIMAL_HIGH_FAN_SPEED_OBJECTIVE - DECIMAL_LOW_FAN_SPEED_OBJECTIVE) * ((HIGHEST_CPU_TEMPERATURE - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
+    DECIMAL_FAN_SPEED_TO_APPLY=$(calculate_interpolated_fan_speed DECIMAL_LOW_FAN_SPEED_OBJECTIVE DECIMAL_HIGH_FAN_SPEED_OBJECTIVE HIGHEST_CPU_TEMPERATURE CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION CPU_TEMPERATURE_THRESHOLD)
     apply_user_fan_control_profile 2 $DECIMAL_FAN_SPEED_TO_APPLY
   else
     apply_user_fan_control_profile 1 $DECIMAL_LOW_FAN_SPEED_OBJECTIVE
