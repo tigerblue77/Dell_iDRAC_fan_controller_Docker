@@ -180,12 +180,9 @@ while true; do
     else
       DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
     fi
-#    HEXADECIMAL_CURRENT_FAN_SPEED=$(convert_decimal_value_to_hexadecimal $DECIMAL_CURRENT_FAN_SPEED)
-#    apply_user_fan_control_profile_with_interpolation
      apply_user_fan_control 2 "$DECIMAL_CURRENT_FAN_SPEED"
   else
      apply_user_fan_control 1 "$DECIMAL_CURRENT_FAN_SPEED"
-#    apply_user_fan_control_profile
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
