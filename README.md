@@ -192,6 +192,26 @@ Don't forget to give the project a star! Thanks again!
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+To test locally, use either :
+```bash
+docker build -t tigerblue77/dell_idrac_fan_controller:dev .
+docker run -d ...
+```
+or
+```bash
+export IDRAC_HOST=<iDRAC IP address>
+export IDRAC_USERNAME=<iDRAC username>
+export IDRAC_PASSWORD=<iDRAC password>
+export FAN_SPEED=<decimal or hexadecimal fan speed>
+export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+export CHECK_INTERVAL=<seconds between each check>
+export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
+export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
+
+chmod +x Dell_iDRAC_fan_controller.sh
+./Dell_iDRAC_fan_controller.sh
+```
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- LICENSE -->
