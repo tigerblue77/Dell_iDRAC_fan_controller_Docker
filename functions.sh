@@ -96,7 +96,7 @@ function apply_fan_control_to_specified_value() {
 #
 # Returns:
 #   The calculated interpolated fan speed as a decimal percentage
-calculate_interpolated_fan_speed() {
+function calculate_interpolated_fan_speed() {
   local HIGHEST_CPU_TEMPERATURE=$1
   local CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$2
   local CPU_TEMPERATURE_THRESHOLD=$3
