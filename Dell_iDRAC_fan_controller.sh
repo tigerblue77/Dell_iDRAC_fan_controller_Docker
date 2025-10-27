@@ -15,20 +15,22 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ "$FAN_SPEED" == 0x* ]]; then
-  readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
-  readonly HEXADECIMAL_FAN_SPEED="$FAN_SPEED"
+  readonly DECIMAL_LOW_FAN_SPEED_OBJECTIVE=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
+  # Unused
+  # readonly HEXADECIMAL_FAN_SPEED="$FAN_SPEED"
 else
-  readonly DECIMAL_FAN_SPEED="$FAN_SPEED"
-  readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
+  readonly DECIMAL_LOW_FAN_SPEED_OBJECTIVE="$FAN_SPEED"
+  # Unused
+  # readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
 # Check if fan speed interpolation is enabled
-if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -eq "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
   readonly FAN_SPEED_INTERPOLATION_ENABLED=false
   
   # We define these variables to the same values than user fan control profile
   readonly HIGH_FAN_SPEED="$FAN_SPEED"
-  readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$CPU_TEMPERATURE_THRESHOLD
+  readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION="$CPU_TEMPERATURE_THRESHOLD"
 elif [[ "$FAN_SPEED" -gt "$HIGH_FAN_SPEED" ]]; then
   echo "Error : \"$FAN_SPEED\" have to be less or equal to \"$HIGH_FAN_SPEED\". Exiting."
   exit 1
@@ -38,11 +40,11 @@ fi
 
 # Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ "$HIGH_FAN_SPEED" == 0x* ]]; then
-  readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
+  readonly DECIMAL_HIGH_FAN_SPEED_OBJECTIVE=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
   # Unused
   # readonly HEXADECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
 else
-  readonly DECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
+  readonly DECIMAL_HIGH_FAN_SPEED_OBJECTIVE="$HIGH_FAN_SPEED"
   # Unused
   # readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
 fi
@@ -74,15 +76,15 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo "Fan speed interpolation enabled: $FAN_SPEED_INTERPOLATION_ENABLED"
 if $FAN_SPEED_INTERPOLATION_ENABLED; then
-  echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
-  echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
+  echo "Fan speed lower value: $DECIMAL_LOW_FAN_SPEED_OBJECTIVE%"
+  echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED_OBJECTIVE%"
   echo "CPU lower temperature threshold: \"$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION\"°C"
   echo "CPU higher temperature threshold: \"$CPU_TEMPERATURE_THRESHOLD\"°C"
   echo ""
   # Print interpolated fan speeds for demonstration
-  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED"
+  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_LOW_FAN_SPEED_OBJECTIVE" "$DECIMAL_HIGH_FAN_SPEED_OBJECTIVE"
 else
-  echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+  echo "Fan speed objective: $DECIMAL_LOW_FAN_SPEED_OBJECTIVE%"
   echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
 fi
 echo ""
@@ -148,9 +150,9 @@ while true; do
     if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
       HIGHEST_CPU_TEMPERATURE=$(max $CPU1_TEMPERATURE $CPU2_TEMPERATURE)
     fi
-    apply_user_fan_control_profile 2 $(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED")
+    apply_user_fan_control_profile 2 $(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_LOW_FAN_SPEED_OBJECTIVE" "$DECIMAL_HIGH_FAN_SPEED_OBJECTIVE")
   else
-    apply_user_fan_control_profile 1 $DECIMAL_FAN_SPEED
+    apply_user_fan_control_profile 1 $DECIMAL_LOW_FAN_SPEED_OBJECTIVE
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
