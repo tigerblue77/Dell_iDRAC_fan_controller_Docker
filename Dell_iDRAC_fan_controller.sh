@@ -43,7 +43,7 @@ fi
 
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
-echo "iDRAC/IPMI host: \"$IDRAC_HOST\""
+echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
@@ -113,7 +113,7 @@ while true; do
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=false
-      COMMENT="CPU temperature decreased and is now OK (<= \"$CPU_TEMPERATURE_THRESHOLD\"°C), user's fan control profile applied."
+      COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
     fi
   fi
 
