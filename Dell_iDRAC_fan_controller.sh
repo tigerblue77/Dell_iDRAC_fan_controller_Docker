@@ -28,7 +28,10 @@ if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_IN
   
   # We define these variables to the same values than user fan control profile
   readonly HIGH_FAN_SPEED="$FAN_SPEED"
-  readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION="$CPU_TEMPERATURE_THRESHOLD"
+  readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$CPU_TEMPERATURE_THRESHOLD
+elif [[ "$FAN_SPEED" -gt "$HIGH_FAN_SPEED" ]]; then
+  echo "Error : \"$FAN_SPEED\" have to be less or equal to \"$HIGH_FAN_SPEED\". Exiting."
+  exit 1
 else
   readonly FAN_SPEED_INTERPOLATION_ENABLED=true
 fi
