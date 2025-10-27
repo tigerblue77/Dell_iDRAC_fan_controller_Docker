@@ -37,12 +37,12 @@ fi
 # Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ "$HIGH_FAN_SPEED" == 0x* ]]; then
   readonly FAN_SPEED_INTERPOLATION_ENABLED=true
-
-  DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
-  HEXADECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
+  readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
+  readonly HEXADECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
 else
-  DECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
-  HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=false
+  readonly DECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
+  readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
 fi
 
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
