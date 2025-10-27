@@ -252,31 +252,30 @@ print_interpolated_fan_speeds() {
   printf '%0.s=' $(seq 1 $((chart_width + 2)))
   printf "\n"
 
-  local temperature
+  local highest_CPU_temperature
   local fan_speed
   local bar_length
   local empty_length
   # Print the chart
   for i in {0..9}; do
     if [ $i -eq 9 ]; then
-      temperature="$CPU_TEMPERATURE_THRESHOLD"
+      highest_CPU_temperature="$CPU_TEMPERATURE_THRESHOLD"
     else
-      temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
+      highest_CPU_temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
     fi
-    fan_speed=$((LOCAL_DECIMAL_FAN_SPEED + ((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED) * ((temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
+    fan_speed=$((LOCAL_DECIMAL_FAN_SPEED + ((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED) * ((highest_CPU_temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
     bar_length=$((fan_speed * chart_width / 100))
     empty_length=$((chart_width - bar_length))
 
-    # Calculate color based on temperature
-    if [ "$temperature" -lt "$green_threshold" ]; then
+    # Calculate color based on highest_CPU_temperature
+    if [ "$highest_CPU_temperature" -lt "$green_threshold" ]; then
       color="\e[32m"  # Green
-    elif [ "$temperature" -lt "$yellow_threshold" ]; then
+    elif [ "$highest_CPU_temperature" -lt "$yellow_threshold" ]; then
       color="\e[33m"  # Yellow
     else
       color="\e[31m"  # Red
     fi
-
-    printf "%3d°C | %3d%% | ${color}%-${bar_length}s%-${empty_length}s\e[0m|\n" "$temperature" "$fan_speed" "$(printf '%0.s█' $(seq 1 "$bar_length"))" "$(printf '%0.s ' $(seq 1 "$empty_length"))"
+    printf "%3d°C | %3d%% | ${color}%-${bar_length}s%-${empty_length}s\e[0m|\n" "$highest_CPU_temperature" "$fan_speed" "$(printf '%0.s█' $(seq 1 "$bar_length"))" "$(printf '%0.s ' $(seq 1 "$empty_length"))"
   done
 
   echo
