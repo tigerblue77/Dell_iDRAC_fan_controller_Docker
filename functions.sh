@@ -21,15 +21,6 @@ function apply_fan_speed_interpolation_fan_control_profile () {
   CURRENT_FAN_CONTROL_PROFILE="Interpolated fan control profile ($DECIMAL_CURRENT_FAN_SPEED%)"
 }
 
-# Convert DECIMAL_NUMBER to hexadecimal
-# Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
-# Returns : hexadecimal value of DECIMAL_NUMBER
-function convert_decimal_value_to_hexadecimal () {
-  local DECIMAL_NUMBER=$1
-  local HEXADECIMAL_NUMBER=$(printf '0x%02x' $DECIMAL_NUMBER)
-  echo $HEXADECIMAL_NUMBER
-}
-
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
 # Returns : hexadecimal value of DECIMAL_NUMBER
