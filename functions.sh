@@ -149,6 +149,7 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 
 # Prepare traps in case of container exit
 function graceful_exit() {
+  echo "Gracefully exit"
   apply_Dell_fan_control_profile
 
   # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at startup
@@ -162,6 +163,7 @@ function graceful_exit() {
 # Helps debugging when people are posting their output
 function get_Dell_server_model() {
   local -r IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
+  # TODO - Add check if connection was established. There are a chance user type wrong login and pass. In my case it returns "Error: Unable to establish IPMI v2 / RMCP+ session"
 
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
