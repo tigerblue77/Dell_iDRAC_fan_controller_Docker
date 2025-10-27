@@ -22,19 +22,16 @@ function apply_Dell_fan_control_profile() {
 #
 # Returns:
 #   None. In case of an invalid mode, it calls graceful_exit().
-function apply_user_fan_control() {
-  # todo - mode parameter for now could be avoided, but it ease adding something in future
+function apply_user_fan_control_profile() {
   local MODE=$1
   local LOCAL_FAN_SPEED=$2
 
   if [[ $LOCAL_FAN_SPEED == 0x* ]]; then
-    local LOCAL_DECIMAL_FAN_SPEED
-    LOCAL_DECIMAL_FAN_SPEED=$(printf '%d' "$LOCAL_FAN_SPEED")
+    local LOCAL_DECIMAL_FAN_SPEED=$(printf '%d' "$LOCAL_FAN_SPEED")
     local LOCAL_HEXADECIMAL_FAN_SPEED=$LOCAL_FAN_SPEED
   else
     local LOCAL_DECIMAL_FAN_SPEED=$LOCAL_FAN_SPEED
-    local LOCAL_HEXADECIMAL_FAN_SPEED
-    LOCAL_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$LOCAL_FAN_SPEED")
+    local LOCAL_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$LOCAL_FAN_SPEED")
   fi
 
   case $MODE in
@@ -220,27 +217,13 @@ function retrieve_temperatures() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  if ! "$DELL_POWEREDGE_GEN_14_OR_NEWER"
-  then
-    # 14 Gen server or newer
-    continue
-  else
-    # 13 Gen server or older
-    ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
-  fi
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
 }
 
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  if ! "$DELL_POWEREDGE_GEN_14_OR_NEWER"
-  then
-    # 14 Gen server or newer
-    continue
-  else
-    # 13 Gen server or older
-    ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null
-  fi
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null
 }
 
 # Returns :
@@ -262,7 +245,7 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 
 # Prepare traps in case of container exit
 function graceful_exit() {
-  echo "Gracefully exit"
+  echo "Gracefully exiting as requested..."
   apply_Dell_fan_control_profile
 
   # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at startup
@@ -276,7 +259,6 @@ function graceful_exit() {
 # Helps debugging when people are posting their output
 function get_Dell_server_model() {
   local -r IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
-  # TODO - Add check if connection was established. There are a chance user type wrong login and pass. In my case it returns "Error: Unable to establish IPMI v2 / RMCP+ session"
 
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
