@@ -1,6 +1,6 @@
 # Define global functions
 # This function applies Dell's default dynamic fan control profile
-function apply_Dell_fan_control_profile() {
+function apply_Dell_default_fan_control_profile() {
   # Use ipmitool to send the raw command to set fan control to Dell default
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
@@ -187,7 +187,7 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 # Prepare traps in case of container exit
 function graceful_exit() {
   echo "Gracefully exiting as requested..."
-  apply_Dell_fan_control_profile
+  apply_Dell_default_fan_control_profile
 
   # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at startup
   if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then

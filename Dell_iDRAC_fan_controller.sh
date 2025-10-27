@@ -124,7 +124,7 @@ while true; do
   COMMENT=" -"
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
   if CPU1_OVERHEATING; then
-    apply_Dell_fan_control_profile
+    apply_Dell_default_fan_control_profile
 
     if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
@@ -139,7 +139,7 @@ while true; do
     fi
   # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
   elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-    apply_Dell_fan_control_profile
+    apply_Dell_default_fan_control_profile
 
     if ! $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
