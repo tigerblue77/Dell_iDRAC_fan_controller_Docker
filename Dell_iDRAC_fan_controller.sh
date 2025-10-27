@@ -75,8 +75,7 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed interpolation enabled: $FAN_SPEED_INTERPOLATION_ENABLED"
-if "$FAN_SPEED_INTERPOLATION_ENABLED"
-then
+if $FAN_SPEED_INTERPOLATION_ENABLED; then
   echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
   echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
   echo "CPU lower temperature threshold: $CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION°C"
@@ -87,6 +86,12 @@ else
 fi
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
+
+if $FAN_SPEED_INTERPOLATION_ENABLED; then
+  # Print interpolated fan speeds for demonstration
+  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED"
+  echo ""
+fi
 
 # Define the interval for printing
 readonly TABLE_HEADER_PRINT_INTERVAL=10
@@ -144,39 +149,37 @@ while true; do
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
-  elif $FAN_SPEED_INTERPOLATION_ENABLED
-  then
+  elif $FAN_SPEED_INTERPOLATION_ENABLED; then
     HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
-    if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
-    then
+    if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
       if [ $CPU2_TEMPERATURE -gt $CPU1_TEMPERATURE ]; then
         HIGHEST_CPU_TEMPERATURE=$CPU2_TEMPERATURE
       fi
     fi
 
-    if [ $HIGHEST_CPU_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ];
-    then
-      #
-      # F1 - lower fan speed
-      # F2 - higher fan speed
-      # T_CPU - highest temperature of both CPUs (if only one exists that will be CPU1 temp value)
-      # T1 - lower temperature threshold
-      # T2 - higher temperature threshold
-      # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
-      #
-      # Temperature interpolation activation range
-      TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
-      FAN_VALUE_TO_ADD=0
-      # Check if TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE is > 0
-      if [ $TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE -gt $FAN_VALUE_TO_ADD ];
-      then
-        # Temperature above lower value
-        TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$((HIGHEST_CPU_TEMPERATURE - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
-        # Difference between higher and lower fan speed
-        FAN_WINDOW=$((DECIMAL_HIGH_FAN_SPEED - DECIMAL_FAN_SPEED))
-        FAN_VALUE_TO_ADD=$((FAN_WINDOW * TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION / TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE))
-      fi
-      DECIMAL_CURRENT_FAN_SPEED=$((DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))
+    if [ "$HIGHEST_CPU_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+#      #
+#      # F1 - lower fan speed
+#      # F2 - higher fan speed
+#      # T_CPU - highest temperature of both CPUs (if only one exists that will be CPU1 temp value)
+#      # T1 - lower temperature threshold
+#      # T2 - higher temperature threshold
+#      # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
+#      #
+#      # Temperature interpolation activation range
+#      TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+#      FAN_VALUE_TO_ADD=0
+#      # Check if TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE is > 0
+#      if [ $TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE -gt $FAN_VALUE_TO_ADD ]; then
+#        # Temperature above lower value
+#        TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$((HIGHEST_CPU_TEMPERATURE - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+#        # Difference between higher and lower fan speed
+#        FAN_WINDOW=$((DECIMAL_HIGH_FAN_SPEED - DECIMAL_FAN_SPEED))
+#        FAN_VALUE_TO_ADD=$((FAN_WINDOW * TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION / TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE))
+#      fi
+#      DECIMAL_CURRENT_FAN_SPEED=$((DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))
+
+      DECIMAL_CURRENT_FAN_SPEED=$(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED")
     else
       DECIMAL_CURRENT_FAN_SPEED=$DECIMAL_FAN_SPEED
     fi
@@ -187,7 +190,7 @@ while true; do
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=false
-      COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+      COMMENT="CPU temperature decreased and is now OK (<= \"$CPU_TEMPERATURE_THRESHOLD\"°C), user's fan control profile applied."
     fi
   fi
 

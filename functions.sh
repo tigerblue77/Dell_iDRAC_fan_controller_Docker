@@ -81,6 +81,48 @@ function apply_fan_control_to_specified_value() {
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff "$VALUE" > /dev/null
 }
 
+# Calculate the interpolated fan speed based on CPU temperature
+#
+# This function calculates the interpolated fan speed based on the current CPU temperature
+# and predefined thresholds. It uses linear interpolation to adjust the fan speed
+# within a specified range when the CPU temperature exceeds a certain threshold.
+#
+# Parameters:
+#   $1 (HIGHEST_CPU_TEMPERATURE): The current highest CPU temperature
+#   $2 (CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION): The lower temperature threshold for fan speed interpolation
+#   $3 (CPU_TEMPERATURE_THRESHOLD): The upper temperature threshold for fan speed interpolation
+#   $4 (LOCAL_DECIMAL_FAN_SPEED): The base fan speed (as a decimal percentage)
+#   $5 (LOCAL_DECIMAL_HIGH_FAN_SPEED): The maximum fan speed (as a decimal percentage)
+#
+# Returns:
+#   The calculated interpolated fan speed as a decimal percentage
+calculate_interpolated_fan_speed() {
+  local HIGHEST_CPU_TEMPERATURE=$1
+  local CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$2
+  local CPU_TEMPERATURE_THRESHOLD=$3
+  local LOCAL_DECIMAL_FAN_SPEED=$4
+  local LOCAL_DECIMAL_HIGH_FAN_SPEED=$5
+
+  # F1 - lower fan speed
+  # F2 - higher fan speed
+  # T_CPU - highest temperature of both CPUs (if only one exists that will be CPU1 temp value)
+  # T1 - lower temperature threshold
+  # T2 - higher temperature threshold
+  # Fan speed = F1 + ( ( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ) )
+
+  local TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+  local FAN_VALUE_TO_ADD=0
+
+  if [ $TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE -gt $FAN_VALUE_TO_ADD ]; then
+    local TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$((HIGHEST_CPU_TEMPERATURE - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+    local FAN_WINDOW=$((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED))
+    FAN_VALUE_TO_ADD=$((FAN_WINDOW * TEMPERATURE_ABOVE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION / TEMPERATURE_INTERPOLATION_ACTIVATION_RANGE))
+  fi
+
+  local DECIMAL_CURRENT_FAN_SPEED=$((LOCAL_DECIMAL_FAN_SPEED + FAN_VALUE_TO_ADD))
+  echo $DECIMAL_CURRENT_FAN_SPEED
+}
+
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
 # Returns : hexadecimal value of DECIMAL_NUMBER
@@ -228,6 +270,145 @@ function get_Dell_server_model() {
   if [ -z "$SERVER_MODEL" ]; then
     SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2}')
   fi
+}
+
+# Print interpolated fan speeds for a range of CPU temperatures
+#
+# This function generates 10 CPU temperatures between the lower and upper thresholds,
+# calculates the corresponding fan speeds using the calculate_interpolated_fan_speed function,
+# and displays the results.
+#
+# Parameters:
+#   $1 (CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION): The lower temperature threshold
+#   $2 (CPU_TEMPERATURE_THRESHOLD): The upper temperature threshold
+#   $3 (LOCAL_DECIMAL_FAN_SPEED): The base fan speed (as a decimal percentage)
+#   $4 (LOCAL_DECIMAL_HIGH_FAN_SPEED): The maximum fan speed (as a decimal percentage)
+#
+# Returns:
+#   None (prints the results to stdout)
+print_interpolated_fan_speeds() {
+  local CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$1
+  local CPU_TEMPERATURE_THRESHOLD=$2
+  local LOCAL_DECIMAL_FAN_SPEED=$3
+  local LOCAL_DECIMAL_HIGH_FAN_SPEED=$4
+
+#  echo "CPU Temperature | Fan Speed"
+#  echo "---------------|----------"
+#
+#  local temperature_range=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+#  local step=$((temperature_range / 9))
+#  local temperature
+#  local fan_speed
+#
+#  for i in {0..9}; do
+#    temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
+#    fan_speed=$(calculate_interpolated_fan_speed $temperature "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" $LOCAL_DECIMAL_FAN_SPEED $LOCAL_DECIMAL_HIGH_FAN_SPEED)
+#    printf "%14d | %9d\n" $temperature $fan_speed
+#  done
+
+#  echo -e "\e[1mInterpolated Fan Speeds Chart\e[0m"
+#  echo "=================================================================="
+#
+#  local temperature_range=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+#  local step=$((temperature_range / 9))
+#  local chart_width=50
+#
+#  # Calculate color thresholds
+#  local green_threshold=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + temperature_range * 80 / 100))
+#  local yellow_threshold=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + temperature_range * 90 / 100))
+#
+#  # Print column names
+#  printf " Temp | Fan  | %-${chart_width}s\n" "Speed"
+#  printf "======+======+"
+#  printf '%0.s=' $(seq 1 $((chart_width + 2)))
+#  printf "\n"
+#
+#  local temperature
+#  local fan_speed
+#  local bar_length
+#  local empty_length
+#  # Print the chart
+#  for i in {0..9}; do
+#    temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
+#    fan_speed=$(calculate_interpolated_fan_speed "$temperature" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$LOCAL_DECIMAL_FAN_SPEED" "$LOCAL_DECIMAL_HIGH_FAN_SPEED")
+#    bar_length=$((fan_speed * chart_width / 100))
+#    empty_length=$((chart_width - bar_length))
+#
+#    # Calculate color based on temperature
+#    if [ "$temperature" -lt "$green_threshold" ]; then
+#      color="\e[32m"  # Green
+#    elif [ "$temperature" -lt "$yellow_threshold" ]; then
+#      color="\e[33m"  # Yellow
+#    else
+#      color="\e[31m"  # Red
+#    fi
+#
+#    printf "%3d°C | %3d%% | ${color}%-${bar_length}s%-${empty_length}s\e[0m|\n" "$temperature" "$fan_speed" "$(printf '%0.s█' $(seq 1 "$bar_length"))" "$(printf '%0.s ' $(seq 1 "$empty_length"))"
+#  done
+#
+#  echo
+#  echo -e "\e[1mLower Threshold:\e[0m ${CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION}°C"
+#  echo -e "\e[1mUpper Threshold:\e[0m ${CPU_TEMPERATURE_THRESHOLD}°C"
+#  echo -e "\e[1mBase Fan Speed:\e[0m ${LOCAL_DECIMAL_FAN_SPEED}%"
+#  echo -e "\e[1mMax Fan Speed:\e[0m ${LOCAL_DECIMAL_HIGH_FAN_SPEED}%"
+#  echo -e "\e[1mColor Thresholds:\e[0m"
+#  echo -e "  \e[32mGreen:\e[0m  < ${green_threshold}°C"
+#  echo -e "  \e[33mYellow:\e[0m ${green_threshold}°C - ${yellow_threshold}°C"
+#  echo -e "  \e[31mRed:\e[0m    > ${yellow_threshold}°C"
+
+  echo -e "\e[1mInterpolated Fan Speeds Chart\e[0m"
+  echo "=================================================================="
+
+  local temperature_range=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+  local step=$((temperature_range / 9))
+  local chart_width=50
+
+  # Calculate color thresholds
+  local green_threshold=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + temperature_range * 80 / 100))
+  local yellow_threshold=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + temperature_range * 90 / 100))
+
+  # Print column names
+  printf " Temp | Fan  | %-${chart_width}s\n" "Speed"
+  printf "======+======+"
+  printf '%0.s=' $(seq 1 $((chart_width + 2)))
+  printf "\n"
+
+  local temperature
+  local fan_speed
+  local bar_length
+  local empty_length
+  # Print the chart
+  for i in {0..9}; do
+    if [ $i -eq 9 ]; then
+      temperature="$CPU_TEMPERATURE_THRESHOLD"
+    else
+      temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
+    fi
+    fan_speed=$(calculate_interpolated_fan_speed "$temperature" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$LOCAL_DECIMAL_FAN_SPEED" "$LOCAL_DECIMAL_HIGH_FAN_SPEED")
+    bar_length=$((fan_speed * chart_width / 100))
+    empty_length=$((chart_width - bar_length))
+
+    # Calculate color based on temperature
+    if [ "$temperature" -lt "$green_threshold" ]; then
+      color="\e[32m"  # Green
+    elif [ "$temperature" -lt "$yellow_threshold" ]; then
+      color="\e[33m"  # Yellow
+    else
+      color="\e[31m"  # Red
+    fi
+
+    printf "%3d°C | %3d%% | ${color}%-${bar_length}s%-${empty_length}s\e[0m|\n" "$temperature" "$fan_speed" "$(printf '%0.s█' $(seq 1 "$bar_length"))" "$(printf '%0.s ' $(seq 1 "$empty_length"))"
+  done
+
+  echo
+  echo -e "\e[1mLower Threshold:\e[0m ${CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION}°C"
+  echo -e "\e[1mUpper Threshold:\e[0m ${CPU_TEMPERATURE_THRESHOLD}°C"
+  echo -e "\e[1mBase Fan Speed:\e[0m ${LOCAL_DECIMAL_FAN_SPEED}%"
+  echo -e "\e[1mMax Fan Speed:\e[0m ${LOCAL_DECIMAL_HIGH_FAN_SPEED}%"
+  echo -e "\e[1mColor Thresholds:\e[0m"
+  echo -e "  \e[32mGreen:\e[0m  < ${green_threshold}°C"
+  echo -e "  \e[33mYellow:\e[0m ${green_threshold}°C - ${yellow_threshold}°C"
+  echo -e "  \e[31mRed:\e[0m    > ${yellow_threshold}°C"
 }
 
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
