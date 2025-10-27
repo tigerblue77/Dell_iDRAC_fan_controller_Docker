@@ -14,10 +14,11 @@ function apply_user_fan_control_profile() {
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
-function apply_line_interpolation_fan_control_profile () {
+# This function applies a user-specified interpolated fan control profile
+function apply_fan_speed_interpolation_fan_control_profile () {
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_CURRENT_FAN_SPEED > /dev/null
-  CURRENT_FAN_CONTROL_PROFILE="Interpolated fan control profile ($CURRENT_FAN_SPEED%)"
+  CURRENT_FAN_CONTROL_PROFILE="Interpolated fan control profile ($DECIMAL_CURRENT_FAN_SPEED%)"
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
