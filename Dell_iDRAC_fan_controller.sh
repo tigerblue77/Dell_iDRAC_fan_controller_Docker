@@ -34,15 +34,21 @@ then
   fi
 fi
 
-# Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
-if [[ "$HIGH_FAN_SPEED" == 0x* ]]; then
-  readonly FAN_SPEED_INTERPOLATION_ENABLED=true
-  readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
-  readonly HEXADECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
-else
+# Check if fan speed interpolation is enabled
+if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
   readonly FAN_SPEED_INTERPOLATION_ENABLED=false
-  readonly DECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
-  readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
+else
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=true
+
+  # Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
+  if [[ "$HIGH_FAN_SPEED" == 0x* ]]
+  then
+    readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
+    readonly HEXADECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
+  else
+    readonly DECIMAL_HIGH_FAN_SPEED="$HIGH_FAN_SPEED"
+    readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
+  fi
 fi
 
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
