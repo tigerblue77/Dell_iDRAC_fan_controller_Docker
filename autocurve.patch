@@ -1,0 +1,94 @@
+*** Begin Patch
+*** Update File: Dell_iDRAC_fan_controller.sh
+@@
+-: "${FAN_SPEED:=5}"
+-: "${CPU_TEMPERATURE_THRESHOLD:=50}"
+-: "${CHECK_INTERVAL:=60}"
++: "${FAN_SPEED:=5}"
++: "${CPU_TEMPERATURE_THRESHOLD:=50}"
++: "${CHECK_INTERVAL:=60}"
++# ===== AutoCurve additions =====
++# Režim: static (pôvodné správanie) | curve (automatická krivka 10–100%)
++: "${FAN_MODE:=static}"
++# Spodok krivky v %, napr. 10
++: "${CURVE_MIN_FAN:=10}"
++# Teplota, od ktorej začneme rampovať (°C)
++: "${CURVE_BASE_TEMP:=30}"
++# Vrch krivky; ak nie je zadané, použije sa CPU_TEMPERATURE_THRESHOLD
++: "${CURVE_MAX_TEMP:=}"
++# Senzor pre riadenie: cpu|exhaust|inlet
++: "${CURVE_SENSOR:=cpu}"
++# Mŕtva zóna v °C, aby nekmitalo
++: "${CURVE_HYSTERESIS_C:=2}"
++# Minimálna zmena medzi cyklami v %
++: "${CURVE_STEP_MIN:=3}"
++
++prev_applied_fan=""
++
++# Vytiahni teplotu podľa zvoleného senzora
++get_temp() {
++  case "$CURVE_SENSOR" in
++    cpu)     sensor_pat="CPU.*T.*";;
++    exhaust) sensor_pat="Exhaust.*Temp";;
++    inlet)   sensor_pat="Inlet.*Temp";;
++    *)       sensor_pat="CPU.*T.*";;
++  esac
++  ipmitool -I "${IPMI_IFACE}" $IPMI_AUTH sdr elist all \
++    | awk -v pat="$sensor_pat" 'BEGIN{IGNORECASE=1} $0 ~ pat {for(i=1;i<=NF;i++){if($(i) ~ /^[0-9]+$/){print $(i); exit}}}'
++}
++
++# Aplikuj percentá s ochranou proti kmitaniu
++apply_fan_percent() {
++  set_manual_fan_mode_if_needed
++  percent="$1"
++  if [ -n "$prev_applied_fan" ]; then
++    delta=$(( percent > prev_applied_fan ? percent - prev_applied_fan : prev_applied_fan - percent ))
++    if [ "$delta" -lt "$CURVE_STEP_MIN" ]; then
++      percent="$prev_applied_fan"
++    fi
++  fi
++  write_fan_speed_percent "$percent"
++  prev_applied_fan="$percent"
++}
+@@
+ main_loop() {
+   while true; do
+-    temp="$(read_cpu_temp)"   # existing helper
+-    if [ "$temp" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
++    # Použi nový getter; ak zlyhá, vráť sa na Dell profil
++    temp="$(get_temp || true)"
++    if [ -z "$temp" ]; then
++      log "WARN" "Temperature read failed → switching to Dell profile"
++      set_dell_profile
++      sleep "$CHECK_INTERVAL"; continue
++    fi
++    if [ "$temp" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+       log "INFO" "High temp ($temp°C) → switching to Dell fan profile"
+       set_dell_profile
+     else
+-      set_manual_fan_mode_if_needed
+-      write_fan_speed_percent "$FAN_SPEED"
++      if [ "$FAN_MODE" = "curve" ]; then
++        tmin="${CURVE_BASE_TEMP}"
++        tmax="${CURVE_MAX_TEMP:-$CPU_TEMPERATURE_THRESHOLD}"
++        if [ "$temp" -le "$tmin" ]; then
++          target="$CURVE_MIN_FAN"
++        elif [ "$temp" -ge "$tmax" ]; then
++          target=100
++        else
++          # lineárna interpolácia: min% → 100% v rozsahu tmin..tmax
++          num=$(( 100 - CURVE_MIN_FAN ))
++          den=$(( tmax - tmin ))
++          inc=$(( num * (temp - tmin) / den ))
++          target=$(( CURVE_MIN_FAN + inc ))
++        fi
++        apply_fan_percent "$target"
++      else
++        set_manual_fan_mode_if_needed
++        write_fan_speed_percent "$FAN_SPEED"
++      fi
+     fi
+     sleep "$CHECK_INTERVAL"
+   done
+ }
+*** End Patch
