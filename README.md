@@ -106,6 +106,26 @@ docker run -d \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
 
+3. with fan curve mode (dynamic temperature-based control):
+
+```bash
+docker run -d \
+  --name Dell_iDRAC_fan_controller \
+  --restart=unless-stopped \
+  -e IDRAC_HOST=local \
+  -e FAN_CONTROL_MODE=curve \
+  -e FAN_CURVE=<temperature:speed pairs in CSV format> \
+  -e FAN_CURVE_HYSTERESIS=<hysteresis in degrees Celsius> \
+  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
+  -e CHECK_INTERVAL=<seconds between each check> \
+  --device=/dev/ipmi0:/dev/ipmi0:rw \
+  tigerblue77/dell_idrac_fan_controller:latest
+```
+
+**Note**: The script is fully backward compatible. Existing deployments using only `FAN_SPEED` will continue to work unchanged. Curve mode is optional and only activated when `FAN_CONTROL_MODE=curve` is set.
+
+**Tip**: Use the included `fan_curve_editor.html` file to visually create and test your fan curves before deploying!
+
 `docker-compose.yml` examples:
 
 1. to use with local iDRAC:
@@ -150,6 +170,27 @@ services:
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 ```
 
+3. to use with fan curve mode:
+
+```yml
+version: '3.8'
+
+services:
+  Dell_iDRAC_fan_controller:
+    image: tigerblue77/dell_idrac_fan_controller:latest
+    container_name: Dell_iDRAC_fan_controller
+    restart: unless-stopped
+    environment:
+      - IDRAC_HOST=local
+      - FAN_CONTROL_MODE=curve
+      - FAN_CURVE=<temperature:speed pairs in CSV format>
+      - FAN_CURVE_HYSTERESIS=<hysteresis in degrees Celsius>
+      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+      - CHECK_INTERVAL=<seconds between each check>
+    devices:
+      - /dev/ipmi0:/dev/ipmi0:rw
+```
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- PARAMETERS -->
@@ -160,7 +201,10 @@ All parameters are optional as they have default values (including default iDRAC
 - `IDRAC_HOST` parameter can be set to "local" or to your distant iDRAC's IP address. **Default** value is "local".
 - `IDRAC_USERNAME` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "root".
 - `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "calvin".
-- `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%).
+- `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%). **Note**: Only used when `FAN_CONTROL_MODE=static` (default).
+- `FAN_CONTROL_MODE` parameter controls the fan control method. Set to `"static"` for fixed fan speed (uses `FAN_SPEED`) or `"curve"` for temperature-based dynamic fan control (uses `FAN_CURVE`). **Default** value is `"static"`.
+- `FAN_CURVE` parameter defines a multi-point fan curve in CSV format: `temp1:speed1,temp2:speed2,temp3:speed3,...` where temperatures are in degrees Celsius (0-100) and speeds are percentages (0-100). **Required** when `FAN_CONTROL_MODE=curve`. Example: `30:5,40:15,50:30,60:50` means 5% at 30°C, 15% at 40°C, 30% at 50°C, and 50% at 60°C, with linear interpolation between points. **Note**: For Unraid deployments, do NOT enclose the value in quotes as it may cause validation errors. For docker run/docker-compose, quotes may be required depending on your shell environment.
+- `FAN_CURVE_HYSTERESIS` parameter sets the hysteresis band in degrees Celsius to prevent rapid fan speed changes when temperature hovers near curve breakpoints. The fan speed will only change if the temperature has moved by more than this amount since the last speed change. **Default** value is 2(°C). Only used when `FAN_CONTROL_MODE=curve`. Set to 0 to disable hysteresis.
 - `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 50(°C).
 - `CHECK_INTERVAL` parameter is the time (in seconds) between each temperature check and potential profile change. **Default** value is 60(s).
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.

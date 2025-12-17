@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dell iDRAC Fan Curve Editor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .instructions {
+            background: #e8f4f8;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 4px solid #2196F3;
+        }
+        .instructions h3 {
+            margin-top: 0;
+            color: #1976D2;
+        }
+        .graph-container {
+            position: relative;
+            margin-bottom: 20px;
+        }
+        canvas {
+            border: 2px solid #333;
+            border-radius: 5px;
+            background: white;
+            cursor: crosshair;
+        }
+        .csv-output {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            border: 1px solid #dee2e6;
+        }
+        .csv-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #495057;
+        }
+        .csv-display {
+            font-family: 'Courier New', monospace;
+            background: white;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 3px;
+            margin-right: 10px;
+            min-height: 20px;
+            word-break: break-all;
+        }
+        .copy-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .copy-btn:hover {
+            background: #218838;
+        }
+        .copy-btn:active {
+            background: #1e7e34;
+        }
+        .output-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .clear-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 10px;
+            transition: background-color 0.2s;
+        }
+        .clear-btn:hover {
+            background: #c82333;
+        }
+        .point-info {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        .graph-container {
+            position: relative;
+        }
+        .x-label {
+            position: absolute;
+            bottom: 10px;
+            left: 375px;
+            font-size: 12px;
+            color: #666;
+            z-index: 10;
+        }
+        .y-label {
+            position: absolute;
+            top: 50%;
+            left: -25px;
+            transform: translateY(-50%) rotate(-90deg);
+            font-size: 12px;
+            color: #666;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Dell iDRAC Fan Curve Editor</h1>
+
+        <div class="instructions">
+            <h3>Instructions</h3>
+            <ul>
+                <li><strong>Add point:</strong> Left-click anywhere on the graph</li>
+                <li><strong>Move point:</strong> Left-click and drag existing points</li>
+                <li><strong>Delete point:</strong> Right-click on any point</li>
+                <li><strong>Clear all:</strong> Use the Clear All button</li>
+                <li><strong>Copy CSV:</strong> Click the Copy button to copy the curve for use in your Docker container</li>
+            </ul>
+        </div>
+
+        <div class="graph-container">
+            <div class="x-label">Temperature (°C)</div>
+            <div class="y-label">Fan Speed (%)</div>
+            <canvas id="fanCurveCanvas" width="800" height="400"></canvas>
+        </div>
+
+        <button class="clear-btn" onclick="clearAllPoints()">Clear All Points</button>
+
+        <div class="point-info">
+            Points: <span id="pointCount">0</span>
+        </div>
+
+        <div class="csv-output">
+            <div class="csv-label">Docker Environment Variable (FAN_CURVE):</div>
+            <div class="output-row">
+                <div class="csv-display" id="csvOutput">Click on the graph to add points</div>
+                <button class="copy-btn" onclick="copyToClipboard()">Copy CSV</button>
+            </div>
+            <div class="csv-label">Docker Run Example:</div>
+            <div class="csv-display" id="dockerExample">docker run -e FAN_CONTROL_MODE=curve -e FAN_CURVE="..." ...</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('fanCurveCanvas');
+        const ctx = canvas.getContext('2d');
+        const csvOutput = document.getElementById('csvOutput');
+        const dockerExample = document.getElementById('dockerExample');
+        const pointCount = document.getElementById('pointCount');
+
+        let points = [];
+        let draggedPoint = null;
+        let isDragging = false;
+
+        // Canvas dimensions and margins
+        const margin = 50;
+        const plotWidth = canvas.width - 2 * margin;
+        const plotHeight = canvas.height - 2 * margin;
+
+        function drawGraph() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw grid
+            ctx.strokeStyle = '#e0e0e0';
+            ctx.lineWidth = 1;
+
+            // Vertical grid lines (temperature)
+            for (let i = 0; i <= 10; i++) {
+                const x = margin + (i * plotWidth) / 10;
+                ctx.beginPath();
+                ctx.moveTo(x, margin);
+                ctx.lineTo(x, canvas.height - margin);
+                ctx.stroke();
+
+                // Temperature labels
+                if (i % 2 === 0) {
+                    ctx.fillStyle = '#666';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(i * 10, x, canvas.height - margin + 20);
+                }
+            }
+
+            // Horizontal grid lines (fan speed)
+            for (let i = 0; i <= 10; i++) {
+                const y = canvas.height - margin - (i * plotHeight) / 10;
+                ctx.beginPath();
+                ctx.moveTo(margin, y);
+                ctx.lineTo(canvas.width - margin, y);
+                ctx.stroke();
+
+                // Fan speed labels
+                if (i % 2 === 0) {
+                    ctx.fillStyle = '#666';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'right';
+                    ctx.fillText(i * 10, margin - 10, y + 4);
+                }
+            }
+
+            // Draw axes
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+
+            // X-axis
+            ctx.beginPath();
+            ctx.moveTo(margin, canvas.height - margin);
+            ctx.lineTo(canvas.width - margin, canvas.height - margin);
+            ctx.stroke();
+
+            // Y-axis
+            ctx.beginPath();
+            ctx.moveTo(margin, margin);
+            ctx.lineTo(margin, canvas.height - margin);
+            ctx.stroke();
+
+            // Draw points and lines
+            if (points.length > 0) {
+                // Sort points by temperature for proper line drawing
+                const sortedPoints = [...points].sort((a, b) => a.temp - b.temp);
+
+                // Draw lines between points
+                ctx.strokeStyle = '#2196F3';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                for (let i = 0; i < sortedPoints.length; i++) {
+                    const x = margin + (sortedPoints[i].temp / 100) * plotWidth;
+                    const y = canvas.height - margin - (sortedPoints[i].speed / 100) * plotHeight;
+
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+
+                // Draw points
+                sortedPoints.forEach(point => {
+                    const x = margin + (point.temp / 100) * plotWidth;
+                    const y = canvas.height - margin - (point.speed / 100) * plotHeight;
+
+                    // Point circle
+                    ctx.fillStyle = point === draggedPoint ? '#ff6b6b' : '#4CAF50';
+                    ctx.beginPath();
+                    ctx.arc(x, y, 6, 0, 2 * Math.PI);
+                    ctx.fill();
+
+                    // Point border
+                    ctx.strokeStyle = '#333';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Temperature label on point
+                    ctx.fillStyle = 'white';
+                    ctx.font = '10px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`${point.temp}°`, x, y + 3);
+                });
+            }
+        }
+
+        function getMousePos(event) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top
+            };
+        }
+
+        function canvasToData(x, y) {
+            const temp = Math.round(((x - margin) / plotWidth) * 100);
+            const speed = Math.round(((canvas.height - margin - y) / plotHeight) * 100);
+
+            return {
+                temp: Math.max(0, Math.min(100, temp)),
+                speed: Math.max(0, Math.min(100, speed))
+            };
+        }
+
+        function findPointAt(x, y) {
+            for (let point of points) {
+                const pointX = margin + (point.temp / 100) * plotWidth;
+                const pointY = canvas.height - margin - (point.speed / 100) * plotHeight;
+                const distance = Math.sqrt((x - pointX) ** 2 + (y - pointY) ** 2);
+
+                if (distance <= 10) {
+                    return point;
+                }
+            }
+            return null;
+        }
+
+        function updateCSV() {
+            if (points.length === 0) {
+                csvOutput.textContent = 'Click on the graph to add points';
+                dockerExample.textContent = 'docker run -e FAN_CONTROL_MODE=curve -e FAN_CURVE="..." ...';
+                return;
+            }
+
+            // Sort points by temperature
+            const sortedPoints = [...points].sort((a, b) => a.temp - b.temp);
+
+            // Create CSV string
+            const csvString = sortedPoints.map(p => `${p.temp}:${p.speed}`).join(',');
+            csvOutput.textContent = `"${csvString}"`;
+
+            // Update Docker example
+            dockerExample.textContent = `docker run -e FAN_CONTROL_MODE=curve -e FAN_CURVE="${csvString}" ...`;
+
+            pointCount.textContent = points.length;
+        }
+
+        function copyToClipboard() {
+            if (points.length === 0) {
+                alert('No points to copy. Add some points first!');
+                return;
+            }
+
+            const sortedPoints = [...points].sort((a, b) => a.temp - b.temp);
+            const csvString = sortedPoints.map(p => `${p.temp}:${p.speed}`).join(',');
+
+            navigator.clipboard.writeText(csvString).then(() => {
+                // Visual feedback
+                const btn = document.querySelector('.copy-btn');
+                const originalText = btn.textContent;
+                btn.textContent = 'Copied!';
+                btn.style.background = '#17a2b8';
+
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.background = '#28a745';
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+                alert('Failed to copy to clipboard. Please copy manually from the text field.');
+            });
+        }
+
+        function clearAllPoints() {
+            if (confirm('Are you sure you want to clear all points?')) {
+                points = [];
+                draggedPoint = null;
+                isDragging = false;
+                updateCSV();
+                drawGraph();
+            }
+        }
+
+        // Mouse event handlers
+        canvas.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            const mousePos = getMousePos(event);
+            const clickedPoint = findPointAt(mousePos.x, mousePos.y);
+
+            if (event.button === 0) { // Left click
+                if (clickedPoint) {
+                    // Start dragging
+                    draggedPoint = clickedPoint;
+                    isDragging = true;
+                } else {
+                    // Add new point
+                    const dataPos = canvasToData(mousePos.x, mousePos.y);
+                    points.push(dataPos);
+                    updateCSV();
+                    drawGraph();
+                }
+            } else if (event.button === 2) { // Right click
+                if (clickedPoint) {
+                    // Delete point
+                    points = points.filter(p => p !== clickedPoint);
+                    updateCSV();
+                    drawGraph();
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (event) => {
+            if (isDragging && draggedPoint) {
+                const mousePos = getMousePos(event);
+                const dataPos = canvasToData(mousePos.x, mousePos.y);
+                draggedPoint.temp = dataPos.temp;
+                draggedPoint.speed = dataPos.speed;
+                updateCSV();
+                drawGraph();
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDragging = false;
+            draggedPoint = null;
+        });
+
+        // Prevent context menu on right click
+        canvas.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+        });
+
+        // Initial draw
+        drawGraph();
+        updateCSV();
+    </script>
+</body>
+</html>
