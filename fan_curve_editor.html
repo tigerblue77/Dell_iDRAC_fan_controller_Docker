@@ -345,7 +345,7 @@
             const sortedPoints = [...points].sort((a, b) => a.temp - b.temp);
             const csvString = sortedPoints.map(p => `${p.temp}:${p.speed}`).join(',');
 
-            navigator.clipboard.writeText(csvString).then(() => {
+            navigator.clipboard.writeText(`"${csvString}"`).then(() => {
                 // Visual feedback
                 const btn = document.querySelector('.copy-btn');
                 const originalText = btn.textContent;
