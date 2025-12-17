@@ -2,7 +2,9 @@
 # This function applies Dell's default dynamic fan control profile
 function apply_Dell_default_fan_control_profile() {
   # Use ipmitool to send the raw command to set fan control to Dell default
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null
+  if ! ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 >/dev/null 2>&1; then
+    print_error "Failed to apply Dell default fan control profile via IPMI (continuing)"
+  fi
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
@@ -26,15 +28,27 @@ function apply_user_fan_control_profile() {
   fi
   
   # Use ipmitool to send the raw command to set fan control to user-specified value
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $FAN_SPEED_HEX > /dev/null
+  if ! ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 >/dev/null 2>&1; then
+    print_error "Failed to set fan control mode via IPMI (continuing)"
+  fi
+
+  if ! ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $FAN_SPEED_HEX >/dev/null 2>&1; then
+    print_error "Failed to set fan speed to $FAN_SPEED_TO_APPLY% ($FAN_SPEED_HEX) via IPMI (continuing)"
+  fi
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
-# Returns : hexadecimal value of DECIMAL_NUMBER
+# Returns : hexadecimal value of DECIMAL_NUMBER (0x00-0x64)
 function convert_decimal_value_to_hexadecimal() {
   local -r DECIMAL_NUMBER=$1
+
+  # Validate input is numeric and in range
+  if ! [[ "$DECIMAL_NUMBER" =~ ^[0-9]+$ ]] || [ "$DECIMAL_NUMBER" -lt 0 ] || [ "$DECIMAL_NUMBER" -gt 100 ]; then
+    echo "0x00"  # Safe fallback
+    return 1
+  fi
+
   local -r HEXADECIMAL_NUMBER=$(printf '0x%02x' $DECIMAL_NUMBER)
   echo $HEXADECIMAL_NUMBER
 }
@@ -82,13 +96,31 @@ function retrieve_temperatures() {
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
   local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
 
-  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
+  # Execute IPMI command with basic error handling
+  local DATA=""
+  if ! DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees); then
+    print_error "Failed to retrieve temperature data from IPMI (continuing with defaults)"
+    # Set safe defaults but don't fail
+    CPU1_TEMPERATURE="50"
+    CPU2_TEMPERATURE="-"
+    INLET_TEMPERATURE="25"
+    EXHAUST_TEMPERATURE="-"
+    return 0  # Don't fail, just use defaults
+  fi
 
-  # Parse CPU data
+  # Parse CPU data with basic validation
   local -r CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
-  CPU1_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU1_TEMPERATURE_INDEX;}")
-  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-    CPU2_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU2_TEMPERATURE_INDEX;}")
+
+  # Extract CPU1 temperature with fallback
+  if [ -n "$CPU_DATA" ] && [ $CPU1_TEMPERATURE_INDEX -ge 1 ]; then
+    CPU1_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU1_TEMPERATURE_INDEX;}" 2>/dev/null || echo "50")
+  else
+    CPU1_TEMPERATURE="50"  # Safe default
+  fi
+
+  # Extract CPU2 temperature with fallback
+  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && [ -n "$CPU_DATA" ] && [ $CPU2_TEMPERATURE_INDEX -ge 1 ]; then
+    CPU2_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU2_TEMPERATURE_INDEX;}" 2>/dev/null || echo "-")
   else
     CPU2_TEMPERATURE="-"
   fi
@@ -117,13 +149,17 @@ function retrieve_temperatures() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
+  if ! ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 >/dev/null 2>&1; then
+    print_error "Failed to enable third-party PCIe card cooling response via IPMI (continuing)"
+  fi
 }
 
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null
+  if ! ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 >/dev/null 2>&1; then
+    print_error "Failed to disable third-party PCIe card cooling response via IPMI (continuing)"
+  fi
 }
 
 # Returns :
@@ -237,95 +273,127 @@ function print_temperature_array_line() {
 }
 
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
-function CPU1_OVERHEATING() { [ $CPU1_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
-function CPU2_OVERHEATING() { [ $CPU2_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
+function CPU1_OVERHEATING() {
+    [[ "$CPU1_TEMPERATURE" =~ ^[0-9]+$ ]] && [ "$CPU1_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ];
+}
+function CPU2_OVERHEATING() {
+    [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]] && [ "$CPU2_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ];
+}
 
 # Get maximum CPU temperature (CPU1 and CPU2 if available)
 # Usage: get_max_cpu_temperature
 # Returns: Maximum temperature value
 function get_max_cpu_temperature() {
-  local MAX_TEMP=$CPU1_TEMPERATURE
-  
-  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && [ -n "$CPU2_TEMPERATURE" ] && [ "$CPU2_TEMPERATURE" != "-" ]; then
-    if [ $CPU2_TEMPERATURE -gt $MAX_TEMP ]; then
-      MAX_TEMP=$CPU2_TEMPERATURE
+    local MAX_TEMP=""
+
+    # Get valid CPU1 temp
+    if [[ "$CPU1_TEMPERATURE" =~ ^[0-9]+$ ]]; then
+        MAX_TEMP=$CPU1_TEMPERATURE
+    else
+        MAX_TEMP=50  # Safe default
     fi
-  fi
-  
-  echo $MAX_TEMP
+
+    # Compare with CPU2 if valid
+    if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]]; then
+        if [ $CPU2_TEMPERATURE -gt $MAX_TEMP ]; then
+            MAX_TEMP=$CPU2_TEMPERATURE
+        fi
+    fi
+
+    echo $MAX_TEMP
 }
 
 # Parse fan curve from CSV format string
 # Usage: parse_fan_curve "30:5,40:15,50:30"
 # Sets global arrays: FAN_CURVE_TEMPS[] and FAN_CURVE_SPEEDS[]
+# Returns: 0 on success, 1 on error (logs error and allows fallback)
 function parse_fan_curve() {
   local -r CURVE_STRING="$1"
-  
+
   if [ -z "$CURVE_STRING" ]; then
-    print_error_and_exit "FAN_CURVE is required when FAN_CONTROL_MODE=curve"
+    log_curve_error "FAN_CURVE is required when FAN_CONTROL_MODE=curve"
+    return 1
   fi
-  
-  # Clear arrays
+
+  # Clear and initialize arrays
   FAN_CURVE_TEMPS=()
   FAN_CURVE_SPEEDS=()
-  
+  declare -g FAN_CURVE_TEMPS FAN_CURVE_SPEEDS
+
   # Split by comma and process each pair
   IFS=',' read -ra PAIRS <<< "$CURVE_STRING"
-  
+
   if [ ${#PAIRS[@]} -lt 2 ]; then
-    print_error_and_exit "FAN_CURVE must contain at least 2 temperature:speed pairs"
+    log_curve_error "FAN_CURVE must contain at least 2 temperature:speed pairs"
+    return 1
   fi
-  
+
   # Parse each pair
   for pair in "${PAIRS[@]}"; do
     # Remove whitespace
     pair=$(echo "$pair" | tr -d '[:space:]')
-    
+
     # Check format (should be temp:speed)
     if [[ ! "$pair" =~ ^[0-9]+:[0-9]+$ ]]; then
-      print_error_and_exit "Invalid FAN_CURVE format: '$pair'. Expected format: temp:speed (e.g., 30:5)"
+      log_curve_error "Invalid FAN_CURVE format: '$pair'. Expected format: temp:speed (e.g., 30:5)"
+      return 1
     fi
-    
+
     local TEMP=$(echo "$pair" | cut -d':' -f1)
     local SPEED=$(echo "$pair" | cut -d':' -f2)
-    
+
     # Validate ranges
     if [ $TEMP -lt 0 ] || [ $TEMP -gt 100 ]; then
-      print_error_and_exit "Invalid temperature in FAN_CURVE: $TEMP. Must be between 0 and 100"
+      log_curve_error "Invalid temperature in FAN_CURVE: $TEMP. Must be between 0 and 100"
+      return 1
     fi
-    
+
     if [ $SPEED -lt 0 ] || [ $SPEED -gt 100 ]; then
-      print_error_and_exit "Invalid speed in FAN_CURVE: $SPEED. Must be between 0 and 100"
+      log_curve_error "Invalid speed in FAN_CURVE: $SPEED. Must be between 0 and 100"
+      return 1
     fi
-    
+
     # Check for duplicate temperatures
     for existing_temp in "${FAN_CURVE_TEMPS[@]}"; do
       if [ $existing_temp -eq $TEMP ]; then
-        print_error_and_exit "Duplicate temperature in FAN_CURVE: $TEMP"
+        log_curve_error "Duplicate temperature in FAN_CURVE: $TEMP"
+        return 1
       fi
     done
-    
+
     FAN_CURVE_TEMPS+=($TEMP)
     FAN_CURVE_SPEEDS+=($SPEED)
   done
-  
+
+  # Validate array lengths match
+  local temp_count=${#FAN_CURVE_TEMPS[@]}
+  local speed_count=${#FAN_CURVE_SPEEDS[@]}
+  if [ $temp_count -ne $speed_count ]; then
+    log_curve_error "FAN_CURVE parsing error: temperature and speed arrays have different lengths"
+    return 1
+  fi
+
   # Sort arrays by temperature (bubble sort for simplicity)
-  local n=${#FAN_CURVE_TEMPS[@]}
-  for ((i=0; i<n-1; i++)); do
-    for ((j=0; j<n-i-1; j++)); do
-      if [ ${FAN_CURVE_TEMPS[j]} -gt ${FAN_CURVE_TEMPS[j+1]} ]; then
-        # Swap temperatures
-        local temp=${FAN_CURVE_TEMPS[j]}
-        FAN_CURVE_TEMPS[j]=${FAN_CURVE_TEMPS[j+1]}
-        FAN_CURVE_TEMPS[j+1]=$temp
-        
-        # Swap speeds
-        local speed=${FAN_CURVE_SPEEDS[j]}
-        FAN_CURVE_SPEEDS[j]=${FAN_CURVE_SPEEDS[j+1]}
-        FAN_CURVE_SPEEDS[j+1]=$speed
+  for ((i=0; i<temp_count-1; i++)); do
+    for ((j=0; j<temp_count-i-1; j++)); do
+      # Validate array access
+      if [ $j -ge 0 ] && [ $j -lt $temp_count ] && [ $((j+1)) -lt $temp_count ]; then
+        if [ ${FAN_CURVE_TEMPS[j]} -gt ${FAN_CURVE_TEMPS[j+1]} ]; then
+          # Swap temperatures
+          local temp=${FAN_CURVE_TEMPS[j]}
+          FAN_CURVE_TEMPS[j]=${FAN_CURVE_TEMPS[j+1]}
+          FAN_CURVE_TEMPS[j+1]=$temp
+
+          # Swap speeds
+          local speed=${FAN_CURVE_SPEEDS[j]}
+          FAN_CURVE_SPEEDS[j]=${FAN_CURVE_SPEEDS[j+1]}
+          FAN_CURVE_SPEEDS[j+1]=$speed
+        fi
       fi
     done
   done
+
+  return 0  # Success
 }
 
 # Calculate fan speed from curve based on current temperature
@@ -334,7 +402,21 @@ function parse_fan_curve() {
 function calculate_fan_speed_from_curve() {
   local -r CURRENT_TEMP=$1
   local LAST_APPLIED_TEMP_SPEED=${2:-}
-  
+
+  # Validate input temperature
+  if ! [[ "$CURRENT_TEMP" =~ ^[0-9]+$ ]] || [ "$CURRENT_TEMP" -lt -50 ] || [ "$CURRENT_TEMP" -gt 150 ]; then
+    # Invalid temperature, return safe default
+    echo 20
+    return
+  fi
+
+  # Safety check: ensure curve arrays exist and have data
+  if [ ${#FAN_CURVE_TEMPS[@]} -eq 0 ] || [ ${#FAN_CURVE_SPEEDS[@]} -eq 0 ]; then
+    # Curve data corrupted, return safe default
+    echo 20
+    return
+  fi
+
   local CURVE_SIZE=${#FAN_CURVE_TEMPS[@]}
   
   # If temperature is below lowest point, use lowest speed
@@ -351,20 +433,33 @@ function calculate_fan_speed_from_curve() {
   fi
   
   # Find the two points to interpolate between
-  local LOWER_TEMP=${FAN_CURVE_TEMPS[0]}
-  local LOWER_SPEED=${FAN_CURVE_SPEEDS[0]}
-  local UPPER_TEMP=${FAN_CURVE_TEMPS[$LAST_INDEX]}
-  local UPPER_SPEED=${FAN_CURVE_SPEEDS[$LAST_INDEX]}
-  
+  local LOWER_TEMP=""
+  local LOWER_SPEED=""
+  local UPPER_TEMP=""
+  local UPPER_SPEED=""
+
+  # Find the appropriate segment
   for ((i=0; i<CURVE_SIZE-1; i++)); do
-    if [ $CURRENT_TEMP -ge ${FAN_CURVE_TEMPS[i]} ] && [ $CURRENT_TEMP -le ${FAN_CURVE_TEMPS[i+1]} ]; then
-      LOWER_TEMP=${FAN_CURVE_TEMPS[i]}
-      LOWER_SPEED=${FAN_CURVE_SPEEDS[i]}
-      UPPER_TEMP=${FAN_CURVE_TEMPS[i+1]}
-      UPPER_SPEED=${FAN_CURVE_SPEEDS[i+1]}
-      break
+    # Validate array access
+    if [ $i -ge 0 ] && [ $i -lt $CURVE_SIZE ] && [ $((i+1)) -lt $CURVE_SIZE ]; then
+      local temp_i=${FAN_CURVE_TEMPS[i]}
+      local temp_next=${FAN_CURVE_TEMPS[i+1]}
+
+      if [ $CURRENT_TEMP -ge $temp_i ] && [ $CURRENT_TEMP -le $temp_next ]; then
+        LOWER_TEMP=$temp_i
+        LOWER_SPEED=${FAN_CURVE_SPEEDS[i]}
+        UPPER_TEMP=$temp_next
+        UPPER_SPEED=${FAN_CURVE_SPEEDS[i+1]}
+        break
+      fi
     fi
   done
+
+  # If no segment found (shouldn't happen with proper bounds checking above), use safe defaults
+  if [ -z "$LOWER_TEMP" ] || [ -z "$UPPER_TEMP" ]; then
+    echo ${FAN_CURVE_SPEEDS[0]}
+    return
+  fi
   
   # Calculate interpolated speed
   local TEMP_DIFF=$((UPPER_TEMP - LOWER_TEMP))
@@ -377,23 +472,62 @@ function calculate_fan_speed_from_curve() {
     return
   fi
   
-  # Linear interpolation: speed = lower_speed + (temp_offset / temp_diff) * speed_diff
-  local INTERPOLATED_SPEED=$((LOWER_SPEED + (TEMP_OFFSET * SPEED_DIFF / TEMP_DIFF)))
-  
-  # Apply hysteresis if last applied temp/speed exists
-  if [ -n "$LAST_APPLIED_TEMP_SPEED" ] && [ "$FAN_CURVE_HYSTERESIS" -gt 0 ] && [[ "$LAST_APPLIED_TEMP_SPEED" =~ ^[0-9]+:[0-9]+$ ]]; then
-    local LAST_TEMP=$(echo "$LAST_APPLIED_TEMP_SPEED" | cut -d':' -f1)
-    local LAST_SPEED=$(echo "$LAST_APPLIED_TEMP_SPEED" | cut -d':' -f2)
-    
-    # Calculate temperature difference
-    local TEMP_CHANGE=$((CURRENT_TEMP - LAST_TEMP))
-    
-    # Only apply new speed if temperature has changed by more than hysteresis
-    if [ $TEMP_CHANGE -gt $FAN_CURVE_HYSTERESIS ] || [ $TEMP_CHANGE -lt -$FAN_CURVE_HYSTERESIS ]; then
-      # Temperature changed enough - apply new speed
+  # Safe linear interpolation with bounds checking
+  local INTERPOLATED_SPEED=""
+  if [ $TEMP_DIFF -gt 0 ]; then
+    # Calculate: lower_speed + (temp_offset * speed_diff / temp_diff)
+    # Use intermediate calculation to avoid integer overflow
+    local TEMP_RATIO=$((TEMP_OFFSET * SPEED_DIFF))
+    if [ $SPEED_DIFF -ge 0 ]; then
+      INTERPOLATED_SPEED=$((LOWER_SPEED + (TEMP_RATIO / TEMP_DIFF)))
+    else
+      INTERPOLATED_SPEED=$((LOWER_SPEED + (TEMP_RATIO / TEMP_DIFF)))
+    fi
+  else
+    INTERPOLATED_SPEED=$LOWER_SPEED
+  fi
+
+  # Ensure result is within bounds (0-100)
+  if [ "$INTERPOLATED_SPEED" -lt 0 ] 2>/dev/null; then
+    INTERPOLATED_SPEED=0
+  elif [ "$INTERPOLATED_SPEED" -gt 100 ] 2>/dev/null; then
+    INTERPOLATED_SPEED=100
+  fi
+
+  # Apply hysteresis if configured and we have valid previous data
+  if [ "$FAN_CURVE_HYSTERESIS" -gt 0 ] && [ -n "$LAST_APPLIED_TEMP_SPEED" ]; then
+    # Parse the last applied data safely
+    local LAST_TEMP=""
+    local LAST_SPEED=""
+
+    # Use more robust parsing
+    if [[ "$LAST_APPLIED_TEMP_SPEED" =~ ^([0-9]+):([0-9]+)$ ]]; then
+      LAST_TEMP="${BASH_REMATCH[1]}"
+      LAST_SPEED="${BASH_REMATCH[2]}"
+    else
+      # Invalid format, skip hysteresis
+      echo $INTERPOLATED_SPEED
+      return
+    fi
+
+    # Validate parsed values
+    if ! [[ "$LAST_TEMP" =~ ^[0-9]+$ ]] || ! [[ "$LAST_SPEED" =~ ^[0-9]+$ ]] || \
+       [ "$LAST_TEMP" -lt 0 ] || [ "$LAST_TEMP" -gt 200 ] || \
+       [ "$LAST_SPEED" -lt 0 ] || [ "$LAST_SPEED" -gt 100 ]; then
+      # Invalid data, skip hysteresis
+      echo $INTERPOLATED_SPEED
+      return
+    fi
+
+    # Calculate absolute temperature difference
+    local TEMP_DIFF_FROM_LAST=$((CURRENT_TEMP - LAST_TEMP))
+    # Handle negative numbers properly in bash
+    local ABS_TEMP_DIFF=$((TEMP_DIFF_FROM_LAST < 0 ? -TEMP_DIFF_FROM_LAST : TEMP_DIFF_FROM_LAST))
+
+    # Only apply new speed if temperature has changed by hysteresis amount or more
+    if [ $ABS_TEMP_DIFF -ge $FAN_CURVE_HYSTERESIS ]; then
       echo $INTERPOLATED_SPEED
     else
-      # Temperature hasn't changed enough - keep last speed
       echo $LAST_SPEED
     fi
   else
@@ -412,6 +546,16 @@ function print_error_and_exit() {
   print_error "$ERROR_MESSAGE"
   printf " Exiting.\n" >&2
   exit 1
+}
+
+# Log curve error and return error code (don't exit)
+# Usage: log_curve_error "error message"
+# Returns: 1 (error)
+function log_curve_error() {
+  local -r ERROR_MESSAGE="$1"
+  print_error "$ERROR_MESSAGE"
+  printf " Falling back to static fan control mode.\n" >&2
+  return 1
 }
 
 function print_warning() {

@@ -25,16 +25,59 @@ fi
 
 # Initialize fan control mode (default to static for backward compatibility)
 FAN_CONTROL_MODE=${FAN_CONTROL_MODE:-static}
+FAN_CONTROL_MODE_ORIGINAL="$FAN_CONTROL_MODE"  # Track original setting for logging
 
-# Initialize hysteresis (default to 2°C)
+# Initialize hysteresis (default to 2°C, with safety bounds)
 FAN_CURVE_HYSTERESIS=${FAN_CURVE_HYSTERESIS:-2}
+if [[ "$FAN_CURVE_HYSTERESIS" =~ ^[0-9]+$ ]]; then
+    if [ "$FAN_CURVE_HYSTERESIS" -lt 0 ]; then
+        FAN_CURVE_HYSTERESIS=0
+    fi
+    if [ "$FAN_CURVE_HYSTERESIS" -gt 20 ]; then
+        FAN_CURVE_HYSTERESIS=20  # Cap at 20°C to prevent extreme values
+    fi
+else
+    FAN_CURVE_HYSTERESIS=2  # Reset to default if not numeric
+fi
+
+# Validate CHECK_INTERVAL (default 60s, reasonable safety bounds)
+CHECK_INTERVAL=${CHECK_INTERVAL:-60}
+if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
+    if [ "$CHECK_INTERVAL" -lt 5 ]; then
+        CHECK_INTERVAL=5  # Minimum 5 seconds
+    fi
+    if [ "$CHECK_INTERVAL" -gt 3600 ]; then
+        CHECK_INTERVAL=3600  # Maximum 1 hour
+    fi
+else
+    CHECK_INTERVAL=60  # Reset to default if not numeric
+fi
+
+# Validate CPU_TEMPERATURE_THRESHOLD (default 50°C, reasonable safety bounds)
+CPU_TEMPERATURE_THRESHOLD=${CPU_TEMPERATURE_THRESHOLD:-50}
+if [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]+$ ]]; then
+    if [ "$CPU_TEMPERATURE_THRESHOLD" -lt 30 ]; then
+        CPU_TEMPERATURE_THRESHOLD=30  # Minimum safe threshold
+    fi
+    if [ "$CPU_TEMPERATURE_THRESHOLD" -gt 80 ]; then
+        CPU_TEMPERATURE_THRESHOLD=80  # Maximum reasonable threshold
+    fi
+else
+    CPU_TEMPERATURE_THRESHOLD=50  # Reset to default if not numeric
+fi
 
 # Parse curve if in curve mode
 if [[ "$FAN_CONTROL_MODE" == "curve" ]]; then
   if [ -z "$FAN_CURVE" ]; then
-    print_error_and_exit "FAN_CURVE is required when FAN_CONTROL_MODE=curve"
+    print_error "FAN_CONTROL_MODE=curve but FAN_CURVE is not set. Falling back to static fan control mode."
+    FAN_CONTROL_MODE="static"  # Fallback to static mode
+  else
+    # Try to parse the curve
+    if ! parse_fan_curve "$FAN_CURVE"; then
+      print_error "Failed to parse FAN_CURVE. Falling back to static fan control mode."
+      FAN_CONTROL_MODE="static"  # Fallback to static mode
+    fi
   fi
-  parse_fan_curve "$FAN_CURVE"
 fi
 
 # Variable to track last applied temperature and fan speed for hysteresis (only used in curve mode)
@@ -72,6 +115,9 @@ if [[ "$FAN_CONTROL_MODE" == "curve" ]]; then
 else
   echo "Fan control mode: Static"
   echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+  if [[ "$FAN_CONTROL_MODE_ORIGINAL" == "curve" ]]; then
+    echo "Note: Fell back to static mode due to curve configuration issues"
+  fi
 fi
 echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
 echo "Check interval: ${CHECK_INTERVAL}s"
@@ -104,6 +150,12 @@ readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
 
 # Start monitoring
 while true; do
+  # Validate sleep interval is reasonable before sleeping (safety check)
+  if [ "$CHECK_INTERVAL" -lt 1 ] || [ "$CHECK_INTERVAL" -gt 3600 ]; then
+    print_error "Invalid CHECK_INTERVAL: $CHECK_INTERVAL. Using 60 seconds."
+    CHECK_INTERVAL=60
+  fi
+
   # Sleep for the specified interval before taking another reading
   sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
@@ -112,28 +164,19 @@ while true; do
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
-  # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
-  if CPU1_OVERHEATING; then
+  # Check if CPU 1 or CPU 2 is overheating then apply Dell default dynamic fan control profile if true
+  if CPU1_OVERHEATING || ($IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING); then
     apply_Dell_default_fan_control_profile
 
     if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 
-      # If CPU 2 temperature sensor is present, check if it is overheating too.
-      # Do not apply Dell default dynamic fan control profile as it has already been applied before
-      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
+      # Set appropriate comment based on which CPUs are overheating
+      if CPU1_OVERHEATING && $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
         COMMENT="CPU 1 and CPU 2 temperatures are too high, Dell default dynamic fan control profile applied for safety"
       else
-        COMMENT="CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
+        COMMENT="CPU temperature is too high, Dell default dynamic fan control profile applied for safety"
       fi
-    fi
-  # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
-  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-    apply_Dell_default_fan_control_profile
-
-    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
-      IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
-      COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
   else
     # Apply user fan control profile (static or curve mode)
