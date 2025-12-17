@@ -23,6 +23,24 @@ else
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
+# Initialize fan control mode (default to static for backward compatibility)
+FAN_CONTROL_MODE=${FAN_CONTROL_MODE:-static}
+
+# Initialize hysteresis (default to 2°C)
+FAN_CURVE_HYSTERESIS=${FAN_CURVE_HYSTERESIS:-2}
+
+# Parse curve if in curve mode
+if [[ "$FAN_CONTROL_MODE" == "curve" ]]; then
+  if [ -z "$FAN_CURVE" ]; then
+    print_error_and_exit "FAN_CURVE is required when FAN_CONTROL_MODE=curve"
+  fi
+  parse_fan_curve "$FAN_CURVE"
+fi
+
+# Variable to track last applied temperature and fan speed for hysteresis (only used in curve mode)
+# Format: "temp:speed" (e.g., "45:25")
+LAST_APPLIED_TEMP_SPEED=""
+
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 
 get_Dell_server_model
@@ -47,7 +65,14 @@ echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
-echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+if [[ "$FAN_CONTROL_MODE" == "curve" ]]; then
+  echo "Fan control mode: Curve"
+  echo "Fan curve: $FAN_CURVE"
+  echo "Fan curve hysteresis: ${FAN_CURVE_HYSTERESIS}°C"
+else
+  echo "Fan control mode: Static"
+  echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+fi
 echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
 echo "Check interval: ${CHECK_INTERVAL}s"
 echo ""
@@ -111,12 +136,25 @@ while true; do
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
   else
-    apply_user_fan_control_profile
+    # Apply user fan control profile (static or curve mode)
+    if [[ "$FAN_CONTROL_MODE" == "curve" ]]; then
+      # Curve mode: calculate fan speed from temperature
+      MAX_CPU_TEMP=$(get_max_cpu_temperature)
+      CALCULATED_FAN_SPEED=$(calculate_fan_speed_from_curve $MAX_CPU_TEMP "$LAST_APPLIED_TEMP_SPEED")
+      apply_user_fan_control_profile $CALCULATED_FAN_SPEED
+      LAST_APPLIED_TEMP_SPEED="$MAX_CPU_TEMP:$CALCULATED_FAN_SPEED"
+    else
+      # Static mode: use existing FAN_SPEED (backward compatible)
+      apply_user_fan_control_profile
+      LAST_APPLIED_TEMP_SPEED=""
+    fi
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=false
       COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+      # Reset last applied temp/speed when switching from Dell default to user profile
+      LAST_APPLIED_TEMP_SPEED=""
     fi
   fi
 

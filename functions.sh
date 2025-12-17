@@ -7,11 +7,27 @@ function apply_Dell_default_fan_control_profile() {
 }
 
 # This function applies a user-specified static fan control profile
+# Usage: apply_user_fan_control_profile [speed]
+# If speed parameter is provided, use it; otherwise use DECIMAL_FAN_SPEED (backward compatible)
 function apply_user_fan_control_profile() {
+  local FAN_SPEED_TO_APPLY
+  local FAN_SPEED_HEX
+  
+  if [ $# -eq 1 ]; then
+    # Speed parameter provided (curve mode)
+    FAN_SPEED_TO_APPLY=$1
+    FAN_SPEED_HEX=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED_TO_APPLY")
+    CURRENT_FAN_CONTROL_PROFILE="User curve fan control profile ($FAN_SPEED_TO_APPLY%)"
+  else
+    # No parameter (static mode - backward compatible)
+    FAN_SPEED_TO_APPLY=$DECIMAL_FAN_SPEED
+    FAN_SPEED_HEX=$HEXADECIMAL_FAN_SPEED
+    CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
+  fi
+  
   # Use ipmitool to send the raw command to set fan control to user-specified value
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
-  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $FAN_SPEED_HEX > /dev/null
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
@@ -223,6 +239,168 @@ function print_temperature_array_line() {
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
 function CPU1_OVERHEATING() { [ $CPU1_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
 function CPU2_OVERHEATING() { [ $CPU2_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
+
+# Get maximum CPU temperature (CPU1 and CPU2 if available)
+# Usage: get_max_cpu_temperature
+# Returns: Maximum temperature value
+function get_max_cpu_temperature() {
+  local MAX_TEMP=$CPU1_TEMPERATURE
+  
+  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && [ -n "$CPU2_TEMPERATURE" ] && [ "$CPU2_TEMPERATURE" != "-" ]; then
+    if [ $CPU2_TEMPERATURE -gt $MAX_TEMP ]; then
+      MAX_TEMP=$CPU2_TEMPERATURE
+    fi
+  fi
+  
+  echo $MAX_TEMP
+}
+
+# Parse fan curve from CSV format string
+# Usage: parse_fan_curve "30:5,40:15,50:30"
+# Sets global arrays: FAN_CURVE_TEMPS[] and FAN_CURVE_SPEEDS[]
+function parse_fan_curve() {
+  local -r CURVE_STRING="$1"
+  
+  if [ -z "$CURVE_STRING" ]; then
+    print_error_and_exit "FAN_CURVE is required when FAN_CONTROL_MODE=curve"
+  fi
+  
+  # Clear arrays
+  FAN_CURVE_TEMPS=()
+  FAN_CURVE_SPEEDS=()
+  
+  # Split by comma and process each pair
+  IFS=',' read -ra PAIRS <<< "$CURVE_STRING"
+  
+  if [ ${#PAIRS[@]} -lt 2 ]; then
+    print_error_and_exit "FAN_CURVE must contain at least 2 temperature:speed pairs"
+  fi
+  
+  # Parse each pair
+  for pair in "${PAIRS[@]}"; do
+    # Remove whitespace
+    pair=$(echo "$pair" | tr -d '[:space:]')
+    
+    # Check format (should be temp:speed)
+    if [[ ! "$pair" =~ ^[0-9]+:[0-9]+$ ]]; then
+      print_error_and_exit "Invalid FAN_CURVE format: '$pair'. Expected format: temp:speed (e.g., 30:5)"
+    fi
+    
+    local TEMP=$(echo "$pair" | cut -d':' -f1)
+    local SPEED=$(echo "$pair" | cut -d':' -f2)
+    
+    # Validate ranges
+    if [ $TEMP -lt 0 ] || [ $TEMP -gt 100 ]; then
+      print_error_and_exit "Invalid temperature in FAN_CURVE: $TEMP. Must be between 0 and 100"
+    fi
+    
+    if [ $SPEED -lt 0 ] || [ $SPEED -gt 100 ]; then
+      print_error_and_exit "Invalid speed in FAN_CURVE: $SPEED. Must be between 0 and 100"
+    fi
+    
+    # Check for duplicate temperatures
+    for existing_temp in "${FAN_CURVE_TEMPS[@]}"; do
+      if [ $existing_temp -eq $TEMP ]; then
+        print_error_and_exit "Duplicate temperature in FAN_CURVE: $TEMP"
+      fi
+    done
+    
+    FAN_CURVE_TEMPS+=($TEMP)
+    FAN_CURVE_SPEEDS+=($SPEED)
+  done
+  
+  # Sort arrays by temperature (bubble sort for simplicity)
+  local n=${#FAN_CURVE_TEMPS[@]}
+  for ((i=0; i<n-1; i++)); do
+    for ((j=0; j<n-i-1; j++)); do
+      if [ ${FAN_CURVE_TEMPS[j]} -gt ${FAN_CURVE_TEMPS[j+1]} ]; then
+        # Swap temperatures
+        local temp=${FAN_CURVE_TEMPS[j]}
+        FAN_CURVE_TEMPS[j]=${FAN_CURVE_TEMPS[j+1]}
+        FAN_CURVE_TEMPS[j+1]=$temp
+        
+        # Swap speeds
+        local speed=${FAN_CURVE_SPEEDS[j]}
+        FAN_CURVE_SPEEDS[j]=${FAN_CURVE_SPEEDS[j+1]}
+        FAN_CURVE_SPEEDS[j+1]=$speed
+      fi
+    done
+  done
+}
+
+# Calculate fan speed from curve based on current temperature
+# Usage: calculate_fan_speed_from_curve current_temp [last_applied_temp:last_applied_speed]
+# Returns: Calculated fan speed (0-100)
+function calculate_fan_speed_from_curve() {
+  local -r CURRENT_TEMP=$1
+  local LAST_APPLIED_TEMP_SPEED=${2:-}
+  
+  local CURVE_SIZE=${#FAN_CURVE_TEMPS[@]}
+  
+  # If temperature is below lowest point, use lowest speed
+  if [ $CURRENT_TEMP -le ${FAN_CURVE_TEMPS[0]} ]; then
+    echo ${FAN_CURVE_SPEEDS[0]}
+    return
+  fi
+  
+  # If temperature is above highest point, use highest speed
+  local LAST_INDEX=$((CURVE_SIZE - 1))
+  if [ $CURRENT_TEMP -ge ${FAN_CURVE_TEMPS[$LAST_INDEX]} ]; then
+    echo ${FAN_CURVE_SPEEDS[$LAST_INDEX]}
+    return
+  fi
+  
+  # Find the two points to interpolate between
+  local LOWER_TEMP=${FAN_CURVE_TEMPS[0]}
+  local LOWER_SPEED=${FAN_CURVE_SPEEDS[0]}
+  local UPPER_TEMP=${FAN_CURVE_TEMPS[$LAST_INDEX]}
+  local UPPER_SPEED=${FAN_CURVE_SPEEDS[$LAST_INDEX]}
+  
+  for ((i=0; i<CURVE_SIZE-1; i++)); do
+    if [ $CURRENT_TEMP -ge ${FAN_CURVE_TEMPS[i]} ] && [ $CURRENT_TEMP -le ${FAN_CURVE_TEMPS[i+1]} ]; then
+      LOWER_TEMP=${FAN_CURVE_TEMPS[i]}
+      LOWER_SPEED=${FAN_CURVE_SPEEDS[i]}
+      UPPER_TEMP=${FAN_CURVE_TEMPS[i+1]}
+      UPPER_SPEED=${FAN_CURVE_SPEEDS[i+1]}
+      break
+    fi
+  done
+  
+  # Calculate interpolated speed
+  local TEMP_DIFF=$((UPPER_TEMP - LOWER_TEMP))
+  local SPEED_DIFF=$((UPPER_SPEED - LOWER_SPEED))
+  local TEMP_OFFSET=$((CURRENT_TEMP - LOWER_TEMP))
+  
+  # Avoid division by zero
+  if [ $TEMP_DIFF -eq 0 ]; then
+    echo $LOWER_SPEED
+    return
+  fi
+  
+  # Linear interpolation: speed = lower_speed + (temp_offset / temp_diff) * speed_diff
+  local INTERPOLATED_SPEED=$((LOWER_SPEED + (TEMP_OFFSET * SPEED_DIFF / TEMP_DIFF)))
+  
+  # Apply hysteresis if last applied temp/speed exists
+  if [ -n "$LAST_APPLIED_TEMP_SPEED" ] && [ "$FAN_CURVE_HYSTERESIS" -gt 0 ] && [[ "$LAST_APPLIED_TEMP_SPEED" =~ ^[0-9]+:[0-9]+$ ]]; then
+    local LAST_TEMP=$(echo "$LAST_APPLIED_TEMP_SPEED" | cut -d':' -f1)
+    local LAST_SPEED=$(echo "$LAST_APPLIED_TEMP_SPEED" | cut -d':' -f2)
+    
+    # Calculate temperature difference
+    local TEMP_CHANGE=$((CURRENT_TEMP - LAST_TEMP))
+    
+    # Only apply new speed if temperature has changed by more than hysteresis
+    if [ $TEMP_CHANGE -gt $FAN_CURVE_HYSTERESIS ] || [ $TEMP_CHANGE -lt -$FAN_CURVE_HYSTERESIS ]; then
+      # Temperature changed enough - apply new speed
+      echo $INTERPOLATED_SPEED
+    else
+      # Temperature hasn't changed enough - keep last speed
+      echo $LAST_SPEED
+    fi
+  else
+    # No hysteresis or first run - apply calculated speed
+    echo $INTERPOLATED_SPEED
+  fi
+}
 
 function print_error() {
   local -r ERROR_MESSAGE="$1"
