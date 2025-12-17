@@ -124,6 +124,8 @@ docker run -d \
 
 **Note**: The script is fully backward compatible. Existing deployments using only `FAN_SPEED` will continue to work unchanged. Curve mode is optional and only activated when `FAN_CONTROL_MODE=curve` is set.
 
+**Tip**: Use the included `fan_curve_editor.html` file to visually create and test your fan curves before deploying!
+
 `docker-compose.yml` examples:
 
 1. to use with local iDRAC:
