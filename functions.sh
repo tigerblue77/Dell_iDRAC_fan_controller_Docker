@@ -14,6 +14,22 @@ function apply_user_fan_control_profile() {
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
+# This function applies a user-specified static fan control profile with a custom fan speed
+# Usage : apply_user_fan_control_profile_with_speed $DECIMAL_FAN_SPEED $HEXADECIMAL_FAN_SPEED
+function apply_user_fan_control_profile_with_speed() {
+  if (( $# != 2 )); then
+    print_error "Illegal number of parameters.\nUsage: apply_user_fan_control_profile_with_speed \$DECIMAL_FAN_SPEED \$HEXADECIMAL_FAN_SPEED"
+    return 1
+  fi
+  local -r DECIMAL_FAN_SPEED="$1"
+  local -r HEXADECIMAL_FAN_SPEED="$2"
+
+  # Use ipmitool to send the raw command to set fan control to user-specified value
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
+  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile (${DECIMAL_FAN_SPEED}%)"
+}
+
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
 # Returns : hexadecimal value of DECIMAL_NUMBER

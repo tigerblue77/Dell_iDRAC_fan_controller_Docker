@@ -150,6 +150,38 @@ services:
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 ```
 
+Optional: 3-stage CPU temperature fan curve:
+
+This mode applies 3 fan speed stages based on the highest CPU temperature detected:
+- Hot: CPU temperature > `CPU_TEMPERATURE_THRESHOLD` => Dell default dynamic fan control profile (auto)
+- Warm: CPU temperature > `CPU_TEMPERATURE_FAN_CURVE_MID_THRESHOLD` => `CPU_TEMPERATURE_FAN_CURVE_MID_FAN_SPEED`
+- Cool: CPU temperature < `CPU_TEMPERATURE_FAN_CURVE_LOW_THRESHOLD` => `CPU_TEMPERATURE_FAN_CURVE_LOW_FAN_SPEED`
+
+Between the low and mid thresholds, the last applied curve stage is kept to avoid oscillations.
+
+Example (LAN iDRAC):
+
+```bash
+docker run -d \
+  --name Dell_iDRAC_fan_controller \
+  --restart=unless-stopped \
+  -e IDRAC_HOST=<iDRAC IP address> \
+  -e IDRAC_USERNAME=<iDRAC username> \
+  -e IDRAC_PASSWORD=<iDRAC password> \
+  -e ENABLE_CPU_TEMPERATURE_FAN_CURVE=true \
+  -e CPU_TEMPERATURE_THRESHOLD=80 \
+  -e CPU_TEMPERATURE_FAN_CURVE_MID_THRESHOLD=75 \
+  -e CPU_TEMPERATURE_FAN_CURVE_MID_FAN_SPEED=20 \
+  -e CPU_TEMPERATURE_FAN_CURVE_LOW_THRESHOLD=60 \
+  -e CPU_TEMPERATURE_FAN_CURVE_LOW_FAN_SPEED=12 \
+  -e CHECK_INTERVAL=60 \
+  -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false \
+  -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false \
+  tigerblue77/dell_idrac_fan_controller:latest
+```
+
+Note: when the fan curve is enabled, `FAN_SPEED` is ignored.
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- PARAMETERS -->
@@ -162,6 +194,11 @@ All parameters are optional as they have default values (including default iDRAC
 - `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "calvin".
 - `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%).
 - `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 50(°C).
+- `ENABLE_CPU_TEMPERATURE_FAN_CURVE` parameter is a boolean that enables a 3-stage CPU temperature fan curve. **Default** value is false. When enabled, `FAN_SPEED` is ignored and the fan speed is adjusted using the curve parameters below.
+- `CPU_TEMPERATURE_FAN_CURVE_LOW_THRESHOLD` parameter is the CPU temperature (°C) below which stage 1 fan speed is applied. **Default** value is 60(°C).
+- `CPU_TEMPERATURE_FAN_CURVE_LOW_FAN_SPEED` parameter is stage 1 fan speed (decimal from 0 to 100% or hexadecimal from 0x00 to 0x64). **Default** value is 12(%).
+- `CPU_TEMPERATURE_FAN_CURVE_MID_THRESHOLD` parameter is the CPU temperature (°C) above which stage 2 fan speed is applied. **Default** value is 75(°C).
+- `CPU_TEMPERATURE_FAN_CURVE_MID_FAN_SPEED` parameter is stage 2 fan speed (decimal from 0 to 100% or hexadecimal from 0x00 to 0x64). **Default** value is 20(%).
 - `CHECK_INTERVAL` parameter is the time (in seconds) between each temperature check and potential profile change. **Default** value is 60(s).
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
@@ -204,6 +241,11 @@ export IDRAC_USERNAME=<iDRAC username>
 export IDRAC_PASSWORD=<iDRAC password>
 export FAN_SPEED=<decimal or hexadecimal fan speed>
 export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+export ENABLE_CPU_TEMPERATURE_FAN_CURVE=<true or false>
+export CPU_TEMPERATURE_FAN_CURVE_LOW_THRESHOLD=<decimal temperature threshold>
+export CPU_TEMPERATURE_FAN_CURVE_LOW_FAN_SPEED=<decimal or hexadecimal fan speed>
+export CPU_TEMPERATURE_FAN_CURVE_MID_THRESHOLD=<decimal temperature threshold>
+export CPU_TEMPERATURE_FAN_CURVE_MID_FAN_SPEED=<decimal or hexadecimal fan speed>
 export CHECK_INTERVAL=<seconds between each check>
 export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
