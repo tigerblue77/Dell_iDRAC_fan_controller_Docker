@@ -21,13 +21,13 @@ function apply_user_fan_control_profile_with_speed() {
     print_error "Illegal number of parameters.\nUsage: apply_user_fan_control_profile_with_speed \$DECIMAL_FAN_SPEED \$HEXADECIMAL_FAN_SPEED"
     return 1
   fi
-  local -r DECIMAL_FAN_SPEED="$1"
-  local -r HEXADECIMAL_FAN_SPEED="$2"
+  local -r CUSTOM_DECIMAL_FAN_SPEED="$1"
+  local -r CUSTOM_HEXADECIMAL_FAN_SPEED="$2"
 
   # Use ipmitool to send the raw command to set fan control to user-specified value
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
-  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile (${DECIMAL_FAN_SPEED}%)"
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $CUSTOM_HEXADECIMAL_FAN_SPEED > /dev/null
+  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile (${CUSTOM_DECIMAL_FAN_SPEED}%)"
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
@@ -90,15 +90,15 @@ function retrieve_temperatures() {
   if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
     CPU2_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU2_TEMPERATURE_INDEX;}")
   else
-    CPU2_TEMPERATURE="-"
+    CPU2_TEMPERATURE=""
   fi
 
   # Initialize CPUS_TEMPERATURES
   CPUS_TEMPERATURES="$CPU1_TEMPERATURE"
   NUMBER_OF_DETECTED_CPUS=1
 
-  # If CPU2 is present, parse its temperature data and add it to CPUS_TEMPERATURES
-  if [ -n "$CPU2_TEMPERATURE" ]; then
+  # If CPU2 sensor is present and returning data, add it to CPUS_TEMPERATURES
+  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && [ -n "$CPU2_TEMPERATURE" ]; then
     CPUS_TEMPERATURES+=";$CPU2_TEMPERATURE"
     ((NUMBER_OF_DETECTED_CPUS++))
   fi
