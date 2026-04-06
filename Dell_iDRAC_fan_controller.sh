@@ -59,7 +59,13 @@ IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
+
+# Start timer in background
+sleep "$CHECK_INTERVAL" &
+SLEEP_PROCESS_PID=$!
+
 retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
@@ -79,12 +85,6 @@ readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
 
 # Start monitoring
 while true; do
-  # Sleep for the specified interval before taking another reading
-  sleep "$CHECK_INTERVAL" &
-  SLEEP_PROCESS_PID=$!
-
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
-
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
@@ -140,5 +140,12 @@ while true; do
   fi
   print_temperature_array_line "$INLET_TEMPERATURE" "$CPUS_TEMPERATURES" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
   ((TABLE_HEADER_PRINT_COUNTER++))
+
   wait $SLEEP_PROCESS_PID
+
+  # Start timer in background for next cycle
+  sleep "$CHECK_INTERVAL" &
+  SLEEP_PROCESS_PID=$!
+
+  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 done
