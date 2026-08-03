@@ -1,13 +1,23 @@
 # Define global functions
 # This function applies Dell's default dynamic fan control profile
+# In monitoring only mode, the profile is only logged, not actually applied
 function apply_Dell_default_fan_control_profile() {
+  if $MONITORING_ONLY_MODE; then
+    CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (monitoring only, not applied)"
+    return
+  fi
   # Use ipmitool to send the raw command to set fan control to Dell default
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
 # This function applies a user-specified static fan control profile
+# In monitoring only mode, the profile is only logged, not actually applied
 function apply_user_fan_control_profile() {
+  if $MONITORING_ONLY_MODE; then
+    CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (monitoring only, not applied)"
+    return
+  fi
   # Use ipmitool to send the raw command to set fan control to user-specified value
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
@@ -99,13 +109,21 @@ function retrieve_temperatures() {
 }
 
 # /!\ Use this function only for Gen 13 and older generation servers /!\
+# In monitoring only mode, this is a no-op
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
+  if $MONITORING_ONLY_MODE; then
+    return
+  fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
 }
 
 # /!\ Use this function only for Gen 13 and older generation servers /!\
+# In monitoring only mode, this is a no-op
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
+  if $MONITORING_ONLY_MODE; then
+    return
+  fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null
 }
@@ -129,6 +147,10 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 
 # Prepare traps in case of container exit
 function graceful_exit() {
+  if $MONITORING_ONLY_MODE; then
+    print_warning_and_exit "Container stopped (monitoring only mode, no fan control profile was ever applied)"
+  fi
+
   apply_Dell_default_fan_control_profile
 
   # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at startup
