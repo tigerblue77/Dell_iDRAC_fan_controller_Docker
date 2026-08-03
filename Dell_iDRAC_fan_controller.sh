@@ -50,6 +50,11 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
 echo "Check interval: ${CHECK_INTERVAL}s"
+if $MONITORING_ONLY_MODE; then
+  echo "Monitoring only mode: Enabled (no fan control profile will be applied, temperatures will only be logged)"
+else
+  echo "Monitoring only mode: Disabled"
+fi
 echo ""
 
 TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
@@ -130,6 +135,10 @@ while true; do
     else
       enable_third_party_PCIe_card_Dell_default_cooling_response
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
+    fi
+
+    if $MONITORING_ONLY_MODE; then
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
     fi
   fi
 
