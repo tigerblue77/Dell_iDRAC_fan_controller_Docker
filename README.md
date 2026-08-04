@@ -86,6 +86,9 @@ docker run -d \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
+  -e ENABLE_LINE_INTERPOLATION=<true or false> \
+  -e HIGH_FAN_SPEED=<decimal fan speed> \
+  -e CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature> \
   --device=/dev/ipmi0:/dev/ipmi0:rw \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
@@ -105,6 +108,9 @@ docker run -d \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
+  -e ENABLE_LINE_INTERPOLATION=<true or false> \
+  -e HIGH_FAN_SPEED=<decimal fan speed> \
+  -e CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature> \
   tigerblue77/dell_idrac_fan_controller:latest
 ```
 
@@ -128,6 +134,9 @@ services:
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
+      - ENABLE_LINE_INTERPOLATION=<true or false>
+      - HIGH_FAN_SPEED=<decimal fan speed>
+      - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature>
     devices:
       - /dev/ipmi0:/dev/ipmi0:rw
 ```
@@ -152,6 +161,9 @@ services:
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
+      - ENABLE_LINE_INTERPOLATION=<true or false>
+      - HIGH_FAN_SPEED=<decimal fan speed>
+      - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature>
 ```
 
 <p align="right">(<a href="#top">back to top</a>)</p>
@@ -170,6 +182,9 @@ All parameters are optional as they have default values (including default iDRAC
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
 - `MONITORING_ONLY_MODE` parameter is a boolean that allows to run the container in a read-only, monitoring-only mode: temperatures are still read and logged at each `CHECK_INTERVAL`, but no fan control profile (neither the user-defined one nor Dell's default) and no third-party PCIe card cooling response change is ever sent to the server. Useful to observe temperatures and validate your `FAN_SPEED`/`CPU_TEMPERATURE_THRESHOLD` values before letting the container actually take control of the fans. **Default** value is false.
+- `ENABLE_LINE_INTERPOLATION` parameter is a boolean that allows to progressively ramp the fan speed up between `FAN_SPEED` and `HIGH_FAN_SPEED` as the highest detected CPU temperature rises from `CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION` up to `CPU_TEMPERATURE_THRESHOLD`, instead of jumping straight from `FAN_SPEED` to Dell's default (BIOS) fan control profile. `CPU_TEMPERATURE_THRESHOLD` still applies as the final safety fallback to Dell's default profile. **Default** value is false.
+- `HIGH_FAN_SPEED` parameter is the fan speed (%) reached right before `CPU_TEMPERATURE_THRESHOLD` when `ENABLE_LINE_INTERPOLATION` is enabled. Must be higher than `FAN_SPEED`. **Default** value is 50(%).
+- `CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION` parameter is the CPU temperature (°C) at which the fan speed starts ramping up from `FAN_SPEED` when `ENABLE_LINE_INTERPOLATION` is enabled. Below this temperature, `FAN_SPEED` is used unchanged. Must be lower than `CPU_TEMPERATURE_THRESHOLD`. **Default** value is 30(°C).
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
@@ -217,6 +232,9 @@ export CHECK_INTERVAL=<seconds between each check>
 export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 export MONITORING_ONLY_MODE=<true or false>
+export ENABLE_LINE_INTERPOLATION=<true or false>
+export HIGH_FAN_SPEED=<decimal fan speed>
+export CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature>
 
 chmod +x Dell_iDRAC_fan_controller.sh
 ./Dell_iDRAC_fan_controller.sh

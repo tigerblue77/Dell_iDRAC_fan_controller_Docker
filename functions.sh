@@ -24,6 +24,48 @@ function apply_user_fan_control_profile() {
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
+# Computes the fan speed (%) to apply via linear interpolation between FAN_SPEED and HIGH_FAN_SPEED,
+# based on where the given CPU temperature falls between CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION and
+# CPU_TEMPERATURE_THRESHOLD. At or below the start point, returns FAN_SPEED unchanged.
+# Usage : compute_interpolated_fan_speed $CURRENT_CPU_TEMPERATURE
+function compute_interpolated_fan_speed() {
+  local -r CURRENT_CPU_TEMPERATURE="$1"
+
+  # Fail safe to the base fan speed if the reading isn't a plain non-negative integer
+  if [[ ! "$CURRENT_CPU_TEMPERATURE" =~ ^[0-9]+$ ]]; then
+    echo "$DECIMAL_FAN_SPEED"
+    return
+  fi
+
+  if [ "$CURRENT_CPU_TEMPERATURE" -le "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" ]; then
+    echo "$DECIMAL_FAN_SPEED"
+    return
+  fi
+
+  local -r TEMPERATURE_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))
+  local -r SPEED_RANGE=$((HIGH_FAN_SPEED - DECIMAL_FAN_SPEED))
+  local -r TEMPERATURE_OFFSET=$((CURRENT_CPU_TEMPERATURE - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))
+
+  echo $((DECIMAL_FAN_SPEED + SPEED_RANGE * TEMPERATURE_OFFSET / TEMPERATURE_RANGE))
+}
+
+# This function applies a fan control profile at the given speed, computed by line interpolation
+# In monitoring only mode, the profile is only logged, not actually applied
+# Usage : apply_interpolated_fan_control_profile $TARGET_FAN_SPEED_PERCENT
+function apply_interpolated_fan_control_profile() {
+  local -r TARGET_FAN_SPEED_PERCENT="$1"
+  local -r TARGET_FAN_SPEED_HEX=$(convert_decimal_value_to_hexadecimal "$TARGET_FAN_SPEED_PERCENT")
+
+  if $MONITORING_ONLY_MODE; then
+    CURRENT_FAN_CONTROL_PROFILE="User interpolated fan control profile (${TARGET_FAN_SPEED_PERCENT}%) (monitoring only, not applied)"
+    return
+  fi
+  # Use ipmitool to send the raw command to set fan control to the interpolated value
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $TARGET_FAN_SPEED_HEX > /dev/null
+  CURRENT_FAN_CONTROL_PROFILE="User interpolated fan control profile (${TARGET_FAN_SPEED_PERCENT}%)"
+}
+
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
 # Usage : convert_decimal_value_to_hexadecimal $DECIMAL_NUMBER
 # Returns : hexadecimal value of DECIMAL_NUMBER
