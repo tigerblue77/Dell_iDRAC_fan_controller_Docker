@@ -111,6 +111,14 @@ function retrieve_temperatures() {
   fi
 }
 
+# Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
+# Only meaningful in network mode: in local mode the container runs on the target server itself,
+# so it cannot be observed powered off while the container is running
+function is_server_powered_on() {
+  local -r POWER_STATUS=$(ipmitool -I $IDRAC_LOGIN_STRING chassis power status 2>/dev/null)
+  [[ "$POWER_STATUS" == *"is on"* ]]
+}
+
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 # In monitoring only mode, this is a no-op
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
