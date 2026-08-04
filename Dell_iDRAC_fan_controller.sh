@@ -42,6 +42,14 @@ else
   readonly CPU2_TEMPERATURE_INDEX=2
 fi
 
+# In local mode, the container runs on the target server itself, so it can never observe it powered off
+# while the container is running. This check is therefore only meaningful in network mode.
+if [[ "$IDRAC_HOST" == "local" ]]; then
+  readonly NETWORK_MODE=false
+else
+  readonly NETWORK_MODE=true
+fi
+
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
@@ -90,6 +98,22 @@ readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
 
 # Start monitoring
 while true; do
+  # In network mode, if the target server is powered off, skip this cycle entirely: don't read
+  # temperatures (they would be meaningless) and don't apply any fan control profile
+  if $NETWORK_MODE && ! is_server_powered_on; then
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+
+    wait $SLEEP_PROCESS_PID
+
+    # Start timer in background for next cycle
+    sleep "$CHECK_INTERVAL" &
+    SLEEP_PROCESS_PID=$!
+
+    # Keep retrieving temperatures so data is fresh and available as soon as the server powers back on
+    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+    continue
+  fi
+
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
