@@ -78,8 +78,11 @@ function retrieve_temperatures() {
 
   local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
 
-  # Parse CPU data
-  local -r CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
+  # Parse CPU data. Each sdr line looks like "Temp | 09h | ok | 3.1 | 45 degrees C" : cut down to the
+  # 5th pipe-delimited column (the reading itself) before extracting digits, otherwise a sensor whose hex
+  # ID happens to be two digits (e.g. "09h") would leak an extra bogus reading into CPU_DATA and throw off
+  # the positional indexing below (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/91)
+  local -r CPU_DATA=$(echo "$DATA" | grep "3\." | cut -d'|' -f5 | grep -Po '\d{2}')
   CPU1_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU1_TEMPERATURE_INDEX;}")
   if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
     CPU2_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU2_TEMPERATURE_INDEX;}")
@@ -98,11 +101,11 @@ function retrieve_temperatures() {
   fi
 
   # Parse inlet temperature data
-  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | grep -Po '\d{2}' | tail -1)
+  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
 
   # If exhaust temperature sensor is present, parse its temperature data
   if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | grep -Po '\d{2}' | tail -1)
+    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
   else
     EXHAUST_TEMPERATURE="-"
   fi
@@ -233,18 +236,40 @@ function print_temperature_array_line() {
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
 
-  printf "%19s  %3d°C " "$(date +"%d-%m-%Y %T")" $LOCAL_INLET_TEMPERATURE
+  printf "%19s  %s°C " "$(date +"%d-%m-%Y %T")" "$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")"
   # Itération sur les températures dans le tableau
   for temperature in "${CPUs_temperatures_array[@]}"; do
-    printf " %3d°C " $temperature
+    printf " %s°C " "$(format_temperature_for_display "$temperature")"
   done
 
   printf " %5s°C  %40s  %51s  %s\n" "$LOCAL_EXHAUST_TEMPERATURE" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
-# Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
-function CPU1_OVERHEATING() { [ $CPU1_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
-function CPU2_OVERHEATING() { [ $CPU2_TEMPERATURE -gt "$CPU_TEMPERATURE_THRESHOLD" ]; }
+# Formats a temperature reading as a right-aligned, 3-character-wide decimal number for display.
+# Falls back to "  -" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
+# or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09")
+function format_temperature_for_display() {
+  local -r VALUE="$1"
+  if [[ "$VALUE" =~ ^[0-9]+$ ]]; then
+    printf '%3d' "$((10#$VALUE))"
+  else
+    printf '%3s' "-"
+  fi
+}
+
+# Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
+# If a reading isn't a valid number (missing sensor, transient IPMI parsing glitch, etc.), fail safe and
+# report overheating so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt"
+# throws "unary operator expected" on empty/non-numeric input) or silently running the low user fan speed
+# on unverified data
+function CPU1_OVERHEATING() {
+  [[ "$CPU1_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
+  [ "$((10#$CPU1_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+}
+function CPU2_OVERHEATING() {
+  [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
+  [ "$((10#$CPU2_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+}
 
 function print_error() {
   local -r ERROR_MESSAGE="$1"
