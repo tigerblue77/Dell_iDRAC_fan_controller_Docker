@@ -7,7 +7,9 @@ function apply_Dell_default_fan_control_profile() {
     return
   fi
   # Use ipmitool to send the raw command to set fan control to Dell default
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null
+  # stderr is discarded too: some iDRAC/BMC firmwares emit harmless protocol warnings (e.g. "Received an
+  # Unexpected message...") on every raw command even though it succeeds, which would otherwise flood the logs
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null 2>&1
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
@@ -19,8 +21,10 @@ function apply_user_fan_control_profile() {
     return
   fi
   # Use ipmitool to send the raw command to set fan control to user-specified value
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
+  # stderr is discarded too: some iDRAC/BMC firmwares emit harmless protocol warnings on every raw command
+  # even though it succeeds, which would otherwise flood the logs
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null 2>&1
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null 2>&1
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
@@ -76,7 +80,9 @@ function retrieve_temperatures() {
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
   local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
 
-  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
+  # stderr is discarded: some iDRAC/BMC firmwares emit harmless protocol warnings (e.g. "Received an
+  # Unexpected message...") on every call even though the reading succeeds, which would otherwise flood the logs
+  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees)
 
   # Parse CPU data
   local -r CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
@@ -115,7 +121,9 @@ function enable_third_party_PCIe_card_Dell_default_cooling_response() {
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
+  # stderr is discarded too: this OEM command isn't supported on every iDRAC/BMC generation, which would
+  # otherwise flood the logs with "Unable to send RAW command ... Invalid command" every cycle
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null 2>&1
 }
 
 # /!\ Use this function only for Gen 13 and older generation servers /!\
@@ -125,7 +133,9 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null
+  # stderr is discarded too: this OEM command isn't supported on every iDRAC/BMC generation, which would
+  # otherwise flood the logs with "Unable to send RAW command ... Invalid command" every cycle
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null 2>&1
 }
 
 # Returns :
