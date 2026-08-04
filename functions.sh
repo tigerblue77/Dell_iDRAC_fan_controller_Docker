@@ -62,7 +62,10 @@ function set_iDRAC_login_string() {
   else
     echo "iDRAC/IPMI username: $IDRAC_USERNAME"
     #echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
-    IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
+    # Pass the password via the IPMI_PASSWORD environment variable (-E) instead of the command line (-P)
+    # so it never appears in the container's process list (e.g. `ps aux`, /proc/<pid>/cmdline) or logs
+    export IPMI_PASSWORD="$IDRAC_PASSWORD"
+    IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -E"
   fi
 }
 
