@@ -108,9 +108,6 @@ while true; do
     # Start timer in background for next cycle
     sleep "$CHECK_INTERVAL" &
     SLEEP_PROCESS_PID=$!
-
-    # Keep retrieving temperatures so data is fresh and available as soon as the server powers back on
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
     continue
   fi
 
