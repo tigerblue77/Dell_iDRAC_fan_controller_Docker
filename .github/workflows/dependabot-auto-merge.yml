@@ -10,6 +10,7 @@ jobs:
   auto-merge:
     name: Auto-merge minor and patch GitHub Actions updates
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     steps:
       - name: Fetch Dependabot metadata
@@ -18,13 +19,18 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Major updates are excluded: their PRs wait for manual review
+      # Major updates are excluded: their PRs wait for manual review.
+      # 'gh pr merge --auto' requires "Allow auto-merge" in the repo
+      # settings plus branch protection with required checks; when either
+      # is missing it exits non-zero, so fall back to an immediate direct
+      # merge (if branch protection exists, it still blocks any direct
+      # merge that would skip required checks).
       - name: Enable auto-merge
         if: >-
           steps.metadata.outputs.package-ecosystem == 'github_actions' &&
           (steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
            steps.metadata.outputs.update-type == 'version-update:semver-patch')
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: gh pr merge --auto --squash "$PR_URL" || gh pr merge --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
