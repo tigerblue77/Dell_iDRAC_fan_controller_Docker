@@ -90,12 +90,18 @@ function retrieve_temperatures() {
     CPU2_TEMPERATURE="-"
   fi
 
-  # Initialize CPUS_TEMPERATURES
-  CPUS_TEMPERATURES="$CPU1_TEMPERATURE"
+  # Initialize CPUS_TEMPERATURES. An unreadable CPU 1 reading falls back to the "-" placeholder so that it
+  # still takes up its column when the line is printed : CPUS_TEMPERATURES is split on whitespace to build
+  # the display array, so an empty value would be dropped and shift every following column to the left.
+  # CPU1_TEMPERATURE itself is left untouched, CPU1_OVERHEATING() must still see the invalid reading
+  CPUS_TEMPERATURES="${CPU1_TEMPERATURE:--}"
   NUMBER_OF_DETECTED_CPUS=1
 
-  # If CPU2 is present, parse its temperature data and add it to CPUS_TEMPERATURES
-  if [ -n "$CPU2_TEMPERATURE" ]; then
+  # If CPU2 is present, parse its temperature data and add it to CPUS_TEMPERATURES.
+  # "-" is the placeholder set above when the sensor is known to be absent, so it must not be counted as a
+  # detected CPU: otherwise servers without a CPU2 sensor get an extra column that the header, built once
+  # from the first reading (when the placeholder isn't set yet), doesn't account for
+  if [ -n "$CPU2_TEMPERATURE" ] && [ "$CPU2_TEMPERATURE" != "-" ]; then
     CPUS_TEMPERATURES+=";$CPU2_TEMPERATURE"
     ((NUMBER_OF_DETECTED_CPUS++))
   fi
