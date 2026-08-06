@@ -215,7 +215,9 @@ All parameters are optional as they have default values (including default iDRAC
 
 ### Not all of your CPUs appear in the temperatures table
 
-At startup, the container logs how many CPU temperature sensors it found (`X CPU temperature sensor(s) detected.`) and prints one column per detected CPU, up to Dell's 4-socket maximum. If that number is lower than the number of CPUs actually installed, your iDRAC isn't exposing the missing sockets as IPMI processor entities. Check what it does expose with :
+At startup, the container logs the CPU temperature sensors it found, with the IPMI entities they were read from (`4 CPU temperature sensors detected (entities 3.1 3.2 3.3 3.4).`), and prints one column per detected CPU. There is no built-in limit on that number, so 4-socket servers (R930, R830, R920, R940...) get all of their CPUs monitored.
+
+If fewer sensors are listed than the number of CPUs installed, your iDRAC isn't reporting the missing sockets as readable IPMI processor entities. Check what it does report with :
 ```bash
 ipmitool -I lanplus \
   -H <iDRAC IP address> \
@@ -223,7 +225,9 @@ ipmitool -I lanplus \
   -P <iDRAC password> \
   sdr type temperature
 ```
-Each CPU should appear as an entity `3.1`, `3.2`, ... in the 4th column. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model and that output if some are missing.
+CPUs are the lines whose 4th column is an entity `3.<something>` and whose reading ends in `degrees C`. They need not be contiguous nor in order: a socket that is empty or unreadable is usually still listed, but as `Disabled` or `No Reading` instead of a temperature, and is therefore not monitored. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model and that output if a CPU that does report a temperature is missing from the table.
+
+Note that on chassis products (VRTX, FX2, M1000e, MX7000) each server node has its own iDRAC with its own address: point the container at a node's iDRAC, not at the chassis CMC, which doesn't answer IPMI at all.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 

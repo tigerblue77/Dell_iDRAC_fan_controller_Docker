@@ -123,29 +123,75 @@ function retrieve_sdr_temperature_data() {
 
 # Detect the CPU temperature sensors the server exposes, once, at startup
 # Usage : detect_CPU_temperature_sensors "$SDR_DATA"
-# Returns : populates the DETECTED_CPU_ENTITY_IDS global array, in CPU order
+# Returns : populates the DETECTED_CPU_ENTITY_IDS and DETECTED_CPU_LABELS global arrays, index-aligned,
+#           in socket order
 #
-# Entity 3 is the processor, so the sockets are exposed as 3.1, 3.2, ... Probing stops at the first
-# missing entity: Dell populates sockets in order, so a gap means there is no further CPU. This also
-# keeps the "CPU N" column labels aligned with the entity sub-IDs they are read from
+# Entity 3 is "Processor" (IPMI v2.0 table 43-13), so the sockets are exposed as 3.1, 3.2, ... Every
+# processor entity actually carrying a reading is enumerated, rather than probing 3.1, 3.2, ... in order
+# and stopping at the first gap, because none of what that probing assumed holds :
+# - IPMI only requires entity instances to be unique, not contiguous nor 1-based (section 39.1)
+# - iDRAC returns them out of order (an R930 lists 3.4 before 3.1, see issue #91)
+# - Dell keeps the SDR row of an unreadable or depopulated socket and reports it "Disabled" instead of
+#   omitting it, so the set of *readable* CPUs is legitimately sparse
+# No upper bound is applied either : the entity instance is a 7-bit field, and a CPU dropped for being
+# past an arbitrary limit would be a heat source nobody watches
 function detect_CPU_temperature_sensors() {
   local -r SDR_DATA="$1"
 
+  # The entity is matched on the trimmed 4th column, anchored, so that "13.1" or "30.1" can't be taken
+  # for a processor and "3.10" can't be truncated to "3.1". Instances are deduplicated, as two sensors
+  # sharing an entity would otherwise get two columns both showing the first one
+  # (retrieve_temperature_by_entity_id() stops at the first match), and sorted on the instance number
+  # alone, a lexicographic sort putting 3.10 between 3.1 and 3.2
+  local -a CPU_ENTITY_INSTANCES
+  mapfile -t CPU_ENTITY_INSTANCES < <(printf '%s\n' "$SDR_DATA" | awk -F'|' '
+    { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4) }
+    $4 ~ /^3\.[0-9]+$/ && $5 ~ /[0-9]+[[:space:]]*degrees/ {
+      split($4, ENTITY, ".")
+      if (!(ENTITY[2] in SEEN)) {
+        SEEN[ENTITY[2]] = 1
+        print ENTITY[2] + 0
+      }
+    }' | sort -n)
+
+  # On Dell the entity instance is the socket number, so it is used as-is to label the column. IPMI
+  # allows instance 0 though, which would label the first processor "CPU 0", so a BMC numbering from
+  # zero gets its labels shifted back to the 1-based numbering users expect
+  local LABEL_OFFSET=0
+  if (( ${#CPU_ENTITY_INSTANCES[@]} > 0 )) && (( CPU_ENTITY_INSTANCES[0] == 0 )); then
+    LABEL_OFFSET=1
+  fi
+
   DETECTED_CPU_ENTITY_IDS=()
-  local CPU_NUMBER
-  for ((CPU_NUMBER=1; CPU_NUMBER<=MAXIMUM_SUPPORTED_NUMBER_OF_CPUS; CPU_NUMBER++)); do
-    if [ -z "$(retrieve_temperature_by_entity_id "$SDR_DATA" "3.$CPU_NUMBER")" ]; then
-      break
-    fi
-    DETECTED_CPU_ENTITY_IDS+=("3.$CPU_NUMBER")
+  DETECTED_CPU_LABELS=()
+  local CPU_ENTITY_INSTANCE
+  for CPU_ENTITY_INSTANCE in "${CPU_ENTITY_INSTANCES[@]}"; do
+    DETECTED_CPU_ENTITY_IDS+=("3.$CPU_ENTITY_INSTANCE")
+    DETECTED_CPU_LABELS+=("CPU $((CPU_ENTITY_INSTANCE + LABEL_OFFSET))")
   done
+}
+
+# The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), but a label such
+# as "CPU 10" is wider and would otherwise push every column on its right by one
+# Usage : compute_CPU_column_content_width "CPU 1" "CPU 2" ...
+function compute_CPU_column_content_width() {
+  local WIDTH=$MINIMUM_CPU_COLUMN_CONTENT_WIDTH
+  local CPU_LABEL
+
+  for CPU_LABEL in "$@"; do
+    if (( ${#CPU_LABEL} > WIDTH )); then
+      WIDTH=${#CPU_LABEL}
+    fi
+  done
+
+  printf '%s' "$WIDTH"
 }
 
 # Retrieve temperature sensors data using ipmitool
 # Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 function retrieve_temperatures() {
   if (( $# != 1 )); then
-    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
     return 1
   fi
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
@@ -279,78 +325,84 @@ function get_Dell_server_model() {
   fi
 }
 
+# Builds the two header lines of the temperatures table, sized for the CPUs actually detected
+# Usage : build_header $CPU_COLUMN_CONTENT_WIDTH "CPU 1" "CPU 2" ...
 function build_header() {
-  # Check number of arguments
-  if [ "$#" -ne 1 ]; then
-    print_error "build_header() requires an argument (number_of_CPUs)"
+  if (( $# < 2 )); then
+    print_error "build_header() requires a column content width and at least one CPU label"
     return 1
   fi
 
-  local -r number_of_CPUs="$1"
-  local -r CPU_column_width=7
-  local -r Exhaust_column_width=9
+  # Prefixed with LOCAL_ like in print_temperature_array_line() : the caller stores this width in a
+  # readonly global of the obvious name, and a local shadowing it would be refused by bash
+  local -r LOCAL_CPU_COLUMN_CONTENT_WIDTH="$1"
+  shift
+  local -r -a CPU_LABELS=("$@")
 
-  local header="                     ----" # Width ready for 1 CPU
+  # The banner spans the whole temperatures section, from the "I" of "Inlet" to the "t" of "Exhaust" :
+  # "Inlet" (5) and its trailing space, then one column per CPU (its content plus a space on each side),
+  # then the space preceding "Exhaust" (7). Hence the fixed 5 + 1 + 1 + 7 = 14
+  local -r TITLE=" Temperatures "
+  local -r BANNER_WIDTH=$(( ${#CPU_LABELS[@]} * (LOCAL_CPU_COLUMN_CONTENT_WIDTH + 2) + 14 ))
+  local -r NUMBER_OF_LEFT_DASHES=$(( (BANNER_WIDTH - ${#TITLE} + 1) / 2 ))
+  local -r NUMBER_OF_RIGHT_DASHES=$(( BANNER_WIDTH - ${#TITLE} - NUMBER_OF_LEFT_DASHES ))
 
-  # Calculate the number of dashes to add on each side of the title
-  number_of_dashes=$(((number_of_CPUs-1)*CPU_column_width/2))
+  local LEFT_DASHES RIGHT_DASHES
+  printf -v LEFT_DASHES '%*s' "$NUMBER_OF_LEFT_DASHES" ''
+  printf -v RIGHT_DASHES '%*s' "$NUMBER_OF_RIGHT_DASHES" ''
 
-  # Loop to add dashes
-  for ((i=1; i<=number_of_dashes; i++)); do
-    header+="-"
+  # 21 leading spaces : the date column (19) plus the two spaces separating it from the inlet column
+  local header
+  printf -v header '%21s' ''
+  header+="${LEFT_DASHES// /-}${TITLE}${RIGHT_DASHES// /-}"$'\n'
+  header+='    Date & time      Inlet '
+
+  # Each CPU label is right-aligned in the shared column width, so that a wider label (e.g. "CPU 10")
+  # widens every column consistently instead of shifting the ones on its right
+  local CPU_LABEL
+  for CPU_LABEL in "${CPU_LABELS[@]}"; do
+    header+=$(printf ' %*s ' "$LOCAL_CPU_COLUMN_CONTENT_WIDTH" "$CPU_LABEL")
   done
 
-  header+=" Temperatures ---"
-
-  # Check parity and add an extra dash on the right if odd
-  if (( (number_of_CPUs - 1) * CPU_column_width % 2 != 0 )); then
-    header+="-"
-  fi
-
-  # Loop to add dashes
-  for ((i=1; i<=number_of_dashes; i++)); do
-    header+="-"
-  done
-  header+=$'\n    Date & time      Inlet  CPU 1 '
-
-  # Loop to add CPU columns
-  for ((i=2; i<=number_of_CPUs; i++)); do
-    header+=" CPU $i "
-  done
-
-  header+=$' Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment'
+  header+=' Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment'
   printf "%s" "$header"
 }
 
 function print_temperature_array_line() {
-  local -r LOCAL_INLET_TEMPERATURE="$1"
-  local -r LOCAL_CPUS_TEMPERATURES="$2"
-  local -r LOCAL_EXHAUST_TEMPERATURE="$3"
-  local -r LOCAL_CURRENT_FAN_CONTROL_PROFILE="$4"
-  local -r LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$5"
-  local -r LOCAL_COMMENT="$6"
+  local -r LOCAL_CPU_COLUMN_CONTENT_WIDTH="$1"
+  local -r LOCAL_INLET_TEMPERATURE="$2"
+  local -r LOCAL_CPUS_TEMPERATURES="$3"
+  local -r LOCAL_EXHAUST_TEMPERATURE="$4"
+  local -r LOCAL_CURRENT_FAN_CONTROL_PROFILE="$5"
+  local -r LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$6"
+  local -r LOCAL_COMMENT="$7"
 
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
 
   printf "%19s  %s°C " "$(date +"%d-%m-%Y %T")" "$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")"
-  # Itération sur les températures dans le tableau
+  # Itération sur les températures dans le tableau.
+  # Only the number is padded, never the assembled "NNN°C" string : the container runs in the POSIX
+  # locale (the Dockerfile sets no LANG), where "°" is two bytes, so printf-padding the whole cell would
+  # count it as two columns and shift the table by one character per CPU
   for temperature in "${CPUs_temperatures_array[@]}"; do
-    printf " %s°C " "$(format_temperature_for_display "$temperature")"
+    printf " %s°C " "$(format_temperature_for_display "$temperature" "$((LOCAL_CPU_COLUMN_CONTENT_WIDTH - 2))")"
   done
 
   printf " %5s°C  %40s  %51s  %s\n" "$LOCAL_EXHAUST_TEMPERATURE" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
-# Formats a temperature reading as a right-aligned, 3-character-wide decimal number for display.
-# Falls back to "  -" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
+# Formats a temperature reading as a right-aligned decimal number of the given width (3 by default).
+# Falls back to "-" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
 # or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09")
+# Usage : format_temperature_for_display "$VALUE" [$WIDTH]
 function format_temperature_for_display() {
   local -r VALUE="$1"
+  local -r WIDTH="${2:-3}"
   if [[ "$VALUE" =~ ^[0-9]+$ ]]; then
-    printf '%3d' "$((10#$VALUE))"
+    printf '%*d' "$WIDTH" "$((10#$VALUE))"
   else
-    printf '%3s' "-"
+    printf '%*s' "$WIDTH" "-"
   fi
 }
 
@@ -375,6 +427,28 @@ function format_CPU_list_for_display() {
   printf '%s' "$RESULT"
 }
 
+# Builds a clause such as "CPU 2 temperature is too high" or "CPU 1 and CPU 3 temperatures are too high",
+# picking the singular or plural form depending on how many CPUs are listed. Prints nothing when the list
+# is empty, so the caller can simply test the result
+# Usage : format_CPUs_temperature_clause "is too high" "are too high" "CPU 1" "CPU 3"
+function format_CPUs_temperature_clause() {
+  local -r SINGULAR_ENDING="$1"
+  local -r PLURAL_ENDING="$2"
+  shift 2
+  local -r -a CPU_LABELS=("$@")
+
+  if (( ${#CPU_LABELS[@]} == 0 )); then
+    return
+  fi
+
+  printf '%s temperature' "$(format_CPU_list_for_display "${CPU_LABELS[@]}")"
+  if (( ${#CPU_LABELS[@]} > 1 )); then
+    printf 's %s' "$PLURAL_ENDING"
+  else
+    printf ' %s' "$SINGULAR_ENDING"
+  fi
+}
+
 # Checks whether any of the detected CPUs is above the temperature threshold.
 # Returns 0 (true) if at least one is, and sets OVERHEATING_REASON to a ready-to-log clause naming the
 # CPUs concerned ("CPU 3 temperature is too high", "CPU 1 and CPU 3 temperatures are too high"), so the
@@ -387,7 +461,8 @@ function format_CPU_list_for_display() {
 # If a reading isn't a valid number (missing sensor, transient IPMI parsing glitch, etc.), fail safe and
 # report overheating so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt"
 # throws "unary operator expected" on empty/non-numeric input) or silently running the low user fan speed
-# on unverified data
+# on unverified data. Such a CPU is reported as unreadable rather than as too hot, because the controller
+# has no evidence that it is : claiming otherwise would contradict the "-" printed in its own column
 function is_any_CPU_overheating() {
   # No CPU sensor at all means nothing can be verified, so fail safe rather than trust the absence of data
   if (( ${#CPU_TEMPERATURES[@]} == 0 )); then
@@ -395,27 +470,43 @@ function is_any_CPU_overheating() {
     return 0
   fi
 
-  local -a OVERHEATING_CPU_LABELS=()
-  local INDEX CPU_TEMPERATURE
+  local -a TOO_HOT_CPU_LABELS=()
+  local -a UNREADABLE_CPU_LABELS=()
+  local INDEX CPU_TEMPERATURE CPU_LABEL
 
   for INDEX in "${!CPU_TEMPERATURES[@]}"; do
     CPU_TEMPERATURE="${CPU_TEMPERATURES[INDEX]}"
-    if [[ ! "$CPU_TEMPERATURE" =~ ^[0-9]+$ ]] || [ "$((10#$CPU_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
-      OVERHEATING_CPU_LABELS+=("CPU $((INDEX + 1))")
+    # The label comes from the detected entity, not from the position in the array : with non-contiguous
+    # entities (3.1 and 3.3), position 1 is CPU 3, and naming it "CPU 2" would point at a socket that
+    # doesn't even have a column in the table
+    CPU_LABEL="${DETECTED_CPU_LABELS[INDEX]}"
+
+    if [[ ! "$CPU_TEMPERATURE" =~ ^[0-9]+$ ]]; then
+      UNREADABLE_CPU_LABELS+=("$CPU_LABEL")
+    elif [ "$((10#$CPU_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
+      TOO_HOT_CPU_LABELS+=("$CPU_LABEL")
     fi
   done
 
-  local -r NUMBER_OF_OVERHEATING_CPUS=${#OVERHEATING_CPU_LABELS[@]}
-  if (( NUMBER_OF_OVERHEATING_CPUS == 0 )); then
+  local -a REASONS=()
+  local REASON
+  REASON=$(format_CPUs_temperature_clause "is too high" "are too high" "${TOO_HOT_CPU_LABELS[@]}")
+  if [ -n "$REASON" ]; then
+    REASONS+=("$REASON")
+  fi
+  REASON=$(format_CPUs_temperature_clause "could not be read" "could not be read" "${UNREADABLE_CPU_LABELS[@]}")
+  if [ -n "$REASON" ]; then
+    REASONS+=("$REASON")
+  fi
+
+  if (( ${#REASONS[@]} == 0 )); then
     OVERHEATING_REASON=""
     return 1
   fi
 
-  OVERHEATING_REASON="$(format_CPU_list_for_display "${OVERHEATING_CPU_LABELS[@]}") temperature"
-  if (( NUMBER_OF_OVERHEATING_CPUS > 1 )); then
-    OVERHEATING_REASON+="s are too high"
-  else
-    OVERHEATING_REASON+=" is too high"
+  OVERHEATING_REASON="${REASONS[0]}"
+  if (( ${#REASONS[@]} > 1 )); then
+    OVERHEATING_REASON+=", ${REASONS[1]}"
   fi
   return 0
 }

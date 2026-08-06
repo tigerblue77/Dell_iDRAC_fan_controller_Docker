@@ -78,18 +78,48 @@ IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 sleep "$CHECK_INTERVAL" &
 SLEEP_PROCESS_PID=$!
 
-# Detect the CPU temperature sensors once, at startup : the number of sockets doesn't change while the
-# server is running, and the table header is built from it. Any number of CPUs up to Dell's 4-socket
-# maximum is supported, so 4-socket servers (R930, R830...) get all of their CPUs monitored
-detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+# Detect the CPU temperature sensors once, before entering the monitoring loop : the number of sockets
+# doesn't change while the server is running, and the table header is built from it.
+# The target server may be powered off, or its iDRAC may not be answering yet, when the container starts.
+# No sensor can be read then, so keep waiting instead of giving up : this container is expected to
+# outlive its target server being powered off, and exiting here would just make it restart in a loop
+IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=false
+while true; do
+  if ! $NETWORK_MODE || is_server_powered_on; then
+    detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+    if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
+      break
+    fi
+  fi
+
+  # Only logged once, to say why the container isn't printing temperatures yet without flooding the logs
+  if ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
+    IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=true
+    printf "%19s  No CPU temperature sensor could be read yet (is the target server powered off ?), waiting...\n" "$(date +"%d-%m-%Y %T")"
+  fi
+
+  wait $SLEEP_PROCESS_PID
+
+  # Start timer in background for next attempt
+  sleep "$CHECK_INTERVAL" &
+  SLEEP_PROCESS_PID=$!
+done
+
 readonly NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
 
-if [ "$NUMBER_OF_DETECTED_CPUS" -eq 0 ]; then
-  # The login string is deliberately left out of this message: it carries the iDRAC host and username, and
-  # this error explicitly invites the user to paste the container's logs into a public GitHub issue
-  print_error_and_exit "No CPU temperature sensor detected, cannot monitor this server's temperatures. Please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues including your server model and the output of the \"ipmitool sdr type temperature\" command"
+# The entity IDs are logged along with the count : they are what the README asks users to correlate with
+# their own "ipmitool sdr type temperature" output when a CPU seems to be missing
+if [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
+  echo "1 CPU temperature sensor detected (entity ${DETECTED_CPU_ENTITY_IDS[0]})."
+else
+  echo "$NUMBER_OF_DETECTED_CPUS CPU temperature sensors detected (entities ${DETECTED_CPU_ENTITY_IDS[*]})."
 fi
-echo "$NUMBER_OF_DETECTED_CPUS CPU temperature sensor(s) detected."
+
+# Nothing is dropped when this triggers, every detected CPU is monitored : it only flags a count that no
+# Dell hardware can produce, which most likely means the sensors were mis-parsed
+if [ "$NUMBER_OF_DETECTED_CPUS" -gt "$UNEXPECTED_NUMBER_OF_CPUS_WARNING_THRESHOLD" ]; then
+  print_warning "$NUMBER_OF_DETECTED_CPUS CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command\n"
+fi
 
 retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 
@@ -100,7 +130,11 @@ fi
 # Output new line to beautify output
 echo ""
 
-readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
+readonly CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
+if ! HEADER=$(build_header "$CPU_COLUMN_CONTENT_WIDTH" "${DETECTED_CPU_LABELS[@]}"); then
+  print_error_and_exit "Could not build the temperatures table header"
+fi
+readonly HEADER
 
 # Start monitoring
 while true; do
@@ -143,7 +177,12 @@ while true; do
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=false
-      COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+      # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included
+      if [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
+        COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+      else
+        COMMENT="All CPU temperatures decreased and are now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+      fi
     fi
   fi
 
@@ -169,7 +208,7 @@ while true; do
     printf "%s\n" "$HEADER"
     TABLE_HEADER_PRINT_COUNTER=0
   fi
-  print_temperature_array_line "$INLET_TEMPERATURE" "$CPUS_TEMPERATURES" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
+  print_temperature_array_line "$CPU_COLUMN_CONTENT_WIDTH" "$INLET_TEMPERATURE" "$CPUS_TEMPERATURES" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
   ((TABLE_HEADER_PRINT_COUNTER++))
 
   wait $SLEEP_PROCESS_PID
