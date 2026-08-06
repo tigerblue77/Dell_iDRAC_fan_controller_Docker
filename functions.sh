@@ -59,6 +59,76 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
+# Stop the container unless the given parameter is an integer within an inclusive range
+# Usage : validate_integer_parameter "$PARAMETER_NAME" "$VALUE" $MINIMUM $MAXIMUM
+#
+# User-supplied parameters reach us as unchecked text and are then used in arithmetic, where a
+# malformed one fails quietly instead of loudly. A non-integer CPU_TEMPERATURE_THRESHOLD makes bash's
+# "-gt" return 2, which every caller reads as "not overheating", disabling the safety fallback the
+# container exists to provide. Refusing to start is the only outcome that can't be mistaken for
+# normal operation.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+function validate_integer_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local -r MINIMUM="$3"
+  local -r MAXIMUM="$4"
+
+  if [[ ! "$VALUE" =~ ^-?[0-9]+$ ]]; then
+    print_error_and_exit "$PARAMETER_NAME must be an integer, but is \"$VALUE\""
+  fi
+
+  local -r NORMALIZED_VALUE=$(normalize_decimal_value "$VALUE")
+  if [ "$NORMALIZED_VALUE" -lt "$MINIMUM" ] || [ "$NORMALIZED_VALUE" -gt "$MAXIMUM" ]; then
+    print_error_and_exit "$PARAMETER_NAME must be between $MINIMUM and $MAXIMUM, but is $NORMALIZED_VALUE"
+  fi
+}
+
+# Stop the container unless the given parameter is a usable fan speed, in either accepted notation
+# Usage : validate_fan_speed_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# bash's printf applies base detection, so an unchecked value never fails visibly : "09" is an invalid
+# octal number, "abc" an invalid number, an empty value produces no diagnostic at all, and all three
+# convert to 0x00 -- the documented Dell command for 0% fan duty. The container would then report the
+# user's profile as applied every cycle with the fans stopped, and only recover once a CPU crossed
+# CPU_TEMPERATURE_THRESHOLD, i.e. after it had already heated up
+function validate_fan_speed_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local DECIMAL_VALUE
+
+  if [[ "$VALUE" =~ ^0[xX][0-9A-Fa-f]{1,2}$ ]]; then
+    DECIMAL_VALUE=$(convert_hexadecimal_value_to_decimal "$VALUE")
+  elif [[ "$VALUE" =~ ^[0-9]+$ ]]; then
+    DECIMAL_VALUE=$(normalize_decimal_value "$VALUE")
+  else
+    print_error_and_exit "$PARAMETER_NAME must be a decimal percentage (0 to 100) or a hexadecimal value (0x00 to 0x64), but is \"$VALUE\""
+  fi
+
+  if [ "$DECIMAL_VALUE" -gt 100 ]; then
+    print_error_and_exit "$PARAMETER_NAME must not exceed 100%, but is $DECIMAL_VALUE%"
+  fi
+}
+
+# Express an already validated fan speed parameter in both notations at once
+# Usage : convert_fan_speed_parameter "$VALUE"
+# Returns : DECIMAL_SPEED, HEXADECIMAL_SPEED
+function convert_fan_speed_parameter() {
+  local -r VALUE="$1"
+
+  if [[ "$VALUE" == 0[xX]* ]]; then
+    DECIMAL_SPEED=$(convert_hexadecimal_value_to_decimal "$VALUE")
+    HEXADECIMAL_SPEED="$VALUE"
+  else
+    # Leading zeros are stripped before the conversion, printf would otherwise read "09" as an invalid
+    # octal number and hand back 0x00
+    DECIMAL_SPEED=$(normalize_decimal_value "$VALUE")
+    HEXADECIMAL_SPEED=$(convert_decimal_value_to_hexadecimal "$DECIMAL_SPEED")
+  fi
+}
+
 # Set the IDRAC_LOGIN_STRING variable based on connection type
 # Usage : set_iDRAC_login_string $IDRAC_HOST $IDRAC_USERNAME $IDRAC_PASSWORD
 # Returns : IDRAC_LOGIN_STRING

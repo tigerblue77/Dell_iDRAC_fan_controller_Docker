@@ -14,14 +14,25 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # readonly DELL_FRESH_AIR_COMPLIANCE=45
 
-# Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
-if [[ "$FAN_SPEED" == 0x* ]]; then
-  readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
-  readonly HEXADECIMAL_FAN_SPEED="$FAN_SPEED"
-else
-  readonly DECIMAL_FAN_SPEED="$FAN_SPEED"
-  readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
-fi
+# Validate every user-supplied number before it reaches an arithmetic comparison or an ipmitool
+# command. All of them are unchecked text until here, and each one fails silently rather than loudly
+# when malformed: FAN_SPEED converts to 0x00 and stops the fans, CPU_TEMPERATURE_THRESHOLD makes the
+# overheating checks return "not overheating" and disables the safety fallback, and CHECK_INTERVAL
+# makes sleep exit immediately and turns the monitoring loop into a busy loop
+validate_fan_speed_parameter "FAN_SPEED" "$FAN_SPEED"
+# IPMI reports temperatures as a signed byte, so no threshold outside that range can ever be crossed
+validate_integer_parameter "CPU_TEMPERATURE_THRESHOLD" "$CPU_TEMPERATURE_THRESHOLD" -128 127
+validate_integer_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL" 1 86400
+
+# Leading zeros are stripped so that the value used in comparisons is the one the user meant, "09"
+# being read as an invalid octal number everywhere else
+CPU_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$CPU_TEMPERATURE_THRESHOLD")
+readonly CPU_TEMPERATURE_THRESHOLD
+
+# Express FAN_SPEED in both notations, whichever one the user gave it in
+convert_fan_speed_parameter "$FAN_SPEED"
+readonly DECIMAL_FAN_SPEED="$DECIMAL_SPEED"
+readonly HEXADECIMAL_FAN_SPEED="$HEXADECIMAL_SPEED"
 
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 
