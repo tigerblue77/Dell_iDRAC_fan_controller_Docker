@@ -97,10 +97,37 @@ function set_iDRAC_login_string() {
 # The value is matched on its "degrees" suffix rather than on a fixed two-digit width, so that its
 # width stops mattering : "100 degrees C" used to be truncated to 10°C, and "9 degrees C" used to
 # match nothing at all, which callers cannot tell apart from a missing sensor
+#
+# The sign is part of the match : "\d+" alone silently returned sub-zero readings as their absolute
+# value, turning a -40°C CPU sensor (what a disconnected sensor reports on some iDRACs) into a 40°C
+# one hot enough to trip the overheating branch, and making the sub-zero inlet temperatures this
+# container is expected to react to indistinguishable from mild ones
 function extract_temperature_from_sdr_line() {
   local -r SDR_LINE="$1"
 
-  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '\d+(?=[[:space:]]*degrees)'
+  # The sign is written as a character class rather than as a bare "-?" so the pattern doesn't start
+  # with a dash, which grep would otherwise try to parse as one of its own options
+  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '[-]?\d+(?=[[:space:]]*degrees)'
+}
+
+# Convert a temperature reading into a plain base 10 integer, usable in arithmetic and comparisons
+# Usage : normalize_decimal_value "$VALUE"
+# Returns : the value as a base 10 integer
+#
+# Readings reach us as text and carry two traps that have to be defused together. A leading zero makes
+# bash read the value as octal, where "09" is not a valid number, which is what the "10#" prefix is
+# for. But "10#" cannot itself accept a sign : "10#-5" is an "invalid integer constant" and aborts the
+# arithmetic. The sign is therefore split off, the digits forced to base 10, and the sign re-applied
+function normalize_decimal_value() {
+  local VALUE="$1"
+  local SIGN=1
+
+  if [[ "$VALUE" == -* ]]; then
+    SIGN=-1
+    VALUE="${VALUE#-}"
+  fi
+
+  echo $((SIGN * 10#$VALUE))
 }
 
 # Extract a single temperature reading from ipmitool sdr output, located by its IPMI entity ID
@@ -352,26 +379,32 @@ function print_temperature_array_line() {
     printf " %s°C " "$(format_temperature_for_display "$temperature")"
   done
 
-  printf " %5s°C  %40s  %51s  %s\n" "$LOCAL_EXHAUST_TEMPERATURE" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+  # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
+  # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
+  printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
 # Formats a temperature reading as a right-aligned, 3-character-wide decimal number for display.
 # Falls back to "  -" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
-# or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09")
+# or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09").
+# Sub-zero readings are values in their own right, not invalid ones, so they keep their sign
 function format_temperature_for_display() {
   local -r VALUE="$1"
-  if [[ "$VALUE" =~ ^[0-9]+$ ]]; then
-    printf '%3d' "$((10#$VALUE))"
+  if is_temperature_reading_valid "$VALUE"; then
+    printf '%3d' "$(normalize_decimal_value "$VALUE")"
   else
     printf '%3s' "-"
   fi
 }
 
-# Returns 0 (true) if the given temperature reading is usable, i.e. a plain non-negative integer.
+# Returns 0 (true) if the given temperature reading is usable, i.e. an integer.
 # A missing sensor, a transient IPMI parsing glitch or an "ns"/"Disabled" sensor all yield something
-# that isn't
+# that isn't.
+#
+# A sub-zero reading is a value in its own right rather than an unusable one : Dell rates the PowerEdge
+# line down to -5°C, so an unheated room produces one in normal operation
 function is_temperature_reading_valid() {
-  [[ "$1" =~ ^[0-9]+$ ]]
+  [[ "$1" =~ ^-?[0-9]+$ ]]
 }
 
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
@@ -380,11 +413,11 @@ function is_temperature_reading_valid() {
 # input) or silently running the low user fan speed on unverified data
 function CPU1_OVERHEATING() {
   is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
-  [ "$((10#$CPU1_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  [ "$(normalize_decimal_value "$CPU1_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
 function CPU2_OVERHEATING() {
   is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
-  [ "$((10#$CPU2_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  [ "$(normalize_decimal_value "$CPU2_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
 
 # Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
