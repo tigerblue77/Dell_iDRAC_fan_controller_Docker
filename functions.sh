@@ -83,9 +83,12 @@ function retrieve_temperature_by_entity_id() {
   local -r SDR_DATA="$1"
   local -r ENTITY_ID="$2"
 
+  # The reading is matched on the "degrees" suffix rather than on a fixed two-digit width, so that an
+  # overheating CPU reporting three digits isn't truncated : "100 degrees C" used to be read as 10°C,
+  # silently keeping the user's low fan speed on a CPU that needed the Dell default profile
   echo "$SDR_DATA" | awk -F'|' -v entity="$ENTITY_ID" '
     { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4) }
-    $4 == entity { print $5; exit }' | grep -Po '\d{2}'
+    $4 == entity { print $5; exit }' | grep -Po '\d+(?=[[:space:]]*degrees)'
 }
 
 # Retrieve temperature sensors data using ipmitool
