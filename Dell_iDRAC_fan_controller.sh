@@ -73,29 +73,33 @@ IS_TARGET_SERVER_POWERED_OFF=false
 
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
-IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
 
 # Start timer in background
 sleep "$CHECK_INTERVAL" &
 SLEEP_PROCESS_PID=$!
 
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+# Detect the CPU temperature sensors once, at startup : the number of sockets doesn't change while the
+# server is running, and the table header is built from it. Any number of CPUs up to Dell's 4-socket
+# maximum is supported, so 4-socket servers (R930, R830...) get all of their CPUs monitored
+detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+readonly NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
+
+if [ "$NUMBER_OF_DETECTED_CPUS" -eq 0 ]; then
+  # The login string is deliberately left out of this message: it carries the iDRAC host and username, and
+  # this error explicitly invites the user to paste the container's logs into a public GitHub issue
+  print_error_and_exit "No CPU temperature sensor detected, cannot monitor this server's temperatures. Please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues including your server model and the output of the \"ipmitool sdr type temperature\" command"
+fi
+echo "$NUMBER_OF_DETECTED_CPUS CPU temperature sensor(s) detected."
+
+retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
 fi
-if [ -z "$CPU2_TEMPERATURE" ]; then
-  echo "No CPU2 temperature sensor detected."
-  IS_CPU2_TEMPERATURE_SENSOR_PRESENT=false
-fi
-# Output new line to beautify output if one of the previous conditions have echoed
-if ! $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT || ! $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-  echo ""
-fi
+# Output new line to beautify output
+echo ""
 
-#readonly NUMBER_OF_DETECTED_CPUS=(${CPUS_TEMPERATURES//;/ })
-# TODO : write "X CPU sensors detected." and remove previous ifs
 readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
 
 # Start monitoring
@@ -118,33 +122,20 @@ while true; do
   # before/during the outage (could be the initial pre-loop reading, or readings from before it powered off)
   if $IS_TARGET_SERVER_POWERED_OFF; then
     IS_TARGET_SERVER_POWERED_OFF=false
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   fi
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
-  # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
-  if CPU1_OVERHEATING; then
+  # Check if any of the detected CPUs is overheating then apply Dell default dynamic fan control profile if true
+  if is_any_CPU_overheating; then
     apply_Dell_default_fan_control_profile
 
     if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 
-      # If CPU 2 temperature sensor is present, check if it is overheating too.
-      # Do not apply Dell default dynamic fan control profile as it has already been applied before
-      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-        COMMENT="CPU 1 and CPU 2 temperatures are too high, Dell default dynamic fan control profile applied for safety"
-      else
-        COMMENT="CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
-      fi
-    fi
-  # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
-  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-    apply_Dell_default_fan_control_profile
-
-    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
-      IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
-      COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
+      # is_any_CPU_overheating() named the CPUs actually concerned, however many of them there are
+      COMMENT="$OVERHEATING_REASON, Dell default dynamic fan control profile applied for safety"
     fi
   else
     apply_user_fan_control_profile
@@ -187,5 +178,5 @@ while true; do
   sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 done

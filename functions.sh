@@ -111,43 +111,66 @@ function retrieve_temperature_by_entity_id() {
     $4 == entity { print $5; exit }' | grep -Po '\d+(?=[[:space:]]*degrees)'
 }
 
+# Read the raw temperature sensors data from ipmitool
+# Usage : retrieve_sdr_temperature_data
+# Returns : the "sdr type temperature" lines holding an actual reading
+#
+# stderr is discarded here: this is a read-only diagnostic call (it never changes fan behavior) and some
+# iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
+function retrieve_sdr_temperature_data() {
+  ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees
+}
+
+# Detect the CPU temperature sensors the server exposes, once, at startup
+# Usage : detect_CPU_temperature_sensors "$SDR_DATA"
+# Returns : populates the DETECTED_CPU_ENTITY_IDS global array, in CPU order
+#
+# Entity 3 is the processor, so the sockets are exposed as 3.1, 3.2, ... Probing stops at the first
+# missing entity: Dell populates sockets in order, so a gap means there is no further CPU. This also
+# keeps the "CPU N" column labels aligned with the entity sub-IDs they are read from
+function detect_CPU_temperature_sensors() {
+  local -r SDR_DATA="$1"
+
+  DETECTED_CPU_ENTITY_IDS=()
+  local CPU_NUMBER
+  for ((CPU_NUMBER=1; CPU_NUMBER<=MAXIMUM_SUPPORTED_NUMBER_OF_CPUS; CPU_NUMBER++)); do
+    if [ -z "$(retrieve_temperature_by_entity_id "$SDR_DATA" "3.$CPU_NUMBER")" ]; then
+      break
+    fi
+    DETECTED_CPU_ENTITY_IDS+=("3.$CPU_NUMBER")
+  done
+}
+
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 function retrieve_temperatures() {
-  if (( $# != 2 )); then
-    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
+  if (( $# != 1 )); then
+    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
     return 1
   fi
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
-  local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
 
-  # stderr is discarded here: this is a read-only diagnostic call (it never changes fan behavior) and some
-  # iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
-  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees)
+  local -r DATA=$(retrieve_sdr_temperature_data)
 
-  # Parse CPU data, each CPU being located by its IPMI entity ID (3.1 is CPU 1, 3.2 is CPU 2)
-  CPU1_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.1")
-  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-    CPU2_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.2")
-  else
-    CPU2_TEMPERATURE="-"
-  fi
+  # Parse every CPU detected at startup, each one being located by its IPMI entity ID.
+  # CPU_TEMPERATURES holds the raw readings, indexed by CPU number minus one, and is what
+  # is_any_CPU_overheating() evaluates : a reading left empty by a transient IPMI glitch must reach it
+  # untouched so it can fail safe on it.
+  # CPUS_TEMPERATURES is the display string, in which an unreadable reading falls back to the "-"
+  # placeholder so that it still takes up its column when the line is printed : it is split to build the
+  # display array, so an empty value would be dropped and shift every following column to the left
+  CPU_TEMPERATURES=()
+  CPUS_TEMPERATURES=""
+  local ENTITY_ID CPU_TEMPERATURE
+  for ENTITY_ID in "${DETECTED_CPU_ENTITY_IDS[@]}"; do
+    CPU_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "$ENTITY_ID")
+    CPU_TEMPERATURES+=("$CPU_TEMPERATURE")
 
-  # Initialize CPUS_TEMPERATURES. An unreadable CPU 1 reading falls back to the "-" placeholder so that it
-  # still takes up its column when the line is printed : CPUS_TEMPERATURES is split on whitespace to build
-  # the display array, so an empty value would be dropped and shift every following column to the left.
-  # CPU1_TEMPERATURE itself is left untouched, CPU1_OVERHEATING() must still see the invalid reading
-  CPUS_TEMPERATURES="${CPU1_TEMPERATURE:--}"
-  NUMBER_OF_DETECTED_CPUS=1
-
-  # If CPU2 is present, parse its temperature data and add it to CPUS_TEMPERATURES.
-  # "-" is the placeholder set above when the sensor is known to be absent, so it must not be counted as a
-  # detected CPU: otherwise servers without a CPU2 sensor get an extra column that the header, built once
-  # from the first reading (when the placeholder isn't set yet), doesn't account for
-  if [ -n "$CPU2_TEMPERATURE" ] && [ "$CPU2_TEMPERATURE" != "-" ]; then
-    CPUS_TEMPERATURES+=";$CPU2_TEMPERATURE"
-    ((NUMBER_OF_DETECTED_CPUS++))
-  fi
+    if [ -n "$CPUS_TEMPERATURES" ]; then
+      CPUS_TEMPERATURES+=";"
+    fi
+    CPUS_TEMPERATURES+="${CPU_TEMPERATURE:--}"
+  done
 
   # Parse inlet temperature data
   INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
@@ -331,18 +354,70 @@ function format_temperature_for_display() {
   fi
 }
 
-# Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
+# Enumerates CPU labels the way a human would : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 4"
+# Usage : format_CPU_list_for_display "CPU 1" "CPU 3"
+function format_CPU_list_for_display() {
+  local -r -a CPU_LABELS=("$@")
+  local -r LAST_INDEX=$(( ${#CPU_LABELS[@]} - 1 ))
+  local RESULT=""
+  local INDEX
+
+  for ((INDEX=0; INDEX<=LAST_INDEX; INDEX++)); do
+    if (( INDEX == 0 )); then
+      RESULT="${CPU_LABELS[INDEX]}"
+    elif (( INDEX == LAST_INDEX )); then
+      RESULT+=" and ${CPU_LABELS[INDEX]}"
+    else
+      RESULT+=", ${CPU_LABELS[INDEX]}"
+    fi
+  done
+
+  printf '%s' "$RESULT"
+}
+
+# Checks whether any of the detected CPUs is above the temperature threshold.
+# Returns 0 (true) if at least one is, and sets OVERHEATING_REASON to a ready-to-log clause naming the
+# CPUs concerned ("CPU 3 temperature is too high", "CPU 1 and CPU 3 temperatures are too high"), so the
+# log line can tell the user which CPU actually triggered the switch.
+#
+# Every detected CPU is evaluated, not just the first two : on a 4-socket server (R930, R830...) CPU 3
+# and CPU 4 used to be read by nobody, so they could cross the threshold while the controller happily
+# kept the user's low fan speed running.
+#
 # If a reading isn't a valid number (missing sensor, transient IPMI parsing glitch, etc.), fail safe and
 # report overheating so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt"
 # throws "unary operator expected" on empty/non-numeric input) or silently running the low user fan speed
 # on unverified data
-function CPU1_OVERHEATING() {
-  [[ "$CPU1_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
-  [ "$((10#$CPU1_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
-}
-function CPU2_OVERHEATING() {
-  [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
-  [ "$((10#$CPU2_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+function is_any_CPU_overheating() {
+  # No CPU sensor at all means nothing can be verified, so fail safe rather than trust the absence of data
+  if (( ${#CPU_TEMPERATURES[@]} == 0 )); then
+    OVERHEATING_REASON="No CPU temperature could be read"
+    return 0
+  fi
+
+  local -a OVERHEATING_CPU_LABELS=()
+  local INDEX CPU_TEMPERATURE
+
+  for INDEX in "${!CPU_TEMPERATURES[@]}"; do
+    CPU_TEMPERATURE="${CPU_TEMPERATURES[INDEX]}"
+    if [[ ! "$CPU_TEMPERATURE" =~ ^[0-9]+$ ]] || [ "$((10#$CPU_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
+      OVERHEATING_CPU_LABELS+=("CPU $((INDEX + 1))")
+    fi
+  done
+
+  local -r NUMBER_OF_OVERHEATING_CPUS=${#OVERHEATING_CPU_LABELS[@]}
+  if (( NUMBER_OF_OVERHEATING_CPUS == 0 )); then
+    OVERHEATING_REASON=""
+    return 1
+  fi
+
+  OVERHEATING_REASON="$(format_CPU_list_for_display "${OVERHEATING_CPU_LABELS[@]}") temperature"
+  if (( NUMBER_OF_OVERHEATING_CPUS > 1 )); then
+    OVERHEATING_REASON+="s are too high"
+  else
+    OVERHEATING_REASON+=" is too high"
+  fi
+  return 0
 }
 
 function print_error() {

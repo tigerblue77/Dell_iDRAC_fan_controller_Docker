@@ -213,6 +213,18 @@ All parameters are optional as they have default values (including default iDRAC
 
 - Run the image using usual `docker run` command instead of UnRAID Community Apps or Docker UI. [More informations here.](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/89#issuecomment-4166458799)
 
+### Not all of your CPUs appear in the temperatures table
+
+At startup, the container logs how many CPU temperature sensors it found (`X CPU temperature sensor(s) detected.`) and prints one column per detected CPU, up to Dell's 4-socket maximum. If that number is lower than the number of CPUs actually installed, your iDRAC isn't exposing the missing sockets as IPMI processor entities. Check what it does expose with :
+```bash
+ipmitool -I lanplus \
+  -H <iDRAC IP address> \
+  -U <iDRAC username> \
+  -P <iDRAC password> \
+  sdr type temperature
+```
+Each CPU should appear as an entity `3.1`, `3.2`, ... in the 4th column. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model and that output if some are missing.
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- CONTRIBUTING -->
