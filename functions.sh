@@ -86,12 +86,29 @@ function set_iDRAC_login_string() {
   fi
 }
 
+# Extract the temperature reading carried by a single ipmitool sdr line
+# Usage : extract_temperature_from_sdr_line "$SDR_LINE"
+# Returns : the temperature in degrees Celsius, or an empty string if that line carries no reading
+#
+# An sdr line looks like "Temp             | 09h | ok  |  3.1 | 45 degrees C", the reading being its
+# 5th pipe-delimited column. Isolating that column first keeps the other ones (most notably the
+# sensor's hexadecimal ID) from contributing digits of their own.
+#
+# The value is matched on its "degrees" suffix rather than on a fixed two-digit width, so that its
+# width stops mattering : "100 degrees C" used to be truncated to 10°C, and "9 degrees C" used to
+# match nothing at all, which callers cannot tell apart from a missing sensor
+function extract_temperature_from_sdr_line() {
+  local -r SDR_LINE="$1"
+
+  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '\d+(?=[[:space:]]*degrees)'
+}
+
 # Extract a single temperature reading from ipmitool sdr output, located by its IPMI entity ID
 # Usage : retrieve_temperature_by_entity_id "$SDR_DATA" $ENTITY_ID
 # Returns : the temperature in degrees Celsius, or an empty string if that entity has no reading
 #
-# An sdr line looks like "Temp             | 09h | ok  |  3.1 | 45 degrees C", the 4th pipe-delimited
-# column being the entity ID. Entity 3 is the processor, so 3.1 is CPU 1, 3.2 is CPU 2, and so on.
+# The entity ID is the 4th pipe-delimited column of an sdr line. Entity 3 is the processor, so 3.1 is
+# CPU 1, 3.2 is CPU 2, and so on.
 #
 # Locating a CPU by its entity rather than by counting values makes the parsing independent from the
 # sensors' hexadecimal IDs, from the order iDRAC returns them in, and therefore from the server
@@ -103,12 +120,31 @@ function retrieve_temperature_by_entity_id() {
   local -r SDR_DATA="$1"
   local -r ENTITY_ID="$2"
 
-  # The reading is matched on the "degrees" suffix rather than on a fixed two-digit width, so that an
-  # overheating CPU reporting three digits isn't truncated : "100 degrees C" used to be read as 10°C,
-  # silently keeping the user's low fan speed on a CPU that needed the Dell default profile
-  echo "$SDR_DATA" | awk -F'|' -v entity="$ENTITY_ID" '
-    { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4) }
-    $4 == entity { print $5; exit }' | grep -Po '\d+(?=[[:space:]]*degrees)'
+  # The entity ID is trimmed through a copy rather than in place, so that the line is printed
+  # untouched : assigning to a field makes awk rebuild the whole record with OFS (a space) as its
+  # separator, which would strip the pipe delimiters the extraction relies on
+  local -r SDR_LINE=$(echo "$SDR_DATA" | awk -F'|' -v entity="$ENTITY_ID" '
+    { entity_id = $4; gsub(/^[[:space:]]+|[[:space:]]+$/, "", entity_id) }
+    entity_id == entity { print; exit }')
+
+  extract_temperature_from_sdr_line "$SDR_LINE"
+}
+
+# Extract a single temperature reading from ipmitool sdr output, located by its sensor name
+# Usage : retrieve_temperature_by_sensor_name "$SDR_DATA" "$SENSOR_NAME"
+# Returns : the temperature in degrees Celsius, or an empty string if no such sensor has a reading
+#
+# Inlet and exhaust are both reported as entity 7.1 on Dell servers, so their name is the only thing
+# telling them apart and they cannot use retrieve_temperature_by_entity_id()
+function retrieve_temperature_by_sensor_name() {
+  local -r SDR_DATA="$1"
+  local -r SENSOR_NAME="$2"
+
+  # On the (unexpected) event of several sensors matching the name, the last one wins, as it did when
+  # the reading was picked with "grep -Po ... | tail -1"
+  local -r SDR_LINE=$(echo "$SDR_DATA" | grep "$SENSOR_NAME" | tail -1)
+
+  extract_temperature_from_sdr_line "$SDR_LINE"
 }
 
 # Retrieve temperature sensors data using ipmitool
@@ -149,12 +185,12 @@ function retrieve_temperatures() {
     ((NUMBER_OF_DETECTED_CPUS++))
   fi
 
-  # Parse inlet temperature data
-  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
+  # Parse inlet temperature data, the sensor being located by its name
+  INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
   # If exhaust temperature sensor is present, parse its temperature data
   if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
+    EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
   else
     EXHAUST_TEMPERATURE="-"
   fi
