@@ -31,8 +31,9 @@ function apply_user_fan_control_profile() {
 function compute_interpolated_fan_speed() {
   local -r CURRENT_CPU_TEMPERATURE="$1"
 
-  # Fail safe to the base fan speed if the reading isn't a plain non-negative integer
-  if [[ ! "$CURRENT_CPU_TEMPERATURE" =~ ^[0-9]+$ ]]; then
+  # Fail safe to the base fan speed if the reading isn't a plain non-negative integer.
+  # Leading zeros are rejected too, as the arithmetic below would then read the value as octal
+  if [[ ! "$CURRENT_CPU_TEMPERATURE" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "$DECIMAL_FAN_SPEED"
     return
   fi
@@ -60,9 +61,18 @@ function apply_interpolated_fan_control_profile() {
     CURRENT_FAN_CONTROL_PROFILE="User interpolated fan control profile (${TARGET_FAN_SPEED_PERCENT}%) (monitoring only, not applied)"
     return
   fi
-  # Use ipmitool to send the raw command to set fan control to the interpolated value
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $TARGET_FAN_SPEED_HEX > /dev/null
+  # Use ipmitool to send the raw command to set fan control to the interpolated value.
+  # Same reasoning as apply_user_fan_control_profile: only surface stderr if the command actually
+  # failed, instead of always discarding it (this profile changes real fan speed)
+  local ipmitool_stderr
+  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
+  if [ $? -ne 0 ]; then
+    print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
+  fi
+  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $TARGET_FAN_SPEED_HEX 2>&1 >/dev/null)
+  if [ $? -ne 0 ]; then
+    print_error "Failed to set fan speed to $TARGET_FAN_SPEED_PERCENT%. ipmitool said: $ipmitool_stderr"
+  fi
   CURRENT_FAN_CONTROL_PROFILE="User interpolated fan control profile (${TARGET_FAN_SPEED_PERCENT}%)"
 }
 

@@ -23,7 +23,30 @@ else
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
+# These three parameters get their default value from the Dockerfile, but the script can also be run
+# directly (see the "Run without Docker" section of the README). Default them here too: an unset
+# ENABLE_LINE_INTERPOLATION would expand to an empty command, which bash considers successful, silently
+# enabling interpolation with an unset (hence 0) HIGH_FAN_SPEED -- which inverts the ramp and slows the
+# fans down as the CPU heats up
+readonly ENABLE_LINE_INTERPOLATION="${ENABLE_LINE_INTERPOLATION:-false}"
+readonly HIGH_FAN_SPEED="${HIGH_FAN_SPEED:-50}"
+readonly CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION="${CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION:-30}"
+
+if [ "$ENABLE_LINE_INTERPOLATION" != "true" ] && [ "$ENABLE_LINE_INTERPOLATION" != "false" ]; then
+  print_error_and_exit "ENABLE_LINE_INTERPOLATION must be \"true\" or \"false\" (got \"$ENABLE_LINE_INTERPOLATION\")"
+fi
+
 if $ENABLE_LINE_INTERPOLATION; then
+  # Validate before comparing: a non-numeric value makes the [ -ge ] / [ -le ] tests below fail with
+  # "integer expression expected" and, that failure being non-zero, silently skip the very check it
+  # guards. Leading zeros are rejected too, as bash would then read the value as octal
+  for VARIABLE_NAME in DECIMAL_FAN_SPEED HIGH_FAN_SPEED CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION CPU_TEMPERATURE_THRESHOLD; do
+    if [[ ! "${!VARIABLE_NAME}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+      # DECIMAL_FAN_SPEED is internal, report it under the name the user actually sets
+      print_error_and_exit "${VARIABLE_NAME/DECIMAL_FAN_SPEED/FAN_SPEED} must be a decimal integer without leading zeros to use line interpolation (got \"${!VARIABLE_NAME}\")"
+    fi
+  done
+
   if [ "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
     print_error_and_exit "CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION ($CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION°C) must be lower than CPU_TEMPERATURE_THRESHOLD ($CPU_TEMPERATURE_THRESHOLD°C)"
   fi
