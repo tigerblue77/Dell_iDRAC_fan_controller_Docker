@@ -199,6 +199,61 @@ All parameters are optional as they have default values (including default iDRAC
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
 - `MONITORING_ONLY_MODE` parameter is a boolean that allows to run the container in a read-only, monitoring-only mode: temperatures are still read and logged at each `CHECK_INTERVAL`, but no fan control profile (neither the user-defined one nor Dell's default) and no third-party PCIe card cooling response change is ever sent to the server. Useful to observe temperatures and validate your `FAN_SPEED`/`CPU_TEMPERATURE_THRESHOLD` values before letting the container actually take control of the fans. **Default** value is false.
 
+All parameters are validated at startup. A malformed value stops the container instead of being silently misinterpreted, and says why:
+
+```
+/!\ Error /!\ Invalid configuration, the container will not start.
+
+  Parameter : FAN_SPEED
+  Value     : "abc"
+  Expected  : a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64
+
+  Fix it in the "-e" arguments of your "docker run" command, or in the "environment"
+  section of your docker-compose.yml, then start the container again.
+```
+
+This matters most for `FAN_SPEED`: an unvalidated malformed value converted to `0x00`, which is the documented Dell command for **0% fan duty**, and the container then reported the user's profile as applied every cycle with the fans stopped.
+
+### Intake air temperature limits
+
+These four parameters are **optional and disabled by default**. Leaving them unset keeps the behavior described above unchanged.
+
+- `HIGH_INLET_TEMPERATURE_THRESHOLD` is the intake air temperature above which the Dell default dynamic fan control profile is restored. Past its rated intake temperature, a server's fans are the only mitigation left and a fixed fan speed is the wrong thing to be holding, so control is handed back to iDRAC, which knows the platform's own airflow requirements. The volume PowerEdge line is rated to ASHRAE class A2, whose allowable inlet ceiling is 35°C; Dell Fresh Air models add A3 (40°C) and A4 (45°C), both restricted to a share of annual operating hours rather than continuous use. **Default** value is 35(°C).
+
+  > **This is the one default that changed.** It is enabled out of the box because the failure mode is asymmetric: a threshold set too low costs you louder fans in hot weather — the server behaves exactly as it would if this container had never been installed — while a threshold not set at all leaves a server running above its rated intake with its fans pinned at a fixed speed. If your rack legitimately runs above 35°C (an ASHRAE A3/A4 Dell Fresh Air deployment), raise it to `40` or `45`. To restore the previous CPU-only behaviour entirely, set it empty: `-e HIGH_INLET_TEMPERATURE_THRESHOLD=`. The startup log always states which of the two is in effect.
+- `LOW_INLET_TEMPERATURE_THRESHOLD` is the intake air temperature below which the fan speed is reduced to `LOW_TEMPERATURE_FAN_SPEED`. Negative values are accepted. **Default** value is empty (trigger disabled).
+- `LOW_CPU_TEMPERATURE_THRESHOLD` is the CPU temperature below which the fan speed is reduced to `LOW_TEMPERATURE_FAN_SPEED`. Every detected CPU has to be below it. Must be lower than `CPU_TEMPERATURE_THRESHOLD`. **Default** value is empty (trigger disabled).
+- `LOW_TEMPERATURE_FAN_SPEED` is the reduced fan speed applied while the low temperature protection is engaged, in the same decimal or hexadecimal notation as `FAN_SPEED`. It becomes **required** as soon as either low temperature threshold is set, and it must not exceed `FAN_SPEED`: this protection only ever reduces the fan speed, never increases it. **Default** value is empty.
+
+#### What the low temperature protection is for
+
+Cold intake air does not damage silicon. What it does is drag the components that *do* have a lower limit down with it, and a high fixed fan speed in a cold room is what makes that happen:
+
+- enterprise hard drives are rated from 5°C (0°C on some ranges) and their spindle lubricant stiffens below it;
+- PERC battery backup units are lithium-ion, and charging lithium-ion below 0°C plates metallic lithium on the anode, which is permanent;
+- Dell's own operating envelope stops at 10°C, or 5°C continuously and −5°C for up to 1% of annual operating hours.
+
+Reducing the airflow lets the machine's own waste heat hold the inside of the chassis above the ambient temperature. It is a mitigation, not a guarantee: fans cannot be stopped, and on an idle server in a genuinely freezing room it may not be enough on its own.
+
+#### How the conditions combine
+
+The two low temperature triggers are combined with **AND**, not OR: the protection engages only once *every* configured condition holds. The goal is a minimum temperature *inside* the chassis, and a cold room with a busy server in it is not a situation to reduce airflow in. Setting `LOW_CPU_TEMPERATURE_THRESHOLD` alongside `LOW_INLET_TEMPERATURE_THRESHOLD` is what keeps cold intake air from throttling the fans over a CPU that is working.
+
+CPU overheating always wins. Whatever the intake air is doing, a CPU above `CPU_TEMPERATURE_THRESHOLD` gets the Dell default profile, and the low temperature protection can never reduce the fan speed while that is the case. A sensor reading that cannot be parsed never engages the protection either — it stays disengaged rather than reducing airflow on unverified data.
+
+Example, for a server in an unheated room:
+
+```bash
+  -e FAN_SPEED=30 \
+  -e CPU_TEMPERATURE_THRESHOLD=60 \
+  -e LOW_INLET_TEMPERATURE_THRESHOLD=5 \
+  -e LOW_CPU_TEMPERATURE_THRESHOLD=30 \
+  -e LOW_TEMPERATURE_FAN_SPEED=10 \
+  -e HIGH_INLET_TEMPERATURE_THRESHOLD=35 \
+```
+
+Fans run at 30%, drop to 10% while the intake is below 5°C *and* every CPU is below 30°C, return to 30% as soon as either warms back up, and hand over to Dell's profile if any CPU passes 60°C or the intake passes 35°C.
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- TROUBLESHOOTING -->
