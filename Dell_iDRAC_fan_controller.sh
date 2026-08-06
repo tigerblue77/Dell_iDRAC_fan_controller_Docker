@@ -31,15 +31,14 @@ if [[ ! $SERVER_MANUFACTURER == "DELL" ]]; then
   print_error_and_exit "Your server isn't a Dell product"
 fi
 
+# CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
+# instead of counting values, which no longer depends on the server generation
+
 # If server model is Gen 14 (*40) or newer
 if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
   readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
-  readonly CPU1_TEMPERATURE_INDEX=2
-  readonly CPU2_TEMPERATURE_INDEX=4
 else
   readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
-  readonly CPU1_TEMPERATURE_INDEX=1
-  readonly CPU2_TEMPERATURE_INDEX=2
 fi
 
 # In local mode, the container runs on the target server itself, so it can never observe it powered off
