@@ -49,13 +49,45 @@ else
   readonly NETWORK_MODE=true
 fi
 
+# Resolve the CPU temperature threshold. "auto" (the default) asks the CPUs themselves, through lm-sensors,
+# for the "high" temperature defined by their manufacturer : that value describes the actual hardware being
+# cooled, unlike a single fixed threshold shared by every CPU model
+# (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/26)
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD:-auto}"
+CPU_TEMPERATURE_THRESHOLD_SOURCE=""
+if [[ "${CPU_TEMPERATURE_THRESHOLD,,}" == "auto" ]]; then
+  if $NETWORK_MODE; then
+    # lm-sensors can only read the CPUs of the machine this container runs on. In network mode that machine
+    # isn't the server whose fans are controlled, so its "high" temperature would describe the wrong hardware
+    CPU_TEMPERATURE_THRESHOLD=$FALLBACK_CPU_TEMPERATURE_THRESHOLD
+    CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, automatic detection is only available in local mode)"
+  else
+    DETECTED_CPU_TEMPERATURE_THRESHOLD=$(retrieve_CPU_high_temperature_from_lm_sensors)
+    if [ -n "$DETECTED_CPU_TEMPERATURE_THRESHOLD" ]; then
+      CPU_TEMPERATURE_THRESHOLD=$DETECTED_CPU_TEMPERATURE_THRESHOLD
+      CPU_TEMPERATURE_THRESHOLD_SOURCE=" (automatically detected, \"high\" temperature reported by lm-sensors)"
+    else
+      CPU_TEMPERATURE_THRESHOLD=$FALLBACK_CPU_TEMPERATURE_THRESHOLD
+      CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, no CPU \"high\" temperature could be read from lm-sensors)"
+    fi
+  fi
+elif [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]+$ ]]; then
+  # Drop any leading zero so the value isn't later interpreted as an octal number (e.g. "050" as 40°C)
+  CPU_TEMPERATURE_THRESHOLD=$((10#$CPU_TEMPERATURE_THRESHOLD))
+else
+  # Reject an unusable threshold right away : every temperature comparison would fail against it, which
+  # silently keeps the user's (low) fan speed applied instead of ever triggering the Dell default profile
+  print_error_and_exit "CPU_TEMPERATURE_THRESHOLD must be a positive integer number of degrees Celsius or \"auto\", but is \"$CPU_TEMPERATURE_THRESHOLD\""
+fi
+readonly CPU_TEMPERATURE_THRESHOLD
+
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
+echo "CPU temperature threshold: ${CPU_TEMPERATURE_THRESHOLD}°C${CPU_TEMPERATURE_THRESHOLD_SOURCE}"
 echo "Check interval: ${CHECK_INTERVAL}s"
 if $MONITORING_ONLY_MODE; then
   echo "Monitoring only mode: Enabled (no fan control profile will be applied, temperatures will only be logged)"

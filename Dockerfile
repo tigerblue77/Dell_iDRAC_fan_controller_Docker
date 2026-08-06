@@ -4,7 +4,8 @@ LABEL org.opencontainers.image.authors="tigerblue77"
 
 RUN apt-get update
 
-RUN apt-get install ipmitool -y
+# lm-sensors is used to read the CPUs' own "high" temperature, which is the default CPU_TEMPERATURE_THRESHOLD
+RUN apt-get install ipmitool lm-sensors -y
 
 ADD functions.sh /app/functions.sh
 ADD constants.sh /app/constants.sh
@@ -23,7 +24,7 @@ ENV IDRAC_HOST=local
 # ENV IDRAC_USERNAME=root
 # ENV IDRAC_PASSWORD=calvin
 ENV FAN_SPEED=5
-ENV CPU_TEMPERATURE_THRESHOLD=50
+ENV CPU_TEMPERATURE_THRESHOLD=auto
 ENV CHECK_INTERVAL=60
 ENV DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
 ENV KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false

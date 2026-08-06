@@ -86,6 +86,47 @@ function set_iDRAC_login_string() {
   fi
 }
 
+# Retrieve the "high" temperature the CPU manufacturer itself defines, as reported by the lm-sensors
+# utility ("Package id 0:  +45.0°C  (high = +62.0°C, crit = +72.0°C)")
+# Usage : retrieve_CPU_high_temperature_from_lm_sensors
+# Returns : the lowest "high" temperature in degrees Celsius (integer), or an empty string if lm-sensors
+#           is unavailable or exposes no such value
+#
+# /!\ lm-sensors reads the CPUs of the machine this script runs on, so this is only meaningful in local
+# mode, where that machine is the very server whose fans are being controlled /!\
+function retrieve_CPU_high_temperature_from_lm_sensors() {
+  if ! command -v sensors > /dev/null 2>&1; then
+    return
+  fi
+
+  # "sensors -u" prints raw sub-feature values ("temp1_max: 62.000") instead of the decorated, localized
+  # human-readable format ("high = +62.0°C"), which keeps the parsing independent from locale and layout.
+  # Only CPU chips are considered: the other chips exposed by lm-sensors (chipset, NVMe drives, etc.) have
+  # their own unrelated "high" values, which would otherwise silently become the CPU threshold
+  local -r HIGH_TEMPERATURE=$(sensors -u 2>/dev/null | awk '
+    # Chip names are the only unindented lines that are neither "Adapter: ..." nor a feature label such as
+    # "Package id 0:", which always ends with a colon
+    /^[^[:space:]]/ {
+      if ($0 !~ /^Adapter:/ && $0 !~ /:[[:space:]]*$/) {
+        is_CPU_chip = ($0 ~ /^(coretemp|k10temp|k8temp)-/)
+      }
+      next
+    }
+    # "high" is exposed as the "_max" sub-feature. Keep the lowest one so the most constrained CPU/core of
+    # a multi-socket server is the one being protected
+    is_CPU_chip && $1 ~ /^temp[0-9]+_max:$/ && $2 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      if (lowest == "" || $2 + 0 < lowest) lowest = $2 + 0
+    }
+    # Truncate rather than round, so the threshold is never set above what the CPU manufacturer defined
+    END { if (lowest != "") printf "%d", lowest }')
+
+  # Ignore implausible readings (unsupported or misreporting sensor) instead of letting them become the
+  # threshold that protects the hardware
+  if [[ "$HIGH_TEMPERATURE" =~ ^[0-9]+$ ]] && [ "$HIGH_TEMPERATURE" -ge 20 ] && [ "$HIGH_TEMPERATURE" -le 125 ]; then
+    echo "$HIGH_TEMPERATURE"
+  fi
+}
+
 # Extract a single temperature reading from ipmitool sdr output, located by its IPMI entity ID
 # Usage : retrieve_temperature_by_entity_id "$SDR_DATA" $ENTITY_ID
 # Returns : the temperature in degrees Celsius, or an empty string if that entity has no reading
