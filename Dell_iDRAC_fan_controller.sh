@@ -31,14 +31,8 @@ if [[ ! $SERVER_MANUFACTURER == "DELL" ]]; then
   print_error_and_exit "Your server isn't a Dell product"
 fi
 
-# CPU temperature indexes are the same for every generation: retrieve_temperatures() now isolates the
-# sdr reading column before extracting digits, so CPU_DATA holds exactly one value per CPU sensor.
-# They used to differ (2 and 4 for Gen 14 and newer) only because the parsing extracted digits from the
-# whole sdr line: on Gen 14 and newer the CPU sensors' hexadecimal IDs are two digits (e.g. "01h", "02h"),
-# so each line leaked an extra bogus value and doubled the indexes. Now that the leak is gone, keeping
-# 2 and 4 would read CPU 2's temperature as CPU 1's and leave CPU 2 undetected, hence unmonitored
-readonly CPU1_TEMPERATURE_INDEX=1
-readonly CPU2_TEMPERATURE_INDEX=2
+# CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
+# instead of counting values, which no longer depends on the server generation
 
 # If server model is Gen 14 (*40) or newer
 if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then

@@ -66,6 +66,28 @@ function set_iDRAC_login_string() {
   fi
 }
 
+# Extract a single temperature reading from ipmitool sdr output, located by its IPMI entity ID
+# Usage : retrieve_temperature_by_entity_id "$SDR_DATA" $ENTITY_ID
+# Returns : the temperature in degrees Celsius, or an empty string if that entity has no reading
+#
+# An sdr line looks like "Temp             | 09h | ok  |  3.1 | 45 degrees C", the 4th pipe-delimited
+# column being the entity ID. Entity 3 is the processor, so 3.1 is CPU 1, 3.2 is CPU 2, and so on.
+#
+# Locating a CPU by its entity rather than by counting values makes the parsing independent from the
+# sensors' hexadecimal IDs, from the order iDRAC returns them in, and therefore from the server
+# generation. Counting used to require per-generation offsets because the digits were extracted from
+# the whole line: a sensor whose hexadecimal ID happens to be two digits (e.g. "09h" on an R930, or
+# every CPU sensor on some generations) contributed a second, bogus value per line, shifting
+# everything (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/91)
+function retrieve_temperature_by_entity_id() {
+  local -r SDR_DATA="$1"
+  local -r ENTITY_ID="$2"
+
+  echo "$SDR_DATA" | awk -F'|' -v entity="$ENTITY_ID" '
+    { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4) }
+    $4 == entity { print $5; exit }' | grep -Po '\d{2}'
+}
+
 # Retrieve temperature sensors data using ipmitool
 # Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
 function retrieve_temperatures() {
@@ -78,14 +100,10 @@ function retrieve_temperatures() {
 
   local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
 
-  # Parse CPU data. Each sdr line looks like "Temp | 09h | ok | 3.1 | 45 degrees C" : cut down to the
-  # 5th pipe-delimited column (the reading itself) before extracting digits, otherwise a sensor whose hex
-  # ID happens to be two digits (e.g. "09h") would leak an extra bogus reading into CPU_DATA and throw off
-  # the positional indexing below (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/91)
-  local -r CPU_DATA=$(echo "$DATA" | grep "3\." | cut -d'|' -f5 | grep -Po '\d{2}')
-  CPU1_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU1_TEMPERATURE_INDEX;}")
+  # Parse CPU data, each CPU being located by its IPMI entity ID (3.1 is CPU 1, 3.2 is CPU 2)
+  CPU1_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.1")
   if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-    CPU2_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU2_TEMPERATURE_INDEX;}")
+    CPU2_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.2")
   else
     CPU2_TEMPERATURE="-"
   fi
