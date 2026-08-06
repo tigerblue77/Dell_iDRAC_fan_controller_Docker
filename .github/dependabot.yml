@@ -6,7 +6,22 @@
 
 version: 2
 updates:
- - package-ecosystem: "devcontainers"
-   directory: "/"
-   schedule:
-     interval: weekly
+  - package-ecosystem: "devcontainers"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # Minor and patch updates are grouped into a single PR,
+      # auto-merged by the dependabot-auto-merge workflow.
+      # Major updates stay out of the group: one separate PR each,
+      # waiting for manual review (potentially breaking changes).
+      github-actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
