@@ -59,6 +59,101 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
+# Stop the container unless the given parameter is an integer within an inclusive range
+# Usage : validate_integer_parameter "$PARAMETER_NAME" "$VALUE" $MINIMUM $MAXIMUM
+#
+# User-supplied parameters reach us as unchecked text and are then used in arithmetic, where a
+# malformed one fails quietly instead of loudly. A non-integer CPU_TEMPERATURE_THRESHOLD makes bash's
+# "-gt" return 2, which every caller reads as "not overheating", disabling the safety fallback the
+# container exists to provide. Refusing to start is the only outcome that can't be mistaken for
+# normal operation.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+function validate_integer_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local -r MINIMUM="$3"
+  local -r MAXIMUM="$4"
+
+  if [[ ! "$VALUE" =~ ^-?[0-9]+$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a whole number between $MINIMUM and $MAXIMUM"
+  fi
+
+  local -r NORMALIZED_VALUE=$(normalize_decimal_value "$VALUE")
+  if [ "$NORMALIZED_VALUE" -lt "$MINIMUM" ] || [ "$NORMALIZED_VALUE" -gt "$MAXIMUM" ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a whole number between $MINIMUM and $MAXIMUM"
+  fi
+}
+
+# Stop the container unless the given parameter is a usable fan speed, in either accepted notation
+# Usage : validate_fan_speed_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# bash's printf applies base detection, so an unchecked value never fails visibly : "09" is an invalid
+# octal number, "abc" an invalid number, an empty value produces no diagnostic at all, and all three
+# convert to 0x00 -- the documented Dell command for 0% fan duty. The container would then report the
+# user's profile as applied every cycle with the fans stopped, and only recover once a CPU crossed
+# CPU_TEMPERATURE_THRESHOLD, i.e. after it had already heated up
+function validate_fan_speed_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local DECIMAL_VALUE
+
+  if [[ "$VALUE" =~ ^0[xX][0-9A-Fa-f]{1,2}$ ]]; then
+    DECIMAL_VALUE=$(convert_hexadecimal_value_to_decimal "$VALUE")
+  elif [[ "$VALUE" =~ ^[0-9]+$ ]]; then
+    DECIMAL_VALUE=$(normalize_decimal_value "$VALUE")
+  else
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64"
+  fi
+
+  if [ "$DECIMAL_VALUE" -gt 100 ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64 (this is ${DECIMAL_VALUE}%)"
+  fi
+}
+
+# Stop the container unless the given parameter is a duration sleep can actually wait for
+# Usage : validate_check_interval_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# The value is passed straight to sleep, whose exit status the loop discards, so an unusable one
+# doesn't stop anything : sleep returns in a few milliseconds and the monitoring loop starts spinning
+# at full speed, opening an IPMI session per iteration and flooding the logs.
+#
+# GNU sleep accepts a unit suffix, and "60s" or "5m" are therefore working configurations even though
+# the README documents plain seconds. They stay accepted here : rejecting a value that has been
+# waiting correctly all along would break a working container for no benefit
+function validate_check_interval_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a number of seconds, optionally suffixed with s, m, h or d (for example 60, 60s, 5m or 1h)"
+  fi
+
+  # A zero interval is syntactically valid for sleep and still spins the loop, so it's rejected on its
+  # own terms rather than on its format
+  if [ "$((10#${VALUE%[smhd]}))" -eq 0 ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a duration greater than zero, otherwise the monitoring loop would never pause between two readings"
+  fi
+}
+
+# Express an already validated fan speed parameter in both notations at once
+# Usage : convert_fan_speed_parameter "$VALUE"
+# Returns : DECIMAL_SPEED, HEXADECIMAL_SPEED
+function convert_fan_speed_parameter() {
+  local -r VALUE="$1"
+
+  if [[ "$VALUE" == 0[xX]* ]]; then
+    DECIMAL_SPEED=$(convert_hexadecimal_value_to_decimal "$VALUE")
+    HEXADECIMAL_SPEED="$VALUE"
+  else
+    # Leading zeros are stripped before the conversion, printf would otherwise read "09" as an invalid
+    # octal number and hand back 0x00
+    DECIMAL_SPEED=$(normalize_decimal_value "$VALUE")
+    HEXADECIMAL_SPEED=$(convert_decimal_value_to_hexadecimal "$DECIMAL_SPEED")
+  fi
+}
+
 # Set the IDRAC_LOGIN_STRING variable based on connection type
 # Usage : set_iDRAC_login_string $IDRAC_HOST $IDRAC_USERNAME $IDRAC_PASSWORD
 # Returns : IDRAC_LOGIN_STRING
@@ -302,7 +397,7 @@ function get_Dell_server_model() {
   local -r ipmitool_exit_code=$?
 
   if [ $ipmitool_exit_code -ne 0 ]; then
-    print_error_and_exit "Could not establish IPMI connection to iDRAC/IPMI host \"$IDRAC_HOST\". Check that IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD are correct. ipmitool said: $IPMI_FRU_content"
+    print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. ipmitool said: $IPMI_FRU_content"
   fi
 
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
@@ -473,6 +568,29 @@ function build_fan_control_fallback_comment() {
   fi
 
   echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
+}
+
+# Stop the container on an invalid configuration parameter, with everything needed to fix it
+# Usage : print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$EXPECTED"
+#
+# Refusing to start is the point : a malformed parameter fails silently once the container is running,
+# so the only outcome that can't be mistaken for normal operation is not running at all. But refusing
+# to start is only useful if the reason survives a "docker logs" scroll, hence the block form rather
+# than one line among the startup output -- the user has to be able to see, without reading the source,
+# which parameter is wrong, what it currently is, what is accepted, and where to change it
+function print_configuration_error_and_exit() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local -r EXPECTED="$3"
+
+  printf "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n" >&2
+  printf "  Parameter : %s\n" "$PARAMETER_NAME" >&2
+  printf "  Value     : \"%s\"\n" "$VALUE" >&2
+  printf "  Expected  : %s\n\n" "$EXPECTED" >&2
+  printf "  Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"\n" >&2
+  printf "  section of your docker-compose.yml, then start the container again.\n\n" >&2
+
+  exit 1
 }
 
 function print_error() {
