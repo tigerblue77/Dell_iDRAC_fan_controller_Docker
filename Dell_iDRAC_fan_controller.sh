@@ -74,6 +74,14 @@ else
   readonly CPU2_TEMPERATURE_INDEX=2
 fi
 
+# In local mode, the container runs on the target server itself, so it can never observe it powered off
+# while the container is running. This check is therefore only meaningful in network mode.
+if [[ "$IDRAC_HOST" == "local" ]]; then
+  readonly NETWORK_MODE=false
+else
+  readonly NETWORK_MODE=true
+fi
+
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
@@ -97,6 +105,9 @@ echo ""
 TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 # Set the flag used to check if the active fan control profile has changed
 IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
+# Tracks whether the target server was powered off on the previous cycle, so temperatures can be
+# refreshed right when it powers back on instead of reusing data read before/during the outage
+IS_TARGET_SERVER_POWERED_OFF=false
 
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
@@ -127,6 +138,27 @@ readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
 
 # Start monitoring
 while true; do
+  # In network mode, if the target server is powered off, skip this cycle entirely: don't read
+  # temperatures (they would be meaningless) and don't apply any fan control profile
+  if $NETWORK_MODE && ! is_server_powered_on; then
+    IS_TARGET_SERVER_POWERED_OFF=true
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+
+    wait $SLEEP_PROCESS_PID
+
+    # Start timer in background for next cycle
+    sleep "$CHECK_INTERVAL" &
+    SLEEP_PROCESS_PID=$!
+    continue
+  fi
+
+  # The server just powered back on: refresh temperatures now instead of evaluating stale data read
+  # before/during the outage (could be the initial pre-loop reading, or readings from before it powered off)
+  if $IS_TARGET_SERVER_POWERED_OFF; then
+    IS_TARGET_SERVER_POWERED_OFF=false
+    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  fi
+
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true

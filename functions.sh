@@ -6,8 +6,16 @@ function apply_Dell_default_fan_control_profile() {
     CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (monitoring only, not applied)"
     return
   fi
-  # Use ipmitool to send the raw command to set fan control to Dell default
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 > /dev/null
+  # Use ipmitool to send the raw command to set fan control to Dell default.
+  # Some iDRAC/BMC firmwares print a harmless protocol warning on stderr (e.g. "Received an Unexpected
+  # message...") even when the command actually succeeds. Rather than discard stderr unconditionally (which
+  # would also hide a genuine failure to apply this safety-critical profile), capture it and only surface it
+  # if the command actually failed (non-zero exit code)
+  local ipmitool_stderr
+  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 2>&1 >/dev/null)
+  if [ $? -ne 0 ]; then
+    print_error "Failed to apply Dell default fan control profile. ipmitool said: $ipmitool_stderr"
+  fi
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
@@ -18,9 +26,18 @@ function apply_user_fan_control_profile() {
     CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (monitoring only, not applied)"
     return
   fi
-  # Use ipmitool to send the raw command to set fan control to user-specified value
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 > /dev/null
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED > /dev/null
+  # Use ipmitool to send the raw command to set fan control to user-specified value.
+  # Same reasoning as apply_Dell_default_fan_control_profile: only surface stderr if the command
+  # actually failed, instead of always discarding it (this profile changes real fan speed)
+  local ipmitool_stderr
+  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
+  if [ $? -ne 0 ]; then
+    print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
+  fi
+  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
+  if [ $? -ne 0 ]; then
+    print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+  fi
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
 
@@ -114,7 +131,10 @@ function set_iDRAC_login_string() {
   else
     echo "iDRAC/IPMI username: $IDRAC_USERNAME"
     #echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
-    IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
+    # Pass the password via the IPMI_PASSWORD environment variable (-E) instead of the command line (-P)
+    # so it never appears in the container's process list (e.g. `ps aux`, /proc/<pid>/cmdline) or logs
+    export IPMI_PASSWORD="$IDRAC_PASSWORD"
+    IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -E"
   fi
 }
 
@@ -128,7 +148,9 @@ function retrieve_temperatures() {
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
   local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
 
-  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
+  # stderr is discarded here: this is a read-only diagnostic call (it never changes fan behavior) and some
+  # iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
+  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees)
 
   # Parse CPU data
   local -r CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
@@ -160,6 +182,14 @@ function retrieve_temperatures() {
   fi
 }
 
+# Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
+# Only meaningful in network mode: in local mode the container runs on the target server itself,
+# so it cannot be observed powered off while the container is running
+function is_server_powered_on() {
+  local -r POWER_STATUS=$(ipmitool -I $IDRAC_LOGIN_STRING chassis power status 2>/dev/null)
+  [[ "$POWER_STATUS" == *"is on"* ]]
+}
+
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 # In monitoring only mode, this is a no-op
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
@@ -167,7 +197,12 @@ function enable_third_party_PCIe_card_Dell_default_cooling_response() {
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null
+  # Unlike the fan speed control commands, stderr IS unconditionally discarded here: on hardware/firmware
+  # that doesn't support this Dell OEM command at all, it fails the exact same way ("Invalid command") on
+  # every single cycle forever. That's a deterministic, permanent, non-actionable failure (not a transient
+  # glitch), and this setting is a non-safety-critical cosmetic cooling response, not core CPU fan control
+  # -- so surfacing it every cycle would just recreate the original log-spam problem for no benefit
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null 2>&1
 }
 
 # /!\ Use this function only for Gen 13 and older generation servers /!\
@@ -177,7 +212,12 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null
+  # Unlike the fan speed control commands, stderr IS unconditionally discarded here: on hardware/firmware
+  # that doesn't support this Dell OEM command at all, it fails the exact same way ("Invalid command") on
+  # every single cycle forever. That's a deterministic, permanent, non-actionable failure (not a transient
+  # glitch), and this setting is a non-safety-critical cosmetic cooling response, not core CPU fan control
+  # -- so surfacing it every cycle would just recreate the original log-spam problem for no benefit
+  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null 2>&1
 }
 
 # Returns :
@@ -215,7 +255,14 @@ function graceful_exit() {
 
 # Helps debugging when people are posting their output
 function get_Dell_server_model() {
-  local -r IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
+  local IPMI_FRU_content
+  # FRU stands for "Field Replaceable Unit". Capture stderr too so a failed IPMI connection can be reported instead of silently discarded
+  IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>&1)
+  local -r ipmitool_exit_code=$?
+
+  if [ $ipmitool_exit_code -ne 0 ]; then
+    print_error_and_exit "Could not establish IPMI connection to iDRAC/IPMI host \"$IDRAC_HOST\". Check that IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD are correct. ipmitool said: $IPMI_FRU_content"
+  fi
 
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')

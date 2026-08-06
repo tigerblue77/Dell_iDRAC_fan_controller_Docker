@@ -166,6 +166,34 @@ services:
       - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=<decimal temperature>
 ```
 
+For security reasons, it is recommended to store your credentials in a `.env` file instead of hardcoding them in a `docker run` command or a `docker-compose.yml` file. Copy [`.env.example`](./.env.example) to `.env`, fill in your values, then reference it:
+
+- with `docker run`:
+
+```bash
+docker run -d \
+  --name Dell_iDRAC_fan_controller \
+  --restart=unless-stopped \
+  --env-file .env \
+  tigerblue77/dell_idrac_fan_controller:latest
+```
+
+- with `docker-compose.yml`:
+
+```yml
+version: '3.8'
+
+services:
+  Dell_iDRAC_fan_controller:
+    image: tigerblue77/dell_idrac_fan_controller:latest
+    container_name: Dell_iDRAC_fan_controller
+    restart: unless-stopped
+    env_file:
+      - .env
+```
+
+(if using local iDRAC, add the `devices:` section shown in the examples above)
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- PARAMETERS -->
