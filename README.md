@@ -227,6 +227,8 @@ ipmitool -I lanplus \
 ```
 CPUs are the lines whose 4th column is an entity `3.<something>` and whose reading ends in `degrees C`. They need not be contiguous nor in order: a socket that is empty or unreadable is usually still listed, but as `Disabled` or `No Reading` instead of a temperature, and is therefore not monitored. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model and that output if a CPU that does report a temperature is missing from the table.
 
+The container follows those sensors while it runs, so there is no need to restart it after changing the CPUs of the target server. A CPU that starts reporting a temperature is picked up and monitored on the next check. A CPU that stops reporting one is assumed to be rebooting rather than removed, and the Dell default fan control profile is applied meanwhile, since its temperature is unknown; once it has stayed silent for 10 minutes it is considered removed, leaves the table, and your fan speed setting resumes.
+
 Note that on chassis products (VRTX, FX2, M1000e, MX7000) each server node has its own iDRAC with its own address: point the container at a node's iDRAC, not at the chassis CMC, which doesn't answer IPMI at all.
 
 <p align="right">(<a href="#top">back to top</a>)</p>

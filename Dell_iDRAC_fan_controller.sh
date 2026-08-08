@@ -70,6 +70,9 @@ IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 # Tracks whether the target server was powered off on the previous cycle, so temperatures can be
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
+# When each monitored CPU temperature sensor was last readable, keyed by IPMI entity ID, so that a CPU
+# staying silent longer than CPU_TEMPERATURE_SENSOR_EXPIRY can be told from one that is merely rebooting
+declare -A CPU_LAST_READABLE_AT
 
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
@@ -118,8 +121,11 @@ while true; do
   SLEEP_PROCESS_PID=$!
 done
 
-# Not readonly : the monitoring loop grows this set when a CPU shows up, the server having possibly been
-# powered off to add one
+# Start the expiry delay of every CPU detected here : without this they would have no last-readable time
+# at all, and the first cycle on which one of them is silent would expire it instantly
+postpone_CPU_temperature_sensors_expiry "$(date +%s)"
+
+# Not readonly : the monitoring loop follows the CPUs the server exposes, which can change while it runs
 NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
 
 echo "$(format_detected_CPU_temperature_sensors)."
@@ -157,6 +163,10 @@ while true; do
     IS_TARGET_SERVER_POWERED_OFF=true
     printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
 
+    # Its sensors are legitimately silent while it is off, so that silence must not count towards the
+    # delay after which a CPU is considered removed
+    postpone_CPU_temperature_sensors_expiry "$(date +%s)"
+
     wait $SLEEP_PROCESS_PID
 
     # Start timer in background for next cycle
@@ -172,19 +182,28 @@ while true; do
     retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   fi
 
-  # Pick up any CPU that has become readable since the last cycle. The server may have been powered off
-  # precisely to add one, but it may also simply have finished POSTing, so this is checked every cycle
-  # rather than only when it powers back on. It reuses the data retrieve_temperatures() just fetched, so
-  # it costs no extra IPMI round-trip
-  if refresh_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"; then
+  # Follow the CPUs the server exposes : one may have been added while it was powered off, one may have
+  # been removed, and one may simply not have finished POSTing yet. Checked every cycle rather than only
+  # on a power transition, and reusing the data retrieve_temperatures() just fetched, so it costs no
+  # extra IPMI round-trip
+  PREVIOUS_NUMBER_OF_DETECTED_CPUS=$NUMBER_OF_DETECTED_CPUS
+  if refresh_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA" "$(date +%s)"; then
     NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
     CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
     HEADER=$(build_header "$CPU_COLUMN_CONTENT_WIDTH" "${DETECTED_CPU_LABELS[@]}")
     # The table just changed shape, so its header is reprinted before the next line
     TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
-    printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
-    # A new CPU can sort before the known ones, so the readings must be taken again against the new
-    # entity list rather than reused from before it changed
+
+    # A CPU leaving the table means one less heat source watched, which deserves more than the plain
+    # count : it is the only trace left that the server used to have it
+    if [ "$NUMBER_OF_DETECTED_CPUS" -lt "$PREVIOUS_NUMBER_OF_DETECTED_CPUS" ]; then
+      printf "%19s  A CPU stopped reporting its temperature for more than %ss and is no longer monitored, %s.\n" "$(date +"%d-%m-%Y %T")" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
+    else
+      printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
+    fi
+
+    # A CPU appearing can sort before the known ones, so the readings must be taken again against the
+    # new entity list rather than reused from before it changed
     retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   fi
 

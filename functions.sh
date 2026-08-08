@@ -154,6 +154,14 @@ function detect_CPU_temperature_sensors() {
       }
     }' | sort -n)
 
+  set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
+}
+
+# Fills the DETECTED_CPU_* arrays from a list of entity instances, expected sorted
+# Usage : set_detected_CPU_temperature_sensors 1 2 3 4
+function set_detected_CPU_temperature_sensors() {
+  local -r -a CPU_ENTITY_INSTANCES=("$@")
+
   # On Dell the entity instance is the socket number, so it is used as-is to label the column. IPMI
   # allows instance 0 though, which would label the first processor "CPU 0", so a BMC numbering from
   # zero gets its labels shifted back to the 1-based numbering users expect
@@ -171,37 +179,67 @@ function detect_CPU_temperature_sensors() {
   done
 }
 
-# Runs the detection again on already-fetched sensor data and reports whether a CPU showed up.
-# Usage : refresh_CPU_temperature_sensors "$SDR_DATA"
-# Returns : 0 (true) if a CPU was added, the DETECTED_CPU_* arrays then describing the new set
+# Runs the detection again on already-fetched sensor data and reports whether the monitored set changed.
+# Usage : refresh_CPU_temperature_sensors "$SDR_DATA" $NOW
+# Returns : 0 (true) if the set changed, the DETECTED_CPU_* arrays then describing the new one
 #
-# The point is the server being powered off to add a CPU : keeping the set detected before the outage
-# would leave that CPU both invisible in the table and, far worse, never compared to the threshold.
+# A CPU showing up is adopted immediately : the server may have been powered off precisely to add one,
+# and keeping the previous set would leave it both invisible in the table and, far worse, never compared
+# to the temperature threshold.
 #
-# The monitored set only ever grows, and the new one is adopted only when it still contains every CPU
-# already being monitored. A server answering as powered on can still be POSTing, exposing part of its
-# sockets as "Disabled", and Dell reports a depopulated socket in exactly the same way : the two cannot
-# be told apart from the SDR, so shrinking on that basis would silently stop watching CPUs that are
-# merely not readable yet. A CPU that really was removed keeps its column, reading "-", which fails safe
-# to the Dell default profile until the container is restarted
+# A CPU disappearing is only acted upon after CPU_TEMPERATURE_SENSOR_EXPIRY seconds without a reading.
+# A socket being POSTed and a socket that has been removed look exactly the same in the SDR, Dell
+# reporting both as "Disabled", so at any single instant they cannot be told apart -- but over time they
+# can, since POST ends and removal doesn't. Dropping a CPU on the spot would stop watching one that is
+# merely not readable yet; never dropping it would pin the server to the Dell default profile forever,
+# as its unreadable column keeps failing safe, until someone restarts the container
 function refresh_CPU_temperature_sensors() {
   local -r SDR_DATA="$1"
+  local -r NOW="$2"
   local -r -a PREVIOUS_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
-  local -r -a PREVIOUS_CPU_LABELS=("${DETECTED_CPU_LABELS[@]}")
 
   detect_CPU_temperature_sensors "$SDR_DATA"
 
-  # Entity IDs hold no space, so the padded-join membership test is unambiguous
-  local PREVIOUS_CPU_ENTITY_ID
-  for PREVIOUS_CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
-    if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " != *" $PREVIOUS_CPU_ENTITY_ID "* ]]; then
-      DETECTED_CPU_ENTITY_IDS=("${PREVIOUS_CPU_ENTITY_IDS[@]}")
-      DETECTED_CPU_LABELS=("${PREVIOUS_CPU_LABELS[@]}")
-      return 1
+  local -a CPU_ENTITY_INSTANCES=()
+  local CPU_ENTITY_ID
+  for CPU_ENTITY_ID in "${DETECTED_CPU_ENTITY_IDS[@]}"; do
+    CPU_LAST_READABLE_AT[$CPU_ENTITY_ID]=$NOW
+    CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
+  done
+
+  # Keep the CPUs that are missing from this reading but were still answering recently enough for the
+  # silence to be explainable by a reboot rather than by a removal
+  for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+    # Entity IDs hold no space, so the padded-join membership test is unambiguous
+    if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " == *" $CPU_ENTITY_ID "* ]]; then
+      continue
+    fi
+    if (( NOW - ${CPU_LAST_READABLE_AT[$CPU_ENTITY_ID]:-0} <= CPU_TEMPERATURE_SENSOR_EXPIRY )); then
+      CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
     fi
   done
 
+  if (( ${#CPU_ENTITY_INSTANCES[@]} > 0 )); then
+    mapfile -t CPU_ENTITY_INSTANCES < <(printf '%s\n' "${CPU_ENTITY_INSTANCES[@]}" | sort -n)
+  fi
+  set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
+
   [ "${DETECTED_CPU_ENTITY_IDS[*]}" != "${PREVIOUS_CPU_ENTITY_IDS[*]}" ]
+}
+
+# Pushes back the expiry of every monitored CPU temperature sensor.
+# Usage : postpone_CPU_temperature_sensors_expiry $NOW
+#
+# Called while the target server is powered off : the sensors are legitimately silent then, and that
+# silence must not count towards the delay after which a CPU is considered removed. Without this, a
+# server left powered off longer than the delay would come back with all of its CPUs already expired
+function postpone_CPU_temperature_sensors_expiry() {
+  local -r NOW="$1"
+  local CPU_ENTITY_ID
+
+  for CPU_ENTITY_ID in "${DETECTED_CPU_ENTITY_IDS[@]}"; do
+    CPU_LAST_READABLE_AT[$CPU_ENTITY_ID]=$NOW
+  done
 }
 
 # Describes the detected CPU temperature sensors, along with the IPMI entities they are read from : that
