@@ -232,9 +232,10 @@ while true; do
   #
   # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
   if CPU1_OVERHEATING; then
-    apply_Dell_default_fan_control_profile
-
-    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
+    # The state is only latched if the command actually reached the server: latching on a failure
+    # would silence every later cycle through the "!= Dell" guard, leaving the log asserting that the
+    # safety profile is active while the fans are still held at the user's speed
+    if apply_Dell_default_fan_control_profile && [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
       ACTIVE_FAN_CONTROL_PROFILE="Dell"
 
       # If CPU 2 temperature sensor is present, check if it is overheating too.
@@ -247,35 +248,27 @@ while true; do
     fi
   # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
   elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-    apply_Dell_default_fan_control_profile
-
-    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
+    if apply_Dell_default_fan_control_profile && [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
       ACTIVE_FAN_CONTROL_PROFILE="Dell"
       COMMENT=$(build_fan_control_fallback_comment "CPU 2" "$CPU2_TEMPERATURE")
     fi
   # Intake air hotter than the server is rated for: a static fan speed is the wrong thing to be
   # holding, so hand control back to iDRAC, which knows the platform's own airflow requirements
   elif INLET_TEMPERATURE_TOO_HIGH; then
-    apply_Dell_default_fan_control_profile
-
-    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
+    if apply_Dell_default_fan_control_profile && [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
       ACTIVE_FAN_CONTROL_PROFILE="Dell"
       COMMENT="Inlet temperature is too high (> $HIGH_INLET_TEMPERATURE_THRESHOLD°C), Dell default dynamic fan control profile applied for safety"
     fi
   # Chassis colder than its components are rated for: reduce the airflow so their own waste heat can
   # hold the inside of the server above the ambient temperature
   elif SERVER_TOO_COLD; then
-    apply_low_temperature_fan_control_profile
-
-    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "low temperature" ]; then
+    if apply_low_temperature_fan_control_profile && [ "$ACTIVE_FAN_CONTROL_PROFILE" != "low temperature" ]; then
       ACTIVE_FAN_CONTROL_PROFILE="low temperature"
       COMMENT="Server is too cold, fan speed reduced to $DECIMAL_LOW_TEMPERATURE_FAN_SPEED% to preserve a minimum internal temperature"
     fi
   else
-    apply_user_fan_control_profile
-
     # Check if user fan control profile is applied then apply it if not
-    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "user" ]; then
+    if apply_user_fan_control_profile && [ "$ACTIVE_FAN_CONTROL_PROFILE" != "user" ]; then
       # The profile being left says which condition cleared, the return to the user's profile meaning
       # different things depending on it
       if [ "$ACTIVE_FAN_CONTROL_PROFILE" == "low temperature" ]; then
