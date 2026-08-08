@@ -530,14 +530,14 @@ function resolve_CPU_temperature_source() {
       # container that silently supervises the wrong CPUs is the failure this whole parameter exists
       # to make impossible
       if [ "$IS_NETWORK_MODE" == "true" ]; then
-        print_error_and_exit "CPU_TEMPERATURE_SOURCE is \"lm-sensors\", which reads the CPUs of the machine this container runs on. In network mode that machine is not the server whose fans are being controlled, so those readings would describe the wrong hardware. Set IDRAC_HOST to \"local\", or leave CPU_TEMPERATURE_SOURCE to its default"
+        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that can describe the controlled server. lm-sensors reads the CPUs of the machine this container runs on, and in network mode that machine is not the server whose fans are being controlled, so those readings would describe the wrong hardware. Set IDRAC_HOST to \"local\", or leave CPU_TEMPERATURE_SOURCE to its default"
       fi
 
       # Checked now rather than discovered in the monitoring loop : with no reading at all, every cycle
       # would hand the fans back to Dell's profile forever, which looks exactly like a container doing
       # its job and is the hardest possible way to find out that a kernel module is missing
       if ! is_lm_sensors_reporting_CPU_temperatures; then
-        print_error_and_exit "CPU_TEMPERATURE_SOURCE is \"lm-sensors\", but no CPU temperature could be read from it. Check that your Docker host exposes them through /sys (the \"coretemp\" kernel module) and that \"sensors\" reports a \"Package id\" temperature. Note that only Intel CPUs are supported here: AMD's \"k10temp\" driver reports \"Tctl\", which is not the physical temperature the iDRAC reports"
+        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that actually reports something : no CPU temperature could be read from lm-sensors. Check that your Docker host exposes them through /sys (the \"coretemp\" kernel module) and that \"sensors\" reports a \"Package id\" temperature. Note that only Intel CPUs are supported here: AMD's \"k10temp\" driver reports \"Tctl\", which is not the physical temperature the iDRAC reports"
       fi
 
       CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
@@ -546,7 +546,7 @@ function resolve_CPU_temperature_source() {
     *)
       # Left in place, an unrecognized value would silently mean "auto" : the user would believe one
       # source is being read while another one is
-      print_error_and_exit "CPU_TEMPERATURE_SOURCE must be \"auto\", \"ipmi\" or \"lm-sensors\", but is \"$REQUESTED_SOURCE\""
+      print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "exactly \"auto\", \"ipmi\" or \"lm-sensors\""
       ;;
   esac
 }

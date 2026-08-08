@@ -62,6 +62,24 @@ function test_an_unusable_boolean_reports_as_a_configuration_error() {
   done
 }
 
+function test_an_unusable_temperature_source_reports_as_a_configuration_error() {
+  local OUTPUT
+  OUTPUT=$(resolve_CPU_temperature_source "sensors" "false" 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_reported_as_a_configuration_error "CPU_TEMPERATURE_SOURCE" "sensors" "$EXIT_CODE" "$OUTPUT"
+}
+
+function test_lm_sensors_requested_in_network_mode_reports_as_a_configuration_error() {
+  # Valid spelling, unusable in this mode : still the user's parameter to fix
+  local OUTPUT
+  OUTPUT=$(resolve_CPU_temperature_source "lm-sensors" "true" 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_reported_as_a_configuration_error "CPU_TEMPERATURE_SOURCE" "lm-sensors" "$EXIT_CODE" "$OUTPUT"
+  assert_contains "$OUTPUT" "IDRAC_HOST" "the error should say which other parameter can resolve it"
+}
+
 function test_an_unusable_temperature_threshold_reports_as_a_configuration_error() {
   # Resolved inline in the entrypoint rather than by a validator of its own,
   # "auto" having to be settled before anything reads the value as a number
@@ -103,10 +121,21 @@ function test_a_failed_ipmi_connection_reports_as_a_configuration_error() {
 
 function test_no_configuration_refusal_is_left_reporting_as_a_single_line() {
   # The point of the block is that it is the only form a refused parameter takes.
-  # A new validator added later, wired to print_error_and_exit out of habit, is
-  # exactly what this case is here to catch
-  local -r VALIDATORS=$(grep -c "print_error_and_exit \"\$PARAMETER_NAME" "$REPO_ROOT/functions.sh" || true)
+  # A refusal added later and wired to print_error_and_exit out of habit is exactly
+  # what this case is here to catch -- it already happened once, CPU_TEMPERATURE_SOURCE
+  # having landed with three single-line refusals while this branch was open.
+  #
+  # Matched on the parameter names rather than on one spelling of the call, a refusal
+  # naming its parameter in a variable and one naming it literally being the same
+  # mistake. The device error is the documented exception : it is a configuration
+  # mistake in "--device", where the block's closing sentence about "-e" would send
+  # the user to the wrong place
+  local -r PARAMETERS="FAN_SPEED|CHECK_INTERVAL|CPU_TEMPERATURE_THRESHOLD|CPU_TEMPERATURE_SOURCE|MONITORING_ONLY_MODE|DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE|KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT|PARAMETER_NAME"
 
-  assert_equals "0" "$VALIDATORS" \
-    "a parameter validator should refuse through print_configuration_error_and_exit, not through a single line"
+  local OFFENDERS
+  OFFENDERS=$(grep -nE "print_error_and_exit .*($PARAMETERS)" \
+    "$REPO_ROOT/functions.sh" "$REPO_ROOT/Dell_iDRAC_fan_controller.sh" | grep -v "would otherwise" || true)
+
+  assert_empty "$OFFENDERS" \
+    "a refused configuration parameter should report through print_configuration_error_and_exit, not as a single line"
 }
