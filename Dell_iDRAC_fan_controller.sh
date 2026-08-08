@@ -134,6 +134,14 @@ echo ""
 TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 # Set the flag used to check if the active fan control profile has changed
 IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
+# The comment column explains a profile CHANGE, and the first cycle changes nothing:
+# it establishes the profile. Without this, whichever branch the first cycle takes
+# stays silent -- and since the flag above starts at true, the silent one is the
+# fail-safe branch, so a server whose sensors could not be read has its fans handed
+# to Dell's profile with no explanation, which is exactly when the user needs one.
+# No starting value of that flag fixes it: setting it the other way just moves the
+# silence onto the healthy path
+IS_FIRST_MONITORING_CYCLE=true
 # Tracks whether the target server was powered off on the previous cycle, so temperatures can be
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
@@ -312,7 +320,7 @@ while true; do
   if is_any_CPU_overheating; then
     apply_Dell_default_fan_control_profile
 
-    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
+    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 
       # is_any_CPU_overheating() collected every CPU concerned, however many of them there are, each
@@ -327,7 +335,7 @@ while true; do
     apply_user_fan_control_profile
 
     # Check if user fan control profile is applied then apply it if not
-    if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
+    if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=false
       # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included.
       # It says the temperatures are OK rather than that they decreased, because the Dell default profile
@@ -364,6 +372,7 @@ while true; do
     TABLE_HEADER_PRINT_COUNTER=0
   fi
   print_temperature_array_line "$CPU_COLUMN_CONTENT_WIDTH" "$INLET_TEMPERATURE" "$CPUS_TEMPERATURES" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
+  IS_FIRST_MONITORING_CYCLE=false
   ((TABLE_HEADER_PRINT_COUNTER++))
 
   wait $SLEEP_PROCESS_PID
