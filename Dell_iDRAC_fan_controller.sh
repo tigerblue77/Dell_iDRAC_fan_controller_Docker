@@ -238,9 +238,9 @@ while true; do
     # the controller drew and the rule it applied to draw it, rather than the symptom alone : a sensor
     # that went quiet is not a reason to stop watching a CPU, a CPU that is gone is
     if [ "${#REMOVED_CPU_LABELS[@]}" -eq 1 ]; then
-      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) has reported nothing for more than %ss. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) has reported nothing for more than %s. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$(format_duration_for_display "$CPU_TEMPERATURE_SENSOR_EXPIRY")" "$(format_detected_CPU_temperature_sensors)"
     elif [ "${#REMOVED_CPU_LABELS[@]}" -gt 1 ]; then
-      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) have reported nothing for more than %ss. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) have reported nothing for more than %s. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$(format_duration_for_display "$CPU_TEMPERATURE_SENSOR_EXPIRY")" "$(format_detected_CPU_temperature_sensors)"
     else
       printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
     fi

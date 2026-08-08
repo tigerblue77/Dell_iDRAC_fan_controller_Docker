@@ -363,6 +363,26 @@ function postpone_CPU_temperature_sensors_expiry() {
   done
 }
 
+# Renders a number of seconds the way a human writes a duration : 600 as "10m", not as "600s"
+# Usage : format_duration_for_display $SECONDS
+function format_duration_for_display() {
+  local -r TOTAL_SECONDS="$1"
+  local -r HOURS=$(( TOTAL_SECONDS / 3600 ))
+  local -r MINUTES=$(( TOTAL_SECONDS % 3600 / 60 ))
+  local -r REMAINING_SECONDS=$(( TOTAL_SECONDS % 60 ))
+  local RESULT=""
+
+  (( HOURS > 0 )) && RESULT+="${HOURS}h"
+  (( MINUTES > 0 )) && RESULT+="${MINUTES}m"
+  # The seconds are dropped when a bigger unit already carries the whole duration, so that 600 reads
+  # "10m" rather than "10m0s", but kept when nothing else was printed, so that 0 reads "0s"
+  if (( REMAINING_SECONDS > 0 )) || [ -z "$RESULT" ]; then
+    RESULT+="${REMAINING_SECONDS}s"
+  fi
+
+  printf '%s' "$RESULT"
+}
+
 # Describes the detected CPU temperature sensors, along with the IPMI entities they are read from : that
 # is what the README asks users to correlate with their own "ipmitool sdr type temperature" output
 # Usage : format_detected_CPU_temperature_sensors
