@@ -16,7 +16,7 @@ function test_the_controller_applies_the_user_fan_control_profile_on_a_healthy_s
   assert_contains "$OUTPUT" "Check interval: 5s"
   assert_contains "$OUTPUT" "CPU 1  CPU 2 " "a dual CPU server gets two CPU columns"
   assert_contains "$OUTPUT" "User static fan control profile (5%)"
-  assert_contains "$OUTPUT" "CPU temperature decreased and is now OK (<= 50°C), user's fan control profile applied."
+  assert_contains "$OUTPUT" "All CPU temperatures are now OK (<= 50°C), user's fan control profile applied."
   assert_not_contains "$OUTPUT" "temperature is too high" "cold CPUs must never trigger the safety profile"
   assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
     "Dell's dynamic profile is only applied once, when the container is stopped"
@@ -39,6 +39,39 @@ function test_the_controller_falls_back_on_the_dell_default_profile_when_a_cpu_s
   else
     fail "Dell's dynamic fan control profile should have been applied to the overheating server"
   fi
+}
+
+function test_the_comment_closing_a_fallback_says_the_temperatures_are_ok_not_that_they_decreased() {
+  # Symmetric with the clause naming the CPUs that opened the fallback, plural
+  # included. It states that the temperatures are OK rather than that they
+  # decreased, because the Dell default profile is also applied when a reading
+  # cannot be parsed at all : on that path nothing ever went up, so claiming
+  # something came back down would contradict the "could not be read" comment
+  # printed when it happened, and send the user looking for a heat problem they
+  # never had
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "81 78"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "42 44")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  local -r OUTPUT=$(run_controller "now OK")
+
+  assert_contains "$OUTPUT" " 81°C   78°C     34°C  Dell default dynamic fan control profile" \
+    "the hot reading must keep the server on Dell's profile"
+  assert_contains "$OUTPUT" "All CPU temperatures are now OK (<= 50°C), user's fan control profile applied."
+  assert_not_contains "$OUTPUT" "decreased" "a reading that was never obtained cannot have decreased"
+}
+
+function test_the_comment_closing_a_fallback_is_written_in_the_singular_on_a_single_cpu_server() {
+  simulate_server "PowerEdge R230" --cpus 1 --cpu-temperatures "81"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 1 --cpu-temperatures "42")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  local -r OUTPUT=$(run_controller "now OK")
+
+  assert_contains "$OUTPUT" "CPU temperature is now OK (<= 50°C), user's fan control profile applied."
+  assert_not_contains "$OUTPUT" "All CPU temperatures" "a server with one CPU has nothing to write in the plural"
 }
 
 function test_the_controller_explains_a_fallback_caused_by_a_sensor_that_dropped_out() {
@@ -78,7 +111,7 @@ function test_the_controller_reports_a_single_cpu_server() {
 
   local -r OUTPUT=$(run_controller)
 
-  assert_contains "$OUTPUT" "No CPU2 temperature sensor detected."
+  assert_contains "$OUTPUT" "1 CPU temperature sensor detected (entity 3.1)."
   assert_contains "$OUTPUT" "Inlet  CPU 1  Exhaust" "a single CPU server gets a single CPU column"
   assert_not_contains "$OUTPUT" "CPU 2 "
 }
@@ -91,9 +124,9 @@ function test_the_controller_reports_a_quad_cpu_server() {
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge R930"
-  assert_contains "$OUTPUT" "CPU 1  CPU 2  Exhaust" "only the first two CPUs are monitored today"
-  assert_not_contains "$OUTPUT" "CPU 3 "
-  assert_contains "$OUTPUT" " 41°C   40°C" "the readings must not be shifted by the two-digit sensor IDs"
+  assert_contains "$OUTPUT" "4 CPU temperature sensors detected (entities 3.1 3.2 3.3 3.4)."
+  assert_contains "$OUTPUT" "CPU 1  CPU 2  CPU 3  CPU 4  Exhaust" "all four sockets get their own column"
+  assert_contains "$OUTPUT" " 41°C   40°C   39°C   38°C" "the readings must not be shifted by the two-digit sensor IDs"
 }
 
 function test_the_controller_reports_a_server_without_an_exhaust_sensor() {
@@ -242,4 +275,28 @@ function test_stopping_the_container_restores_dells_profile_whatever_the_generat
       fail "$MODEL should be sent Dell's dynamic fan control profile on exit"
     fi
   done
+}
+
+function test_a_removed_cpu_is_reported_as_removed_and_not_merely_as_silent() {
+  # The decision is deterministic, so the line has to say what the controller
+  # concluded and the rule it applied, not just that a sensor went quiet : a
+  # sensor going quiet is not a reason to stop watching a CPU, a CPU being gone
+  # is. The CPUs are named with the labels their columns carried until then,
+  # which is what the reader has just been looking at.
+  # Removals are only concluded across a power cycle, so the server is switched
+  # off and back on with two CPUs fewer, and the smaller set is then confirmed by
+  # a second reading
+  simulate_server "PowerEdge R930" --cpus 4 --cpu-temperatures "41 40 39 38"
+  export MOCK_IPMITOOL_POWER_STATUS_SEQUENCE MOCK_IPMITOOL_SDR_SECOND_OUTPUT MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS
+  MOCK_IPMITOOL_POWER_STATUS_SEQUENCE="on on off on"
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "41 40")
+  MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=2
+
+  local -r OUTPUT=$(run_controller "considered removed")
+
+  assert_contains "$OUTPUT" "CPU 3 and CPU 4 are considered removed from the server" \
+    "the line must state the conclusion, with the labels the table was showing"
+  assert_contains "$OUTPUT" "(entities 3.3 and 3.4)" \
+    "and the entities, so the line can be matched against an ipmitool output"
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)."
 }
