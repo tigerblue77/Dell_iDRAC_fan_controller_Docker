@@ -149,8 +149,12 @@ IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 # No starting value of that flag fixes it: setting it the other way just moves the
 # silence onto the healthy path
 IS_FIRST_MONITORING_CYCLE=true
-# Tracks whether the target server was powered off on the previous cycle, so temperatures can be
-# refreshed right when it powers back on instead of reusing data read before/during the outage
+# Tracks whether the previous cycle was skipped, so temperatures can be refreshed the moment the
+# server comes back instead of reusing data read before/during the outage. Set by both reasons a
+# cycle is skipped, the readings being equally stale either way
+IS_TARGET_SERVER_UNAVAILABLE=false
+# Tracks whether that outage was the server actually being powered off, as opposed to an iDRAC we
+# could not reach. Only the first can have changed the CPUs, and only it may open the removal window
 IS_TARGET_SERVER_POWERED_OFF=false
 
 # Start timer in background
@@ -166,9 +170,12 @@ SLEEP_PROCESS_PID=$!
 # A server that does answer is a different matter, and is handled inside the loop : it has CPUs, so
 # reporting none of them is a fault to report rather than a state to wait out
 while true; do
+  # Either outcome get_server_power_state reports as non-zero -- powered off, or an iDRAC that cannot be
+  # reached at all -- means no sensor can be read yet, which is what this loop waits on. They are only
+  # worth telling apart once the monitoring loop is running and a profile is actually being held
   IS_TARGET_SERVER_ANSWERING=true
-  if $NETWORK_MODE && ! is_server_powered_on; then
-    IS_TARGET_SERVER_ANSWERING=false
+  if $NETWORK_MODE; then
+    get_server_power_state || IS_TARGET_SERVER_ANSWERING=false
   fi
 
   if $IS_TARGET_SERVER_ANSWERING; then
@@ -238,29 +245,53 @@ fi
 # Start monitoring
 while true; do
   # In network mode, if the target server is powered off, skip this cycle entirely: don't read
-  # temperatures (they would be meaningless) and don't apply any fan control profile
-  if $NETWORK_MODE && ! is_server_powered_on; then
-    IS_TARGET_SERVER_POWERED_OFF=true
-    set_log_timestamp TIMESTAMP
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
+  # temperatures (they would be meaningless) and don't apply any fan control profile.
+  # A cycle is also skipped when the iDRAC can't be reached at all, but the two are reported
+  # separately: one is a machine that is legitimately off, the other is a server we may well be
+  # holding at a static fan speed with no way to see or change anything about it
+  if $NETWORK_MODE; then
+    get_server_power_state
+    TARGET_SERVER_POWER_STATE=$?
 
-    wait $SLEEP_PROCESS_PID
+    if [ $TARGET_SERVER_POWER_STATE -ne 0 ]; then
+      IS_TARGET_SERVER_UNAVAILABLE=true
+      set_log_timestamp TIMESTAMP
 
-    # Start timer in background for next cycle
-    sleep "$CHECK_INTERVAL" &
-    SLEEP_PROCESS_PID=$!
-    continue
+      if [ $TARGET_SERVER_POWER_STATE -eq 2 ]; then
+        # Deliberately not flagged as powered off : we did not observe the server, we failed to ask.
+        # A dropped session or a LAN flap leaves it running, and its CPUs cannot have changed
+        printf "%19s  Cannot reach the iDRAC, target server state unknown and fan control profile left as-is. ipmitool said: %s\n" "$TIMESTAMP" "$IPMI_UNREACHABLE_REASON" >&2
+      else
+        IS_TARGET_SERVER_POWERED_OFF=true
+        printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
+      fi
+
+      wait $SLEEP_PROCESS_PID
+
+      # Start timer in background for next cycle
+      sleep "$CHECK_INTERVAL" &
+      SLEEP_PROCESS_PID=$!
+      continue
+    fi
   fi
 
   # The server just powered back on: refresh temperatures now instead of evaluating stale data read
   # before/during the outage (could be the initial pre-loop reading, or readings from before it powered off)
-  if $IS_TARGET_SERVER_POWERED_OFF; then
-    IS_TARGET_SERVER_POWERED_OFF=false
-    # It has just been switched off and on again, which is the only way its CPUs can have changed : open
-    # the window during which one is allowed to leave the monitored set
-    IS_CPU_REMOVAL_ALLOWED=true
-    PENDING_CPU_REMOVAL_SIGNATURE=""
-    PENDING_CPU_REMOVAL_READINGS=0
+  if $IS_TARGET_SERVER_UNAVAILABLE; then
+    IS_TARGET_SERVER_UNAVAILABLE=false
+
+    # Only a server that was really switched off and on again can have changed CPUs, so only that opens
+    # the window during which one is allowed to leave the monitored set. An iDRAC we merely could not
+    # reach says nothing about the machine : it kept running, and treating the outage as a power cycle
+    # would let five unreadable readings after a LAN flap drop a socket that never went anywhere
+    if $IS_TARGET_SERVER_POWERED_OFF; then
+      IS_TARGET_SERVER_POWERED_OFF=false
+      IS_CPU_REMOVAL_ALLOWED=true
+      PENDING_CPU_REMOVAL_SIGNATURE=""
+      PENDING_CPU_REMOVAL_READINGS=0
+    fi
+
+    # Refreshed after either outage : the readings taken before or during it are equally stale
     retrieve_temperatures
   fi
 
