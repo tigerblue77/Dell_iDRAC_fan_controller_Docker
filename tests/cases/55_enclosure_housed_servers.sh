@@ -15,23 +15,24 @@
 # They also report no exhaust sensor, the airflow leaving through the enclosure
 # rather than through the server, and some of them report no inlet sensor either.
 
-function test_every_enclosure_housed_server_is_detected_as_gen_13_or_older() {
-  # Dell never named a blade or a sled "[RT]<digit><digit>0", so the name-based
-  # detection cannot see a single one of them : a 2023 MX760c is treated exactly
-  # like a 2007 M600. This documents that blind spot rather than wishes it away
-  local ENTRY GENERATION MODEL EXPECTED_FLAG
+function test_an_enclosure_housed_server_is_told_the_cooling_response_is_not_its_to_set() {
+  # A blade or a sled has no fan of its own, so its iDRAC refuses Dell's OEM
+  # cooling response command whatever its generation. The controller used to read
+  # the generation off the model name and, since Dell never named a blade
+  # "[RT]<digit><digit>0", treated a 2023 MX760c exactly like a 2007 M600 : it
+  # sent the command forever and reported it applied. Asking the server settles it
+  # for every one of them, without a name to recognize
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_enclosure_housed_server "PowerEdge MX760c" --cpus 2
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30|0x30 0xce"
 
-  while IFS= read -r ENTRY; do
-    IFS='|' read -r GENERATION MODEL _ EXPECTED_FLAG _ _ <<< "$ENTRY"
+  local -r OUTPUT=$(run_controller "Not supported by this server")
 
-    local ACTUAL_FLAG=false
-    if is_detected_as_gen_14_or_newer "$MODEL"; then
-      ACTUAL_FLAG=true
-    fi
-
-    assert_equals "$EXPECTED_FLAG" "$ACTUAL_FLAG" \
-      "$MODEL (Gen $GENERATION) should be detected as gen 14 or newer = $EXPECTED_FLAG"
-  done < <(catalogue_entries_housed_in_an_enclosure)
+  assert_matches "$OUTPUT" "fan control profile.*Not supported by this server" \
+    "the table must report what the sled answered, not what the user asked for"
+  # The one asked on the first cycle, plus the one graceful_exit sends on the way out
+  assert_equals "2" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "the sled answered rsp=0xc1, which settles it on the first try"
 }
 
 function test_the_catalogue_covers_every_enclosure_dell_shipped() {
@@ -58,14 +59,14 @@ function test_the_catalogue_covers_every_enclosure_dell_shipped() {
   # an M1000e : a model listed for the VRTX alone would be a catalogue mistake
   local ENTRY MODEL ENCLOSURES
   while IFS= read -r ENTRY; do
-    IFS='|' read -r _ MODEL _ _ _ ENCLOSURES <<< "$ENTRY"
+    IFS='|' read -r _ MODEL _ _ ENCLOSURES <<< "$ENTRY"
     assert_equals "M1000e/VRTX" "$ENCLOSURES" "$MODEL fits a VRTX, it must fit an M1000e too"
   done < <(catalogue_entries_housed_in_enclosure "VRTX")
 
   # Every enclosure-housed server must be marked as such in the fan control
   # column too, the two columns describing the same fact from both ends
   while IFS= read -r ENTRY; do
-    IFS='|' read -r _ MODEL _ _ SUPPORT _ <<< "$ENTRY"
+    IFS='|' read -r _ MODEL _ SUPPORT _ <<< "$ENTRY"
     assert_equals "chassis-managed" "$SUPPORT" \
       "$MODEL is housed in an enclosure, its fans cannot be driven through its own iDRAC"
   done < <(catalogue_entries_housed_in_an_enclosure)
@@ -77,7 +78,7 @@ function test_a_blade_reports_no_exhaust_temperature_sensor() {
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "43 45" --inlet 24 --no-exhaust)
 
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}"
   assert_equals "24" "$INLET_TEMPERATURE"
@@ -92,7 +93,7 @@ function test_a_sled_whose_enclosure_owns_the_airflow_reports_no_temperature_aro
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "47 48" --no-inlet --no-exhaust)
 
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_equals "47" "${DETECTED_CPU_TEMPERATURES[0]}"
   assert_equals "48" "${DETECTED_CPU_TEMPERATURES[1]}"
@@ -109,7 +110,7 @@ function test_every_enclosure_housed_server_reports_its_rejected_fan_control_com
 
   local ENTRY MODEL SOCKETS
   while IFS= read -r ENTRY; do
-    IFS='|' read -r _ MODEL SOCKETS _ _ _ <<< "$ENTRY"
+    IFS='|' read -r _ MODEL SOCKETS _ _ <<< "$ENTRY"
     simulate_server "$MODEL" --cpus "$SOCKETS" --no-exhaust
 
     get_Dell_server_model
@@ -173,43 +174,6 @@ function test_an_overheating_blade_still_falls_back_on_dells_profile() {
   else
     fail "the overheating blade should have been sent Dell's dynamic fan control profile"
   fi
-}
-
-function test_the_third_party_pcie_card_command_still_reaches_the_most_recent_sleds() {
-  # The consequence of the blind spot the first test case documents : an MX760c
-  # is a 2023 server, but the controller believes it is Gen 13 or older and keeps
-  # sending it the third-party PCIe card cooling response command, which only
-  # exists up to Gen 13. Harmless (the answer is discarded on purpose) but real,
-  # and this pins it so that improving the detection shows up here.
-  #
-  # KEEP_..._ON_EXIT is set because graceful_exit() resets the cooling response
-  # whatever the generation : leaving it to its default would have every server
-  # send that command once on the way out, and the assertion below would then
-  # hold for a Gen 14 server too, checking nothing at all.
-  #
-  # An R740, which the detection does recognize, is run through the same body as
-  # the negative control. Without it, nothing in this test would fail if the
-  # command started being sent to everyone, or to no one
-  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
-  export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=true
-
-  simulate_enclosure_housed_server "PowerEdge MX760c" --cpus 2
-  local -r SLED_OUTPUT=$(run_controller)
-
-  assert_contains "$SLED_OUTPUT" "Server model: DELL PowerEdge MX760c"
-  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 1 ]; then
-    pass
-  else
-    fail "the MX760c is detected as Gen 13 or older, so it is sent the third-party PCIe card command"
-  fi
-
-  forget_recorded_ipmitool_calls
-  simulate_enclosure_housed_server "PowerEdge R740" --cpus 2
-  local -r RACK_OUTPUT=$(run_controller)
-
-  assert_contains "$RACK_OUTPUT" "Server model: DELL PowerEdge R740"
-  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
-    "an R740 is detected as Gen 14 or newer, so the very same run must not send that command"
 }
 
 function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_safe() {

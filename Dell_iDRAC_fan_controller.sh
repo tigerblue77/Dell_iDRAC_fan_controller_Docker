@@ -7,6 +7,11 @@
 source functions.sh
 source constants.sh
 
+# Dell's "third-party PCIe card default cooling response" is an OEM command that not every server
+# takes, and the monitoring loop below finds out by sending it and reading the answer rather than by
+# guessing from the model name
+IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+
 # Trap the signals for container exit and run graceful_exit function
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
@@ -111,13 +116,6 @@ fi
 # CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
 # instead of counting values, which no longer depends on the server generation
 
-# If server model is Gen 14 (*40) or newer
-if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
-else
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
-fi
-
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
@@ -153,9 +151,6 @@ IS_FIRST_MONITORING_CYCLE=true
 # Tracks whether the target server was powered off on the previous cycle, so temperatures can be
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
-
-# Check present sensors
-IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 
 # Start timer in background
 sleep "$CHECK_INTERVAL" &
@@ -193,7 +188,8 @@ while true; do
   if ! $IS_TARGET_SERVER_ANSWERING; then
     # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
     # same powered-off server, only observed before the first reading rather than after
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+    set_log_timestamp TIMESTAMP
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
   elif ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
     # The server answers but exposes nothing readable. Logged once only, to say why the container isn't
     # printing temperatures yet without flooding the logs every cycle
@@ -208,10 +204,11 @@ while true; do
     fi
 
     # The profile is only claimed when it was really sent : applying it is a no-op in monitoring only mode
+    set_log_timestamp TIMESTAMP
     if $MONITORING_ONLY_MODE; then
-      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
+      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$TIMESTAMP" "$WAITING_REASON"
     else
-      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
+      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$TIMESTAMP" "$WAITING_REASON"
     fi
   fi
 
@@ -229,15 +226,15 @@ echo "$(format_detected_CPU_temperature_sensors)."
 
 warn_if_unexpected_number_of_CPUs
 
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
+retrieve_temperatures "$SDR_TEMPERATURE_DATA"
 
+# Reported for information only. Most servers printing this line genuinely have no exhaust sensor --
+# blades and enclosure-housed sleds never do -- so the wording stays as it was ; what changed is that
+# the line no longer decides anything. The sensor is read again on every cycle, so a chassis whose
+# sensors were merely not readable at this instant starts showing its temperature as soon as they
+# answer, instead of being written off for the container's lifetime
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
-  IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
-  # This reading was taken before the sensor was known to be absent, so it holds an empty string where
-  # every later cycle will hold the "-" placeholder. Backfilling it here keeps the first printed line
-  # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
-  EXHAUST_TEMPERATURE="-"
 fi
 # Output new line to beautify output
 echo ""
@@ -253,7 +250,8 @@ while true; do
   # temperatures (they would be meaningless) and don't apply any fan control profile
   if $NETWORK_MODE && ! is_server_powered_on; then
     IS_TARGET_SERVER_POWERED_OFF=true
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+    set_log_timestamp TIMESTAMP
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
 
     wait $SLEEP_PROCESS_PID
 
@@ -272,7 +270,7 @@ while true; do
     IS_CPU_REMOVAL_ALLOWED=true
     PENDING_CPU_REMOVAL_SIGNATURE=""
     PENDING_CPU_REMOVAL_READINGS=0
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+    retrieve_temperatures
   fi
 
   # Follow the CPUs the server exposes : one may have been added while it was powered off, one may have
@@ -304,12 +302,16 @@ while true; do
     # count : it is the only trace left that the server used to have it. The line states the conclusion
     # the controller drew and the rule it applied to draw it, rather than the symptom alone : a sensor
     # that went quiet is not a reason to stop watching a CPU, a CPU that is gone is
+    set_log_timestamp TIMESTAMP
+    DETECTED_CPU_TEMPERATURE_SENSORS=$(format_detected_CPU_temperature_sensors)
     if [ "${#REMOVED_CPU_LABELS[@]}" -eq 1 ]; then
-      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$TIMESTAMP" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_REMOVAL_CONFIRMING_READINGS" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     elif [ "${#REMOVED_CPU_LABELS[@]}" -gt 1 ]; then
-      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
+      REMOVED_CPU_LABELS_ENUMERATION=$(join_with_and "${REMOVED_CPU_LABELS[@]}")
+      REMOVED_CPU_ENTITY_IDS_ENUMERATION=$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")
+      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$TIMESTAMP" "$REMOVED_CPU_LABELS_ENUMERATION" "$REMOVED_CPU_ENTITY_IDS_ENUMERATION" "$CPU_REMOVAL_CONFIRMING_READINGS" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     else
-      printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s.\n" "$TIMESTAMP" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     fi
 
     # Checked again here and not only at startup : a mis-parse can just as well show up mid-run
@@ -319,7 +321,7 @@ while true; do
     # entity list rather than reused from before it changed. The same data is handed back rather than
     # fetched again : following the CPUs then costs no IPMI round-trip at all, and the readings keep
     # describing the very instant the set was detected on
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
+    retrieve_temperatures "$SDR_TEMPERATURE_DATA"
   fi
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
@@ -357,20 +359,44 @@ while true; do
     fi
   fi
 
-  # If server model is not Gen 14 (*40) or newer
-  if ! $DELL_POWEREDGE_GEN_14_OR_NEWER; then
+  # The third-party PCIe card Dell default cooling response is an OEM command that not every server
+  # takes : it no longer exists from the 14th generation on, and a blade or a modular sled has no fan
+  # of its own to apply it to. Which servers those are cannot be read from the model name — Dell never
+  # named the AMD, dense and modular models to a scheme a pattern could follow, so a name-based check
+  # told an R6515 or an MX740c apart from an R730 exactly backwards (issue #173).
+  #
+  # So ask the server and report what it answered. A command that failed is not a verdict on its own :
+  # ipmitool exits non-zero both for a command the BMC does not have and for a BMC it never reached, and
+  # only the completion code it prints tells the two apart. The controller therefore stops asking on the
+  # first genuine "I do not have this command", and never on a network outage, however long it lasts
+  if $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
     # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
     if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Disabled"
       disable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
     else
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Enabled"
       enable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
     fi
+    # The status of the command the branch above just ran
+    THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE=$?
 
-    if "$MONITORING_ONLY_MODE"; then
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+    if [ $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE -eq 0 ]; then
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
+
+      if "$MONITORING_ONLY_MODE"; then
+        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+      fi
+    elif does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
+      # The BMC answered, and answered that it does not have this command. That will not change while
+      # this container runs, so stop sending it
+      IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+    else
+      # The command did not go through, but nothing says the server refused it : an unreachable iDRAC, a
+      # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
     fi
   fi
 
@@ -389,5 +415,5 @@ while true; do
   sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures
 done

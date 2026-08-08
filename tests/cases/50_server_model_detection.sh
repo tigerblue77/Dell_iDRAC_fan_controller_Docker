@@ -1,110 +1,16 @@
 #!/bin/bash
 
-# Identification of the server, and the single decision that depends on it :
-# whether it is a 14th generation PowerEdge or newer. Gen 14+ servers must not be
-# sent the third-party PCIe card cooling response command, which only exists on
-# Gen 13 and older.
+# Identification of the server : reading its manufacturer and model out of the
+# FRU inventory, and refusing to run when the iDRAC cannot be reached at all.
 #
-# The catalogue driving these tests covers every generation from the 9th (2006)
-# to the 17th (2024), including the recent ones whose firmware no longer accepts
-# Dell's IPMI raw fan control commands at all.
-
-# Shared body of the nine per-generation test cases
-function assert_generation_is_detected_as_the_catalogue_expects() {
-  local -r GENERATION="$1"
-  local ENTRY MODEL EXPECTED_FLAG
-
-  while IFS= read -r ENTRY; do
-    IFS='|' read -r _ MODEL _ EXPECTED_FLAG _ _ <<< "$ENTRY"
-
-    local ACTUAL_FLAG=false
-    if is_detected_as_gen_14_or_newer "$MODEL"; then
-      ACTUAL_FLAG=true
-    fi
-
-    assert_equals "$EXPECTED_FLAG" "$ACTUAL_FLAG" \
-      "$MODEL (Gen $GENERATION) should be detected as gen 14 or newer = $EXPECTED_FLAG"
-  done < <(catalogue_entries_of_generation "$GENERATION")
-}
-
-function test_every_9th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 9
-}
-
-function test_every_10th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 10
-}
-
-function test_every_11th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 11
-}
-
-function test_every_12th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 12
-}
-
-function test_every_13th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 13
-}
-
-function test_every_14th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 14
-}
-
-function test_every_15th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 15
-}
-
-function test_every_16th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 16
-}
-
-function test_every_17th_generation_model_is_detected_as_the_catalogue_expects() {
-  assert_generation_is_detected_as_the_catalogue_expects 17
-}
-
-function test_the_models_named_outside_dells_usual_scheme_are_not_detected_as_gen_14_or_newer() {
-  # Documents a known blind spot of the name-based detection rather than a wish :
-  # these servers are Gen 14 or newer but their name carries no "[RT]<digit><digit>0",
-  # so the controller treats them as Gen 13 or older and keeps sending them the
-  # third-party PCIe card cooling response command (which their BMC rejects, and
-  # the controller discards that rejection on purpose)
-  local MODEL
-  for MODEL in \
-    "PowerEdge R6415" "PowerEdge R7425" "PowerEdge C6420" "PowerEdge M640" "PowerEdge MX740c" \
-    "PowerEdge R6515" "PowerEdge R7525" "PowerEdge XR11" \
-    "PowerEdge R6615" "PowerEdge R7625" "PowerEdge XE9680" \
-    "PowerEdge R6715" "PowerEdge R7725" "PowerEdge XE7745"; do
-    if is_detected_as_gen_14_or_newer "$MODEL"; then
-      fail "$MODEL is currently detected as gen 14 or newer" \
-        "the detection is a match on the model name, update the catalogue if it was improved"
-    else
-      pass
-    fi
-  done
-}
-
-function test_the_detection_relies_on_the_uppercase_letter_directly_before_the_digits() {
-  # The optional whitespace is what makes "PowerEdge R 740" work...
-  assert_matches "PowerEdge R 740" "$GENERATION_14_OR_NEWER_REGEX" "a space between the letter and the digits is tolerated"
-  assert_matches "PowerEdge T 640" "$GENERATION_14_OR_NEWER_REGEX"
-  # ...but the letter itself is matched case-sensitively, and nothing else stands in for it
-  if is_detected_as_gen_14_or_newer "poweredge r740"; then
-    fail "a lowercase model name should not be detected as gen 14 or newer"
-  else
-    pass
-  fi
-  if is_detected_as_gen_14_or_newer ""; then
-    fail "an empty model name should not be detected as gen 14 or newer"
-  else
-    pass
-  fi
-  if is_detected_as_gen_14_or_newer "Super Server X11DPi-N"; then
-    fail "a model name from another manufacturer should not be detected as gen 14 or newer"
-  else
-    pass
-  fi
-}
+# Nothing the controller does depends on the model name any more. It used to
+# decide from it whether the server was a 14th generation PowerEdge or newer, and
+# that decision is now taken by asking the server itself (issue #173), so the
+# model is only ever logged — it helps whoever reads a posted output, and that is
+# all it is for.
+#
+# The catalogue driving the tests here and in 55_enclosure_housed_servers.sh
+# covers every generation from the 9th (2006) to the 17th (2024).
 
 function test_the_server_model_is_read_from_the_fru_product_fields() {
   export MOCK_IPMITOOL_FRU_OUTPUT
@@ -180,7 +86,7 @@ function test_the_catalogue_covers_every_generation_and_typology_without_duplica
 
   local ENTRY
   for ENTRY in "${DELL_SERVER_CATALOGUE[@]}"; do
-    assert_matches "$ENTRY" '^(9|1[0-7])\|[^|]+\|[124]\|(true|false)\|(supported|firmware-dependent|unsupported|chassis-managed)\|(standalone|[A-Za-z0-9-]+(/[A-Za-z0-9-]+)*)$' \
+    assert_matches "$ENTRY" '^(9|1[0-7])\|[^|]+\|[124]\|(supported|firmware-dependent|unsupported|chassis-managed)\|(standalone|[A-Za-z0-9-]+(/[A-Za-z0-9-]+)*)$' \
       "malformed catalogue entry"
   done
 }

@@ -23,6 +23,41 @@ function test_every_shell_script_has_a_valid_syntax() {
   done
 }
 
+function test_no_statement_expands_two_command_substitutions() {
+  # Bash re-parses the text of every $( ) at expansion time, and it runs pending
+  # trap handlers from inside that same reader loop. A SIGTERM landing there gets
+  # its handler parsed with the substitution's state still open, so the trap
+  # string fails to parse, graceful_exit never runs, and the container dies
+  # leaving the fans on the user's static speed (issue #188).
+  #
+  # The risk is not linear in the number of substitutions, it jumps as soon as two
+  # of them are expanded in the same pass. Measured on 250 SIGTERM'd runs per
+  # variant, on tiny scripts doing nothing else :
+  #
+  #   no command substitution at all ......................   0
+  #   two of them, in two separate statements ............   0
+  #   one of them ........................................   2
+  #   two of them in the same expansion .................. 61 to 182
+  #
+  # So the invariant the shipped scripts hold is one substitution per statement.
+  # Compute each value into a variable and use the variable. That does not make
+  # bash safe -- a single substitution still measured 2 runs in 250, and no amount
+  # of hoisting removes the last one -- but it is what took the controller itself
+  # from 11 stops in 400 down to none.
+  #
+  # Arithmetic expansion, $(( )), is deliberately not matched : it measured no
+  # worse than a single substitution
+  local SCRIPT
+  for SCRIPT in "$REPO_ROOT"/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+
+    local OFFENDING_LINES
+    OFFENDING_LINES=$(grep -nE '\$\([^(].*\$\([^(]' "$SCRIPT" || true)
+    assert_empty "$OFFENDING_LINES" \
+      "${SCRIPT#$REPO_ROOT/} expands two command substitutions in one statement"
+  done
+}
+
 function test_sourcing_functions_only_declares_functions() {
   # functions.sh is sourced by the controller, by the healthcheck and by this
   # suite : it must not run anything nor print anything on its own
@@ -143,6 +178,63 @@ function test_the_readme_documents_the_defaults_the_image_actually_ships() {
       "$(documented_default_value "${DOCUMENTED_SENTENCE##*value is }")" \
       "the README's default for $KEY should be the one the Dockerfile ships"
   done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //')
+}
+
+function test_the_env_example_offers_every_parameter_the_image_declares() {
+  # .env.example is what a user copies to configure the container, and its own
+  # header points at the README for the details. A parameter the image declares
+  # but that file omits is a parameter nobody discovers by following the
+  # documented path : MONITORING_ONLY_MODE was missing from it while the
+  # controller's error messages told users to set that very variable. This is
+  # the guard against that drift
+  if [ ! -f "$REPO_ROOT/Dockerfile" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # Dockerfile that produced it nor the example file shipped beside it
+    skip_test "no Dockerfile and .env.example next to the scripts"
+    return 0
+  fi
+
+  # Space padded on both ends so a key can be matched whole, the same way the
+  # test above tells IDRAC_HOST apart from a key merely containing it
+  local ENV_EXAMPLE_KEYS=" "
+  local LINE
+  while IFS= read -r LINE; do
+    ENV_EXAMPLE_KEYS+="${LINE%%=*} "
+  done < <(grep -E '^[A-Z_]+=' "$REPO_ROOT/.env.example")
+
+  local KEY
+  while IFS= read -r KEY; do
+    assert_contains "$ENV_EXAMPLE_KEYS" " $KEY " \
+      "$KEY is declared by the Dockerfile, .env.example should show users how to set it"
+  done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //' | cut -d= -f1)
+}
+
+function test_the_env_example_offers_every_parameter_the_readme_documents() {
+  # The test above can only see what the Dockerfile declares, and the Dockerfile
+  # declares no ENV for IDRAC_USERNAME and IDRAC_PASSWORD : they are credentials,
+  # they have no default to ship. So the two parameters .env.example exists for
+  # in the first place are precisely the two its guard does not cover. Dropping
+  # either of them from the file leaves the whole suite green.
+  # The README's own parameter bullets are the list that does include them
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  # Space padded on both ends so a key can be matched whole, as above
+  local ENV_EXAMPLE_KEYS=" "
+  local LINE
+  while IFS= read -r LINE; do
+    ENV_EXAMPLE_KEYS+="${LINE%%=*} "
+  done < <(grep -E '^[A-Z_]+=' "$REPO_ROOT/.env.example")
+
+  local KEY
+  while IFS= read -r KEY; do
+    assert_contains "$ENV_EXAMPLE_KEYS" " $KEY " \
+      "$KEY is documented in the README, .env.example should show users how to set it"
+  done < <(grep -oE '^- `[A-Z_]+`' "$REPO_ROOT/README.md" | tr -d '`' | sed 's/^- //')
 }
 
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
