@@ -163,3 +163,24 @@ function test_the_healthcheck_fails_when_the_sensors_cannot_be_read() {
 
   assert_not_equals 0 "$EXIT_CODE" "the healthcheck should fail when ipmitool fails, so Docker restarts the container"
 }
+
+function test_the_env_example_offers_every_documented_parameter() {
+  # .env.example is what README.md tells users to copy to .env, and a parameter
+  # missing from it is one they never learn they can set : it is not in the file
+  # they edit, and the README bullet describing it is several screens away from
+  # the copy instruction. MONITORING_ONLY_MODE was absent from it for exactly
+  # that reason, documented everywhere else and in none of the .env files
+  local -r README="$REPO_ROOT/README.md"
+  local -r ENV_EXAMPLE="$REPO_ROOT/.env.example"
+
+  local PARAMETER
+  while IFS= read -r PARAMETER; do
+    # The credentials are the reason the file exists, the rest are settings
+    if grep -q "^$PARAMETER=" "$ENV_EXAMPLE"; then
+      pass
+    else
+      fail "$PARAMETER is documented in the README but absent from .env.example" \
+        "add it to $ENV_EXAMPLE, or stop documenting it"
+    fi
+  done < <(grep -oP '^- `\K[A-Z_]+(?=`)' "$README")
+}
