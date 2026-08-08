@@ -2,6 +2,11 @@ name: Tests
 
 on:
   push:
+    # Branches are covered by their pull request. Without this, every push to a
+    # branch that has one runs the whole workflow twice, publishes the results
+    # twice, and leaves a skipped "event file" check behind. Keeping master is
+    # what gives the published results a baseline to compare against
+    branches: [master]
     paths-ignore:
       - "**/README.md"
   pull_request:

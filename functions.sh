@@ -59,6 +59,48 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
+# Stop the container unless the given parameter is a duration sleep can actually wait for
+# Usage : validate_check_interval_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# CHECK_INTERVAL is the monitoring loop's only pacing mechanism and reaches sleep as unchecked text.
+# The loop starts the timer in background then waits on its PID without ever looking at what wait
+# hands back, so nothing notices a sleep that refused to run : the cycle returns at once and the loop
+# runs at full speed, sending the 5 IPMI commands a cycle costs over LAN (4 locally, one fewer on
+# Gen 14 and newer) as fast as ipmitool completes them, with nothing in the log but sleep's own
+# two-line complaint each time.
+#
+# The Dockerfile's ENV CHECK_INTERVAL is a default, not a guarantee : any entry the user supplies for
+# the same key replaces it. Measured on Docker 29 and Compose v5, "-e CHECK_INTERVAL=", an --env-file
+# or compose line with nothing after the "=", and a compose "${CHECK_INTERVAL}" resolving to nothing
+# all arrive as an empty string, while a bare "-e CHECK_INTERVAL" whose host variable is unset drops
+# the variable altogether, which expands to the empty string just the same since strict bash mode is
+# disabled. The likeliest case isn't empty at all : docker takes everything after the "=" verbatim, so
+# an unfilled .env placeholder arrives as the literal "<seconds between each check>" text.
+#
+# GNU sleep accepts a unit suffix, so "90s" and "5m" do wait and are working configurations today.
+# They stay accepted here : rejecting a value that has been pacing a container correctly all along
+# would break it for no benefit. The fractional values sleep also accepts ("0.5") are refused all the
+# same, a sub-second cycle being exactly the hammering this check exists to prevent.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+function validate_check_interval_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
+    print_error_and_exit "$PARAMETER_NAME must be a number of seconds, optionally suffixed with s, m, h or d, but is \"$VALUE\""
+  fi
+
+  # Zero is the third failing case, and the only one sleep itself accepts : it parses fine, returns
+  # immediately, and spins the loop just like an unparseable value. It is therefore rejected on its own
+  # terms rather than on its format. The suffix is stripped and 10# forces base 10 so that a padded
+  # value ("00", "08") is read as the decimal number the user meant instead of an invalid octal one
+  if [ "$((10#${VALUE%[smhd]}))" -eq 0 ]; then
+    print_error_and_exit "$PARAMETER_NAME must be greater than zero, but is \"$VALUE\""
+  fi
+}
+
 # Set the IDRAC_LOGIN_STRING variable based on connection type
 # Usage : set_iDRAC_login_string $IDRAC_HOST $IDRAC_USERNAME $IDRAC_PASSWORD
 # Returns : IDRAC_LOGIN_STRING
