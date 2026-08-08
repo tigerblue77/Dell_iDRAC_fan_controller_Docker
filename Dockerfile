@@ -25,6 +25,16 @@ ENV IDRAC_HOST=local
 ENV FAN_SPEED=5
 ENV CPU_TEMPERATURE_THRESHOLD=50
 ENV CHECK_INTERVAL=5
+# Hand control back to iDRAC above this intake air temperature. 35°C is the ASHRAE A2 allowable
+# ceiling, the class the volume PowerEdge line is rated to, so above it a standard server is outside
+# its rated envelope while this container holds its fans at a fixed speed.
+# Raise it to 40 or 45 on an ASHRAE A3/A4 (Dell Fresh Air) machine, or set it empty to disable the
+# check entirely and keep the previous CPU-only behaviour
+ENV HIGH_INLET_TEMPERATURE_THRESHOLD=35
+# Low temperature protection, opt-in: left empty, its checks stay disabled
+ENV LOW_INLET_TEMPERATURE_THRESHOLD=
+ENV LOW_CPU_TEMPERATURE_THRESHOLD=
+ENV LOW_TEMPERATURE_FAN_SPEED=
 ENV DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
 ENV KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
 ENV MONITORING_ONLY_MODE=false
