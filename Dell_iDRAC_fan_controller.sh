@@ -126,7 +126,7 @@ echo "$(format_detected_CPU_temperature_sensors)."
 
 # Nothing is dropped when this triggers, every detected CPU is monitored : it only flags a count that no
 # Dell hardware can produce, which most likely means the sensors were mis-parsed
-if [ "$NUMBER_OF_DETECTED_CPUS" -gt "$UNEXPECTED_NUMBER_OF_CPUS_WARNING_THRESHOLD" ]; then
+if [ "$NUMBER_OF_DETECTED_CPUS" -gt "$MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER" ]; then
   # print_warning() emits no trailing newline, hence the echo
   print_warning "$NUMBER_OF_DETECTED_CPUS CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command"
   echo ""
