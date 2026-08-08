@@ -17,8 +17,6 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Prepare, format and define initial variables
 
-# readonly DELL_FRESH_AIR_COMPLIANCE=45
-
 # The boolean parameters are dispatched by running their value as a command ("if $MONITORING_ONLY_MODE"),
 # an idiom that is only safe once the value is known to be one of the two literals it expects : anything
 # else is read as false without a word, or run as whatever command it happens to name. Validate them
@@ -56,6 +54,55 @@ readonly IPMI_FAILURES_BEFORE_EXIT
 convert_fan_speed_parameter "$FAN_SPEED"
 readonly DECIMAL_FAN_SPEED="$DECIMAL_SPEED"
 readonly HEXADECIMAL_FAN_SPEED="$HEXADECIMAL_SPEED"
+
+# /!\ This block must stay after the FAN_SPEED conversion above /!\
+# LOW_TEMPERATURE_FAN_SPEED is compared against DECIMAL_FAN_SPEED, and an empty right operand makes
+# bash's "-gt" return 2, which reads as "not greater" and lets the guard pass silently
+# The intake air temperature limits are opt-in : an unset threshold leaves its check disabled, so
+# upgrading changes nothing for an existing configuration
+if [ -n "$HIGH_INLET_TEMPERATURE_THRESHOLD" ]; then
+  validate_temperature_threshold_parameter "HIGH_INLET_TEMPERATURE_THRESHOLD" "$HIGH_INLET_TEMPERATURE_THRESHOLD"
+  HIGH_INLET_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$HIGH_INLET_TEMPERATURE_THRESHOLD")
+fi
+readonly HIGH_INLET_TEMPERATURE_THRESHOLD
+
+if [ -n "$LOW_INLET_TEMPERATURE_THRESHOLD" ]; then
+  validate_temperature_threshold_parameter "LOW_INLET_TEMPERATURE_THRESHOLD" "$LOW_INLET_TEMPERATURE_THRESHOLD"
+  LOW_INLET_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$LOW_INLET_TEMPERATURE_THRESHOLD")
+
+  if [ -n "$HIGH_INLET_TEMPERATURE_THRESHOLD" ] && [ "$LOW_INLET_TEMPERATURE_THRESHOLD" -ge "$HIGH_INLET_TEMPERATURE_THRESHOLD" ]; then
+    print_configuration_error_and_exit "LOW_INLET_TEMPERATURE_THRESHOLD" "${LOW_INLET_TEMPERATURE_THRESHOLD}°C" "lower than HIGH_INLET_TEMPERATURE_THRESHOLD (${HIGH_INLET_TEMPERATURE_THRESHOLD}°C), the two bounding the range from opposite ends"
+  fi
+fi
+readonly LOW_INLET_TEMPERATURE_THRESHOLD
+
+if [ -n "$LOW_CPU_TEMPERATURE_THRESHOLD" ]; then
+  validate_temperature_threshold_parameter "LOW_CPU_TEMPERATURE_THRESHOLD" "$LOW_CPU_TEMPERATURE_THRESHOLD"
+  LOW_CPU_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$LOW_CPU_TEMPERATURE_THRESHOLD")
+
+  if [ "$LOW_CPU_TEMPERATURE_THRESHOLD" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    print_configuration_error_and_exit "LOW_CPU_TEMPERATURE_THRESHOLD" "${LOW_CPU_TEMPERATURE_THRESHOLD}°C" "lower than CPU_TEMPERATURE_THRESHOLD (${CPU_TEMPERATURE_THRESHOLD}°C) : a CPU cannot be both cold enough to slow the fans and hot enough to trip the overheating fallback"
+  fi
+fi
+readonly LOW_CPU_TEMPERATURE_THRESHOLD
+
+# Required as soon as either low temperature trigger is set, and never above FAN_SPEED : this
+# protection only ever reduces the fan speed, it must never be a way of raising it
+if [ -n "$LOW_INLET_TEMPERATURE_THRESHOLD" ] || [ -n "$LOW_CPU_TEMPERATURE_THRESHOLD" ]; then
+  if [ -z "$LOW_TEMPERATURE_FAN_SPEED" ]; then
+    print_configuration_error_and_exit "LOW_TEMPERATURE_FAN_SPEED" "" "a fan speed, required as soon as LOW_INLET_TEMPERATURE_THRESHOLD or LOW_CPU_TEMPERATURE_THRESHOLD is set : the protection has no speed to reduce to without it"
+  fi
+  validate_fan_speed_parameter "LOW_TEMPERATURE_FAN_SPEED" "$LOW_TEMPERATURE_FAN_SPEED"
+  convert_fan_speed_parameter "$LOW_TEMPERATURE_FAN_SPEED"
+  readonly DECIMAL_LOW_TEMPERATURE_FAN_SPEED="$DECIMAL_SPEED"
+  readonly HEXADECIMAL_LOW_TEMPERATURE_FAN_SPEED="$HEXADECIMAL_SPEED"
+
+  if [ "$DECIMAL_LOW_TEMPERATURE_FAN_SPEED" -gt "$DECIMAL_FAN_SPEED" ]; then
+    print_configuration_error_and_exit "LOW_TEMPERATURE_FAN_SPEED" "${DECIMAL_LOW_TEMPERATURE_FAN_SPEED}%" "not above FAN_SPEED (${DECIMAL_FAN_SPEED}%) : the low temperature protection only ever reduces the fan speed"
+  fi
+fi
+readonly LOW_TEMPERATURE_FAN_SPEED
+
 
 # In local mode, the container runs on the target server itself. Two things depend on that : lm-sensors
 # can only describe the controlled server's CPUs in that mode, and the server can never be observed
@@ -159,8 +206,9 @@ fi
 echo ""
 
 TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
-# Set the flag used to check if the active fan control profile has changed
-IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
+# Which profile the monitoring loop last settled on : "Dell", "User" or "LowTemperature".
+# Three-valued rather than the boolean it used to be, there now being a third profile to tell apart
+ACTIVE_FAN_CONTROL_PROFILE="Dell"
 # The comment column explains a profile CHANGE, and the first cycle changes nothing:
 # it establishes the profile. Without this, whichever branch the first cycle takes
 # stays silent -- and since the flag above starts at true, the silent one is the
@@ -451,12 +499,14 @@ while true; do
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
-  # Check if any of the detected CPUs is overheating then apply Dell default dynamic fan control profile if true
+  # /!\ The CPU overheating check stays the first branch tested /!\
+  # No intake air condition may reduce the fan speed while a CPU is above its threshold : the cold
+  # protection below is only ever reached on a server whose CPUs are all within bounds
   if is_any_CPU_overheating; then
     apply_Dell_default_fan_control_profile
 
-    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
-      IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
+    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ] || $IS_FIRST_MONITORING_CYCLE; then
+      ACTIVE_FAN_CONTROL_PROFILE="Dell"
 
       # is_any_CPU_overheating() collected every CPU concerned, however many of them there are, each
       # with its reading so the comment can tell "too high" from "could not be read"
@@ -466,17 +516,36 @@ while true; do
         COMMENT="No CPU temperature could be read, Dell default dynamic fan control profile applied for safety"
       fi
     fi
+  # Intake air hotter than the server is rated for : a static fan speed is the wrong thing to be
+  # holding, so hand control back to iDRAC, which knows the platform's own airflow requirements
+  elif is_inlet_temperature_too_high; then
+    apply_Dell_default_fan_control_profile
+
+    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ] || $IS_FIRST_MONITORING_CYCLE; then
+      ACTIVE_FAN_CONTROL_PROFILE="Dell"
+      COMMENT="Inlet temperature is too high (> $HIGH_INLET_TEMPERATURE_THRESHOLD°C), Dell default dynamic fan control profile applied for safety"
+    fi
+  # Cold chassis : reduce the airflow so the machine's own waste heat can hold the inside above ambient
+  elif is_server_too_cold; then
+    apply_low_temperature_fan_control_profile
+
+    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "LowTemperature" ] || $IS_FIRST_MONITORING_CYCLE; then
+      ACTIVE_FAN_CONTROL_PROFILE="LowTemperature"
+      COMMENT="Server is too cold, fan speed reduced to $DECIMAL_LOW_TEMPERATURE_FAN_SPEED% to preserve a minimum internal temperature"
+    fi
   else
     apply_user_fan_control_profile
 
-    # Check if user fan control profile is applied then apply it if not
-    if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
-      IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=false
-      # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included.
+    if [ "$ACTIVE_FAN_CONTROL_PROFILE" != "User" ] || $IS_FIRST_MONITORING_CYCLE; then
+      PREVIOUS_FAN_CONTROL_PROFILE="$ACTIVE_FAN_CONTROL_PROFILE"
+      ACTIVE_FAN_CONTROL_PROFILE="User"
+
+      if [ "$PREVIOUS_FAN_CONTROL_PROFILE" == "LowTemperature" ]; then
+        COMMENT="Server is no longer too cold, user's fan control profile applied."
       # It says the temperatures are OK rather than that they decreased, because the Dell default profile
       # is also applied when a reading can't be parsed : claiming a temperature dropped would contradict
       # the "could not be read" comment printed when that happened
-      if [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
+      elif [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
         COMMENT="CPU temperature is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
       else
         COMMENT="All CPU temperatures are now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."

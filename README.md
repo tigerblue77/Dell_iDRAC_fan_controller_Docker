@@ -87,6 +87,10 @@ docker run -d \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty> \
   -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
+  -e HIGH_INLET_TEMPERATURE_THRESHOLD=<intake °C above which Dell's profile is restored, or empty> \
+  -e LOW_INLET_TEMPERATURE_THRESHOLD=<intake °C below which the fan speed is reduced, or empty> \
+  -e LOW_CPU_TEMPERATURE_THRESHOLD=<CPU °C every CPU must be below to reduce the fan speed, or empty> \
+  -e LOW_TEMPERATURE_FAN_SPEED=<the reduced fan speed, required once either low threshold is set> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -109,6 +113,10 @@ docker run -d \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty> \
   -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
+  -e HIGH_INLET_TEMPERATURE_THRESHOLD=<intake °C above which Dell's profile is restored, or empty> \
+  -e LOW_INLET_TEMPERATURE_THRESHOLD=<intake °C below which the fan speed is reduced, or empty> \
+  -e LOW_CPU_TEMPERATURE_THRESHOLD=<CPU °C every CPU must be below to reduce the fan speed, or empty> \
+  -e LOW_TEMPERATURE_FAN_SPEED=<the reduced fan speed, required once either low threshold is set> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -135,6 +143,10 @@ services:
       - CHECK_INTERVAL=<seconds between each check>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
       - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+      - HIGH_INLET_TEMPERATURE_THRESHOLD=<intake °C above which Dell's profile is restored, or empty>
+      - LOW_INLET_TEMPERATURE_THRESHOLD=<intake °C below which the fan speed is reduced, or empty>
+      - LOW_CPU_TEMPERATURE_THRESHOLD=<CPU °C every CPU must be below to reduce the fan speed, or empty>
+      - LOW_TEMPERATURE_FAN_SPEED=<the reduced fan speed, required once either low threshold is set>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -162,6 +174,10 @@ services:
       - CHECK_INTERVAL=<seconds between each check>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
       - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+      - HIGH_INLET_TEMPERATURE_THRESHOLD=<intake °C above which Dell's profile is restored, or empty>
+      - LOW_INLET_TEMPERATURE_THRESHOLD=<intake °C below which the fan speed is reduced, or empty>
+      - LOW_CPU_TEMPERATURE_THRESHOLD=<CPU °C every CPU must be below to reduce the fan speed, or empty>
+      - LOW_TEMPERATURE_FAN_SPEED=<the reduced fan speed, required once either low threshold is set>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -234,6 +250,24 @@ All parameters are optional as they have default values (including default iDRAC
 - `MAXIMUM_IPMI_UNREACHABLE_DURATION` parameter is how long the iDRAC may stay completely unreachable before the container gives up and exits. **Default** value is 60s, in seconds unless a unit suffix (`s`, `m`, `h` or `d`) says otherwise, exactly like `CHECK_INTERVAL`. Empty disables the escalation. It counts only failures to reach the iDRAC: a server correctly reported as powered off is a state that was observed, not a failure, and never counts however long it stays off; any cycle that reaches the iDRAC resets the count. An unreachable iDRAC accepts no command, so exiting cannot and does not try to move the fans — the point is to obtain a fresh IPMI session, which is what clears an expired session, a rebooted iDRAC or an exhausted session limit, and to make the loss visible to `docker ps` and to anything watching container state instead of it being buried in logs. **Read the paragraph below before relying on it.**
   > **This only helps if something restarts the container.** With Docker's default `no` restart policy, a container that exits stays dead: `graceful_exit` tries to restore Dell's profile on the way out, but that command goes through the same unreachable iDRAC and fails too, so the fans keep the speed they were last set to with nothing watching them at all. Worse, a container that keeps retrying recovers on its own the moment the iDRAC answers again, whereas one that exited does not. Run with `--restart unless-stopped` (or a Compose `restart:` policy) if you leave this enabled, or set it empty to keep the previous retry-forever behaviour.
 - `MAXIMUM_CONSECUTIVE_IPMI_FAILURES` parameter expresses that same threshold as a raw number of consecutive unreachable cycles instead of a duration. **Default** value is (empty), the duration above being used. When set it takes precedence, being the more specific of the two. Prefer the duration unless you need the count exactly: it keeps meaning the same thing when `CHECK_INTERVAL` changes, where a cycle count silently would not.
+- `HIGH_INLET_TEMPERATURE_THRESHOLD` parameter is the intake air temperature above which Dell's default dynamic fan control profile is restored. **Default** value is (empty), the check being disabled. Past its rated intake temperature a server's fans are the only mitigation left and a fixed low percentage is the wrong thing to be holding, so control goes back to iDRAC, which knows the platform's own airflow requirements. Dell rates the PowerEdge line for 35°C intake, 40°C continuously on Fresh Air compliant models, and 45°C for up to 1% of annual operating hours.
+- `LOW_INLET_TEMPERATURE_THRESHOLD` parameter is the intake air temperature below which the fan speed is reduced to `LOW_TEMPERATURE_FAN_SPEED`. **Default** value is (empty), the trigger being disabled. Negative values are accepted.
+- `LOW_CPU_TEMPERATURE_THRESHOLD` parameter is the CPU temperature every detected CPU must be below for the fan speed to be reduced. **Default** value is (empty), the trigger being disabled. Must be lower than `CPU_TEMPERATURE_THRESHOLD`.
+- `LOW_TEMPERATURE_FAN_SPEED` parameter is the reduced fan speed applied while the low temperature protection is engaged, in the same decimal or hexadecimal notation as `FAN_SPEED`. **Default** value is (empty). It becomes required as soon as either low temperature threshold is set, and it must not exceed `FAN_SPEED`: this protection only ever reduces the fan speed, never raises it.
+
+#### What the low temperature protection is for
+
+Cold intake air does not damage silicon. What it does is drag the components that *do* have a lower limit down with it, and a high fixed fan speed in a cold room is what makes that happen:
+
+- enterprise hard drives are rated from 5°C (0°C on some ranges) and their spindle lubricant stiffens below it;
+- PERC battery backup units are lithium-ion, and charging lithium-ion below 0°C plates metallic lithium on the anode, which is permanent and a safety matter rather than just a capacity one;
+- Dell's own operating envelope stops at 10°C, or 5°C continuously and −5°C for up to 1% of annual operating hours.
+
+Reducing the airflow lets the machine's own waste heat hold the inside of the chassis above the ambient temperature. It is a mitigation, not a guarantee: the fans cannot be stopped, and an idle server in a genuinely freezing room may stay below its disks' rating whatever the fans do.
+
+The two low temperature triggers combine with **AND**, not OR. The point is a minimum temperature *inside* the chassis, and a cold room with a busy server in it is not a situation to reduce airflow in — configuring `LOW_CPU_TEMPERATURE_THRESHOLD` next to `LOW_INLET_TEMPERATURE_THRESHOLD` is what keeps cold intake air from throttling the fans over a CPU that is working. Setting only one of the two leaves that one as the sole condition.
+
+Three properties keep these branches from ever making things worse: the CPU overheating check stays the first branch tested, so no intake condition can reduce the fan speed while a CPU is above `CPU_TEMPERATURE_THRESHOLD`; the protection can only *lower* the speed, `LOW_TEMPERATURE_FAN_SPEED` being rejected at startup if it exceeds `FAN_SPEED`; and an unreadable reading never engages it.
 
   This interval is also the controller's reaction time, so it is bounded from above. While your fan control profile is applied, Dell's own dynamic fan control is disabled and the fans are pinned at `FAN_SPEED`: nothing raises them until the *next* check reads a temperature above `CPU_TEMPERATURE_THRESHOLD`. The interval is therefore the longest your server can heat up with its cooling frozen at a speed you chose for an idle machine. Above **60 seconds** the container starts and prints a warning saying so. Above **15 minutes** it refuses to start, that delay being long enough that the controller is not really controlling anything anymore.
 
@@ -384,6 +418,10 @@ export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
 export CHECK_INTERVAL=<seconds between each check>
 export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
 export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+export HIGH_INLET_TEMPERATURE_THRESHOLD=<intake °C above which Dell's profile is restored, or empty>
+export LOW_INLET_TEMPERATURE_THRESHOLD=<intake °C below which the fan speed is reduced, or empty>
+export LOW_CPU_TEMPERATURE_THRESHOLD=<CPU °C every CPU must be below to reduce the fan speed, or empty>
+export LOW_TEMPERATURE_FAN_SPEED=<the reduced fan speed, required once either low threshold is set>
 export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 export MONITORING_ONLY_MODE=<true or false>

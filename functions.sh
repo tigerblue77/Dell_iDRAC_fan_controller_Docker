@@ -23,16 +23,28 @@ function apply_Dell_default_fan_control_profile() {
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
-# This function applies a user-specified static fan control profile
+# This function applies a static fan control profile at the given speed
+# Usage : apply_static_fan_control_profile $DECIMAL_SPEED $HEXADECIMAL_SPEED "$PROFILE_NAME"
+# Returns : 0 if the server accepted it, 1 if any command was refused
+#
+# The speed is a parameter rather than the FAN_SPEED global because two profiles use this same pair of
+# commands : the user's normal one, and the reduced one the low intake temperature protection applies
+#
 # In monitoring only mode, the profile is only logged, not actually applied
-function apply_user_fan_control_profile() {
-  if "$MONITORING_ONLY_MODE"; then
-    CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (monitoring only, not applied)"
-    return
+function apply_static_fan_control_profile() {
+  if (( $# != 3 )); then
+    print_error "Illegal number of parameters. Usage: apply_static_fan_control_profile \$DECIMAL_SPEED \$HEXADECIMAL_SPEED \"\$PROFILE_NAME\""
+    return 1
   fi
-  # Use ipmitool to send the raw command to set fan control to user-specified value.
-  # Same reasoning as apply_Dell_default_fan_control_profile: only surface stderr if the command
-  # actually failed, instead of always discarding it (this profile changes real fan speed)
+  local -r DECIMAL_SPEED="$1"
+  local -r HEXADECIMAL_SPEED="$2"
+  local -r PROFILE_NAME="$3"
+
+  if "$MONITORING_ONLY_MODE"; then
+    CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%) (monitoring only, not applied)"
+    return 0
+  fi
+
   # Both commands have to land for the profile to be the one the server is running : the first takes
   # fan control away from Dell's own dynamic profile, the second sets the speed. Failing the first and
   # succeeding the second is not a partial success but the worst case -- the fans are still Dell's to
@@ -45,17 +57,27 @@ function apply_user_fan_control_profile() {
     print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
     IS_PROFILE_APPLIED=false
   fi
-  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
+  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_SPEED 2>&1 >/dev/null)
   if [ $? -ne 0 ]; then
-    print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+    print_error "Failed to set fan speed to $DECIMAL_SPEED%. ipmitool said: $ipmitool_stderr"
     IS_PROFILE_APPLIED=false
   fi
 
   if ! $IS_PROFILE_APPLIED; then
-    CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (not applied)"
+    CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%) (not applied)"
     return 1
   fi
-  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
+  CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%)"
+}
+
+# This function applies the user-specified static fan control profile
+function apply_user_fan_control_profile() {
+  apply_static_fan_control_profile "$DECIMAL_FAN_SPEED" "$HEXADECIMAL_FAN_SPEED" "User static fan control profile"
+}
+
+# This function applies the reduced profile the low intake temperature protection uses
+function apply_low_temperature_fan_control_profile() {
+  apply_static_fan_control_profile "$DECIMAL_LOW_TEMPERATURE_FAN_SPEED" "$HEXADECIMAL_LOW_TEMPERATURE_FAN_SPEED" "Low temperature fan control profile"
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
@@ -219,6 +241,89 @@ function exit_if_iDRAC_unreachable_for_too_long() {
   local -r UNREACHABLE_FOR_SECONDS=$(( CONSECUTIVE_IPMI_FAILURES * CHECK_INTERVAL_IN_SECONDS ))
 
   print_error_and_exit "The iDRAC could not be reached $CONSECUTIVE_IPMI_FAILURES times in a row, i.e. for about $UNREACHABLE_FOR_SECONDS seconds. Exiting so that a restart policy can retry with a fresh IPMI session. An unreachable iDRAC accepts no command, so this cannot and does not try to move the fans : they keep the speed they were last set to until something reaches the iDRAC again"
+}
+
+# Stop the container unless the given parameter is a temperature a sensor could plausibly report
+# Usage : validate_temperature_threshold_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# Negative values are accepted, unlike for a CPU threshold : Dell rates the PowerEdge line down to -5°C
+# and the servers this container targets are often in unheated rooms, so a sub-zero intake threshold is
+# a configuration rather than a typo. The bounds are IPMI's own, temperatures being a signed byte there,
+# so no value outside them could ever be crossed by a reading
+function validate_temperature_threshold_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  if [[ ! "$VALUE" =~ ^-?[0-9]+$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a whole number of degrees Celsius, negative values being allowed"
+  fi
+
+  local -r NORMALIZED_VALUE=$(normalize_decimal_value "$VALUE")
+  if [ "$NORMALIZED_VALUE" -lt -128 ] || [ "$NORMALIZED_VALUE" -gt 127 ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "${NORMALIZED_VALUE}°C" "a temperature between -128°C and 127°C : IPMI reports temperatures as a signed byte, so no reading could ever cross a threshold outside that range"
+  fi
+}
+
+# Returns 0 (true) if intake air is hotter than HIGH_INLET_TEMPERATURE_THRESHOLD, 1 (false) otherwise
+#
+# Past its rated intake temperature a server's fans are the only mitigation left, and a static low fan
+# speed is exactly the wrong thing to be holding : Dell rates the PowerEdge line for 35°C intake, 40°C
+# continuously on Fresh Air compliant models and 45°C for up to 1% of annual operating hours. Above the
+# configured limit, iDRAC's own profile knows the platform's airflow requirements better than a fixed
+# percentage does.
+#
+# Leaving the threshold unset disables the check, which then never fires.
+#
+# An unreadable inlet reading also returns false. That is the opposite of how the CPU checks treat bad
+# data, and deliberately so : an intake temperature that was not measured says nothing about whether the
+# server is in danger, and the CPU checks already cover the case that actually endangers it
+function is_inlet_temperature_too_high() {
+  [ -n "$HIGH_INLET_TEMPERATURE_THRESHOLD" ] || return 1
+  is_temperature_reading_valid "$INLET_TEMPERATURE" || return 1
+  [ "$(normalize_decimal_value "$INLET_TEMPERATURE")" -gt "$HIGH_INLET_TEMPERATURE_THRESHOLD" ]
+}
+
+# Returns 0 (true) if every configured low temperature condition is met, 1 (false) otherwise
+#
+# Cold intake air doesn't damage silicon, but a chassis held at a sub-zero ambient by a high static fan
+# speed drags the components that do have a lower limit down with it : enterprise disks are rated from
+# 5°C and stiffen their spindle lubricant below it, PERC battery backup units are lithium-ion and plate
+# metallic lithium if charged below 0°C, and Dell's own operating envelope stops at 10°C. Reducing the
+# airflow lets the machine's own waste heat hold the inside of the chassis above ambient.
+#
+# The conditions are combined with AND rather than OR. The point of the protection is a minimum
+# temperature *inside* the chassis, and a cold room with a busy server in it is not a situation to
+# reduce airflow in : configuring LOW_CPU_TEMPERATURE_THRESHOLD next to LOW_INLET_TEMPERATURE_THRESHOLD
+# is what keeps cold intake air from throttling the fans over a CPU that is working. Setting only one of
+# the two leaves that one as the sole condition, so the OR reading stays reachable for anyone wanting it.
+#
+# An unreadable sensor never satisfies its condition, so the protection stays disengaged rather than
+# reducing airflow on data it could not verify
+function is_server_too_cold() {
+  local IS_ANY_CONDITION_CONFIGURED=false
+
+  if [ -n "$LOW_INLET_TEMPERATURE_THRESHOLD" ]; then
+    IS_ANY_CONDITION_CONFIGURED=true
+    is_temperature_reading_valid "$INLET_TEMPERATURE" || return 1
+    [ "$(normalize_decimal_value "$INLET_TEMPERATURE")" -lt "$LOW_INLET_TEMPERATURE_THRESHOLD" ] || return 1
+  fi
+
+  if [ -n "$LOW_CPU_TEMPERATURE_THRESHOLD" ]; then
+    IS_ANY_CONDITION_CONFIGURED=true
+
+    # Every detected CPU has to be cold : one busy CPU is enough to mean the chassis isn't
+    local CPU_TEMPERATURE
+    for CPU_TEMPERATURE in "${DETECTED_CPU_TEMPERATURES[@]}"; do
+      is_temperature_reading_valid "$CPU_TEMPERATURE" || return 1
+      [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -lt "$LOW_CPU_TEMPERATURE_THRESHOLD" ] || return 1
+    done
+
+    # No CPU reading at all is not "every CPU is cold" : it is nothing to conclude from
+    (( ${#DETECTED_CPU_TEMPERATURES[@]} > 0 )) || return 1
+  fi
+
+  # Neither threshold configured means the protection is off, not that every condition trivially held
+  $IS_ANY_CONDITION_CONFIGURED
 }
 
 # Stop the container unless the given parameter is a usable unreachable-iDRAC duration

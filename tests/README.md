@@ -38,6 +38,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/55_enclosure_housed_servers.sh` | Blades and modular servers, whose fans belong to their enclosure |
 | `cases/60_cpu_topologies.sh` | 1, 2 and 4 socket servers, missing sensors, table layout |
 | `cases/70_fan_control_profiles.sh` | The raw commands sent to the server, and their rejections |
+| `cases/75_intake_temperature_limits.sh` | Both ends of Dell's intake air envelope, and what must never engage them |
 | `cases/80_temperature_thresholds.sh` | The overheating decision, including its fail-safe behavior |
 | `cases/85_power_state.sh` | Skipping the cycle when the target server is powered off |
 | `cases/90_integration.sh` | The whole controller, started like its Docker image does |
