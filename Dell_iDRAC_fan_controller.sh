@@ -84,6 +84,10 @@ retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATUR
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
+  # This reading was taken before the sensor was known to be absent, so it holds an empty string where
+  # every later cycle will hold the "-" placeholder. Backfilling it here keeps the first printed line
+  # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
+  EXHAUST_TEMPERATURE="-"
 fi
 if [ -z "$CPU2_TEMPERATURE" ]; then
   echo "No CPU2 temperature sensor detected."
