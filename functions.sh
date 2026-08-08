@@ -376,11 +376,26 @@ function retrieve_temperatures() {
   fi
 }
 
-# Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
+# Report the target server's power state
+# Returns : 0 if it is powered on, 1 if it is powered off, 2 if the iDRAC could not be reached
+#
 # Only meaningful in network mode: in local mode the container runs on the target server itself,
 # so it cannot be observed powered off while the container is running
-function is_server_powered_on() {
-  local -r POWER_STATUS=$(ipmitool -I $IDRAC_LOGIN_STRING chassis power status 2>/dev/null)
+#
+# The three outcomes used to be two. stderr and the exit code were both discarded and the verdict came
+# from a substring, so a failed call produced empty output, didn't contain "is on", and was reported as
+# a powered-off chassis -- indistinguishable from the real thing. A dropped session, rotated
+# credentials, an iDRAC reboot and a LAN flap all landed in the same branch, and the caller skipped the
+# cycle without reading temperatures or applying any profile, leaving the fans frozen at the user's
+# static speed on a running, loaded server while the log called it benign
+function get_server_power_state() {
+  local POWER_STATUS
+  POWER_STATUS=$(ipmitool -I $IDRAC_LOGIN_STRING chassis power status 2>&1)
+  if [ $? -ne 0 ]; then
+    IPMI_UNREACHABLE_REASON="$POWER_STATUS"
+    return 2
+  fi
+
   [[ "$POWER_STATUS" == *"is on"* ]]
 }
 

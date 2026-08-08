@@ -204,17 +204,30 @@ readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
 # Start monitoring
 while true; do
   # In network mode, if the target server is powered off, skip this cycle entirely: don't read
-  # temperatures (they would be meaningless) and don't apply any fan control profile
-  if $NETWORK_MODE && ! is_server_powered_on; then
-    IS_TARGET_SERVER_POWERED_OFF=true
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+  # temperatures (they would be meaningless) and don't apply any fan control profile.
+  # A cycle is also skipped when the iDRAC can't be reached at all, but the two are reported
+  # separately: one is a machine that is legitimately off, the other is a server we may well be
+  # holding at a static fan speed with no way to see or change anything about it
+  if $NETWORK_MODE; then
+    get_server_power_state
+    TARGET_SERVER_POWER_STATE=$?
 
-    wait $SLEEP_PROCESS_PID
+    if [ $TARGET_SERVER_POWER_STATE -ne 0 ]; then
+      IS_TARGET_SERVER_POWERED_OFF=true
 
-    # Start timer in background for next cycle
-    sleep "$CHECK_INTERVAL" &
-    SLEEP_PROCESS_PID=$!
-    continue
+      if [ $TARGET_SERVER_POWER_STATE -eq 2 ]; then
+        printf "%19s  Cannot reach the iDRAC, target server state unknown and fan control profile left as-is. ipmitool said: %s\n" "$(date +"%d-%m-%Y %T")" "$IPMI_UNREACHABLE_REASON" >&2
+      else
+        printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+      fi
+
+      wait $SLEEP_PROCESS_PID
+
+      # Start timer in background for next cycle
+      sleep "$CHECK_INTERVAL" &
+      SLEEP_PROCESS_PID=$!
+      continue
+    fi
   fi
 
   # The server just powered back on: refresh temperatures now instead of evaluating stale data read
