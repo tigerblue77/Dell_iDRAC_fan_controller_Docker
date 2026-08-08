@@ -215,3 +215,61 @@ function test_stopping_the_container_in_monitoring_only_mode_changes_nothing() {
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30")" \
     "a monitoring only container must leave the server exactly as it found it"
 }
+
+function test_a_refused_profile_is_not_reported_as_applied() {
+  # The table column is the only thing telling an operator what the server is
+  # actually doing. Naming the profile the controller *tried* to apply, on a
+  # command the iDRAC refused, describes a machine that does not exist : the fans
+  # are still Dell's to drive, at whatever speed its own profile picks
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x01 0x00"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+
+  apply_user_fan_control_profile 2>/dev/null
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE" "a refused profile must report itself as not applied"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied" \
+    "the table must say the profile was not applied rather than name it as active"
+}
+
+function test_a_refused_fan_speed_alone_is_enough_to_deny_the_profile() {
+  # Taking control away from Dell's profile and then failing to set a speed leaves
+  # the fans on the controller's watch at an unknown duty : the profile named in
+  # the table is not the one running either way
+  DECIMAL_FAN_SPEED=30
+  HEXADECIMAL_FAN_SPEED="0x1e"
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+
+  apply_user_fan_control_profile 2>/dev/null
+
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "30%" \
+    "the speed that was asked for is still worth showing, it is what was refused"
+}
+
+function test_a_refused_dell_default_profile_is_not_reported_as_applied() {
+  # This is the safety fallback : reporting it as applied on a server whose iDRAC
+  # refused it tells the operator the machine is protected when it is not
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x01 0x01"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+
+  apply_Dell_default_fan_control_profile 2>/dev/null
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
+}
+
+function test_an_applied_profile_still_reports_itself_as_applied() {
+  # The guard must not fire on the healthy path : an accepted profile is named
+  # plainly, with no caveat
+  DECIMAL_FAN_SPEED=5
+  HEXADECIMAL_FAN_SPEED="0x05"
+
+  apply_user_fan_control_profile
+  local -r EXIT_CODE=$?
+
+  assert_equals "0" "$EXIT_CODE"
+  assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE"
+}

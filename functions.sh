@@ -15,6 +15,10 @@ function apply_Dell_default_fan_control_profile() {
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 2>&1 >/dev/null)
   if [ $? -ne 0 ]; then
     print_error "Failed to apply Dell default fan control profile. ipmitool said: $ipmitool_stderr"
+    # The table says what the server is actually doing, not what was attempted : this profile is the
+    # safety fallback, so claiming it while the command was refused is the one lie that matters here
+    CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (not applied)"
+    return 1
   fi
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
@@ -29,14 +33,27 @@ function apply_user_fan_control_profile() {
   # Use ipmitool to send the raw command to set fan control to user-specified value.
   # Same reasoning as apply_Dell_default_fan_control_profile: only surface stderr if the command
   # actually failed, instead of always discarding it (this profile changes real fan speed)
+  # Both commands have to land for the profile to be the one the server is running : the first takes
+  # fan control away from Dell's own dynamic profile, the second sets the speed. Failing the first and
+  # succeeding the second is not a partial success but the worst case -- the fans are still Dell's to
+  # drive -- so either failure means the profile was not applied
   local ipmitool_stderr
+  local IS_PROFILE_APPLIED=true
+
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
   if [ $? -ne 0 ]; then
     print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
+    IS_PROFILE_APPLIED=false
   fi
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
   if [ $? -ne 0 ]; then
     print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+    IS_PROFILE_APPLIED=false
+  fi
+
+  if ! $IS_PROFILE_APPLIED; then
+    CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (not applied)"
+    return 1
   fi
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
 }
