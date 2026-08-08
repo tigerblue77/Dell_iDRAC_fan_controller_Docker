@@ -54,8 +54,8 @@ function test_the_catalogue_covers_every_enclosure_dell_shipped() {
     fail "only $M1000E_MODEL_COUNT M1000e blades are catalogued"
   fi
 
-  # The VRTX only takes half-height blades, so every VRTX model also fits an
-  # M1000e : a model listed for the VRTX alone would be a catalogue mistake
+  # The VRTX takes a subset of the M1000e blades, so every VRTX model also fits
+  # an M1000e : a model listed for the VRTX alone would be a catalogue mistake
   local ENTRY MODEL ENCLOSURES
   while IFS= read -r ENTRY; do
     IFS='|' read -r _ MODEL _ _ _ ENCLOSURES <<< "$ENTRY"
@@ -178,18 +178,36 @@ function test_the_third_party_pcie_card_command_still_reaches_the_most_recent_sl
   # is a 2023 server, but the controller believes it is Gen 13 or older and keeps
   # sending it the third-party PCIe card cooling response command, which only
   # exists up to Gen 13. Harmless (the answer is discarded on purpose) but real,
-  # and this pins it so that improving the detection shows up here
+  # and this pins it so that improving the detection shows up here.
+  #
+  # KEEP_..._ON_EXIT is set because graceful_exit() resets the cooling response
+  # whatever the generation : leaving it to its default would have every server
+  # send that command once on the way out, and the assertion below would then
+  # hold for a Gen 14 server too, checking nothing at all.
+  #
+  # An R740, which the detection does recognize, is run through the same body as
+  # the negative control. Without it, nothing in this test would fail if the
+  # command started being sent to everyone, or to no one
   export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=true
+
   simulate_enclosure_housed_server "PowerEdge MX760c" --cpus 2
+  local -r SLED_OUTPUT=$(run_controller)
 
-  local -r OUTPUT=$(run_controller)
-
-  assert_contains "$OUTPUT" "Server model: DELL PowerEdge MX760c"
+  assert_contains "$SLED_OUTPUT" "Server model: DELL PowerEdge MX760c"
   if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 1 ]; then
     pass
   else
-    fail "a server detected as Gen 13 or older is sent the third-party PCIe card command"
+    fail "the MX760c is detected as Gen 13 or older, so it is sent the third-party PCIe card command"
   fi
+
+  forget_recorded_ipmitool_calls
+  simulate_enclosure_housed_server "PowerEdge R740" --cpus 2
+  local -r RACK_OUTPUT=$(run_controller)
+
+  assert_contains "$RACK_OUTPUT" "Server model: DELL PowerEdge R740"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "an R740 is detected as Gen 14 or newer, so the very same run must not send that command"
 }
 
 function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_safe() {

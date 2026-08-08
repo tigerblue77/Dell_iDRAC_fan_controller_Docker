@@ -66,13 +66,19 @@ function format_duration() {
 # Replace the characters XML gives a meaning to, and drop the control characters
 # XML 1.0 forbids outright (an escape sequence caught in a captured output would
 # otherwise produce a report no parser accepts)
+#
+# The substitution is done with sed rather than with "${TEXT//</&lt;}" : since
+# bash 5.2, patsub_replacement is enabled by default and makes an unquoted "&" in
+# a replacement stand for the text that matched, so that form silently produced
+# "<lt;" instead of "&lt;" and a report no parser accepts. In sed, "\&" is a
+# literal ampersand, on GNU and BSD alike.
+#
+# The ampersand is escaped first, otherwise it would escape the ampersands the
+# other three substitutions just introduced
 function xml_escaped() {
-  local TEXT="$1"
-  TEXT="${TEXT//&/&amp;}"
-  TEXT="${TEXT//</&lt;}"
-  TEXT="${TEXT//>/&gt;}"
-  TEXT="${TEXT//\"/&quot;}"
-  printf '%s' "$TEXT" | tr -d '\000-\010\013\014\016-\037'
+  printf '%s' "$1" |
+    sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' |
+    tr -d '\000-\010\013\014\016-\037'
 }
 
 # Write a JUnit XML report, one <testsuite> per test case file

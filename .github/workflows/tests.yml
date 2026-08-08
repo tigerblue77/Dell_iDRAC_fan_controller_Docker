@@ -105,8 +105,13 @@ jobs:
           files: test-results/**/*.xml
           check_name: Test results
           # Lists every test case in the check run, not only the failing ones,
-          # so the report says what was tested and not only what broke
+          # so the report says what was tested and not only what broke.
+          # The action only annotates the branches named by
+          # check_run_annotations_branch, whose default is the default branch,
+          # so without "*" the listing would be missing on every pull request,
+          # which is precisely where it is read
           check_run_annotations: all tests, skipped tests
+          check_run_annotations_branch: "*"
 
   # Kept for the "Test results" workflow : a run triggered by a fork's pull
   # request cannot read the pull request it came from, so the event that started

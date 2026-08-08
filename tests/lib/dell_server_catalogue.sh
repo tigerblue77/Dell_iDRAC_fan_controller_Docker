@@ -23,7 +23,9 @@
 #      server, separated by "/" :
 #        1955    - 9th generation blade enclosure
 #        M1000e  - blade enclosure, 10th to 14th generation blades (M...)
-#        VRTX    - small office blade enclosure, half-height blades only
+#        VRTX    - small office blade enclosure, taking a subset of the
+#                  M1000e blades (half-height ones, and full-height ones over
+#                  two slots)
 #        FX2     - modular enclosure, FC... and FM... sleds
 #        MX7000  - modular enclosure, MX...c sleds
 #        C-series- multi-node chassis (C6300, C6400, C6500, C6600), 4 nodes
@@ -101,11 +103,11 @@ readonly DELL_SERVER_CATALOGUE=(
   "12|PowerEdge T620|2|false|supported|standalone"
   "12|PowerEdge R820|4|false|supported|standalone"
   "12|PowerEdge R920|4|false|supported|standalone"
-  # Blades. The VRTX arrived with this generation and takes the half-height ones
+  # Blades. The VRTX arrived with this generation
   "12|PowerEdge M420|2|false|chassis-managed|M1000e"
   "12|PowerEdge M520|2|false|chassis-managed|M1000e/VRTX"
   "12|PowerEdge M620|2|false|chassis-managed|M1000e/VRTX"
-  "12|PowerEdge M820|4|false|chassis-managed|M1000e"
+  "12|PowerEdge M820|4|false|chassis-managed|M1000e/VRTX"
 
   # 13th generation (2014) - iDRAC 8
   "13|PowerEdge R230|1|false|supported|standalone"
@@ -123,7 +125,7 @@ readonly DELL_SERVER_CATALOGUE=(
   "13|PowerEdge R930|4|false|supported|standalone"
   # Blades, FX2 sleds and the first dense multi-node chassis
   "13|PowerEdge M630|2|false|chassis-managed|M1000e/VRTX"
-  "13|PowerEdge M830|4|false|chassis-managed|M1000e"
+  "13|PowerEdge M830|4|false|chassis-managed|M1000e/VRTX"
   "13|PowerEdge FC430|2|false|chassis-managed|FX2"
   "13|PowerEdge FC630|2|false|chassis-managed|FX2"
   "13|PowerEdge FC830|4|false|chassis-managed|FX2"

@@ -53,3 +53,4 @@ jobs:
           files: artifacts/**/*.xml
           check_name: Test results
           check_run_annotations: all tests, skipped tests
+          check_run_annotations_branch: "*"

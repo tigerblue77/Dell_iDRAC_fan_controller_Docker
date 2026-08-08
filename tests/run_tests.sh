@@ -41,13 +41,25 @@ Usage: tests/run_tests.sh [option ...]
 EOF
 }
 
+# Stop on an option given without the value it takes, instead of letting the loop
+# below spin forever : "shift 2" with a single argument left shifts nothing and
+# returns non-zero, so the loop would never advance
+# Usage : require_option_value "$1" "$#"
+function require_option_value() {
+  if [ "$2" -lt 2 ]; then
+    printf 'Option "%s" requires a value\n\n' "$1" >&2
+    print_usage >&2
+    exit 2
+  fi
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    -f | --filter) FILTER="$2"; shift 2 ;;
+    -f | --filter) require_option_value "$1" "$#"; FILTER="$2"; shift 2 ;;
     -l | --list) LIST_ONLY=true; shift ;;
     --tap) TAP_OUTPUT=true; USE_COLOR=false; shift ;;
-    --junit) JUNIT_REPORT_FILE="$2"; shift 2 ;;
-    --summary) MARKDOWN_SUMMARY_FILE="$2"; shift 2 ;;
+    --junit) require_option_value "$1" "$#"; JUNIT_REPORT_FILE="$2"; shift 2 ;;
+    --summary) require_option_value "$1" "$#"; MARKDOWN_SUMMARY_FILE="$2"; shift 2 ;;
     --no-color) USE_COLOR=false; shift ;;
     -h | --help) print_usage; exit 0 ;;
     *) printf 'Unknown option "%s"\n\n' "$1" >&2; print_usage >&2; exit 2 ;;
