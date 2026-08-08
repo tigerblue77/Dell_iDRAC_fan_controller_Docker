@@ -41,6 +41,39 @@ function test_the_controller_falls_back_on_the_dell_default_profile_when_a_cpu_s
   fi
 }
 
+function test_the_comment_closing_a_fallback_says_the_temperatures_are_ok_not_that_they_decreased() {
+  # Symmetric with the clause naming the CPUs that opened the fallback, plural
+  # included. It states that the temperatures are OK rather than that they
+  # decreased, because the Dell default profile is also applied when a reading
+  # cannot be parsed at all : on that path nothing ever went up, so claiming
+  # something came back down would contradict the "could not be read" comment
+  # printed when it happened, and send the user looking for a heat problem they
+  # never had
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "81 78"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "42 44")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  local -r OUTPUT=$(run_controller "now OK")
+
+  assert_contains "$OUTPUT" " 81°C   78°C     34°C  Dell default dynamic fan control profile" \
+    "the hot reading must keep the server on Dell's profile"
+  assert_contains "$OUTPUT" "All CPU temperatures are now OK (<= 50°C), user's fan control profile applied."
+  assert_not_contains "$OUTPUT" "decreased" "a reading that was never obtained cannot have decreased"
+}
+
+function test_the_comment_closing_a_fallback_is_written_in_the_singular_on_a_single_cpu_server() {
+  simulate_server "PowerEdge R230" --cpus 1 --cpu-temperatures "81"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 1 --cpu-temperatures "42")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  local -r OUTPUT=$(run_controller "now OK")
+
+  assert_contains "$OUTPUT" "CPU temperature is now OK (<= 50°C), user's fan control profile applied."
+  assert_not_contains "$OUTPUT" "All CPU temperatures" "a server with one CPU has nothing to write in the plural"
+}
+
 function test_the_controller_reports_both_cpus_when_they_are_overheating_together() {
   simulate_server "PowerEdge R630" --cpus 2 --cpu-temperatures "42 44"
   export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
