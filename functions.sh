@@ -906,8 +906,9 @@ function is_any_CPU_overheating() {
   done
 
   # Not being able to read a single CPU means nothing can be verified, so fail safe rather than trust
-  # the absence of data. refresh_CPU_temperature_sensors() keeps the set from ever emptying, so this
-  # only guards against a caller reaching here before any detection ran
+  # the absence of data. Reached on every cycle by a server exposing no processor entity at all -- an
+  # enclosure or CMC aimed at instead of a blade -- which is monitored for its chassis sensors with its
+  # fans left on Dell's own profile, and reached by a caller getting here before any detection ran
   if (( ${#DETECTED_CPU_TEMPERATURES[@]} == 0 )); then
     return 0
   fi
