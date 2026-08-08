@@ -230,6 +230,18 @@ function test_the_supervisor_runs_the_monitoring_process_by_default() {
 
   assert_contains "$SUPERVISOR_SOURCE" './Dell_iDRAC_fan_controller.sh' \
     "the default command must be the monitoring process"
+}
+
+function test_the_docker_image_starts_the_supervisor_and_not_the_monitoring_process() {
+  # Everything above is worth nothing if the image still execs the monitoring
+  # process directly : the supervisor would simply never run
+  if [ ! -f "$REPO_ROOT/Dockerfile" ]; then
+    # The suite is running inside the built image, which does not carry the
+    # Dockerfile that produced it
+    skip_test "no Dockerfile next to the scripts"
+    return 0
+  fi
+
   assert_matches "$(cat "$REPO_ROOT/Dockerfile")" 'ENTRYPOINT \["\./supervisor\.sh"\]' \
-    "and the image must start the supervisor rather than the monitoring process directly"
+    "the image must start the supervisor rather than the monitoring process directly"
 }
