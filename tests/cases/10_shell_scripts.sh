@@ -209,6 +209,57 @@ function test_the_env_example_offers_every_parameter_the_image_declares() {
   done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //' | cut -d= -f1)
 }
 
+function test_the_usage_examples_offer_every_parameter_the_image_declares() {
+  # The README's "Usage" section is the first thing a user copies, well before the
+  # "Parameters" list below it or the .env.example beside it. A parameter missing
+  # from those four blocks is one most users never learn exists : the two guards
+  # above watch .env.example and the documented defaults, and CPU_TEMPERATURE_SOURCE
+  # still shipped documented everywhere except in the commands people actually run.
+  # This is the guard against that drift
+  if [ ! -f "$REPO_ROOT/Dockerfile" ] || [ ! -f "$REPO_ROOT/README.md" ]; then
+    # The suite is running inside the built image, which carries neither
+    skip_test "no Dockerfile and README next to the scripts"
+    return 0
+  fi
+
+  # The configuration examples are the fenced blocks of the "Usage" section that
+  # set IDRAC_HOST : the two "docker run" ones and the two docker-compose ones.
+  # Found by what they contain rather than by their position, so that reordering
+  # them, or adding a fifth, needs no change here
+  local -r USAGE_SECTION=$(awk '/^## Usage$/ {inside = 1; next} /^## / {inside = 0} inside' "$REPO_ROOT/README.md")
+
+  local -a USAGE_EXAMPLES=()
+  local BLOCK="" IS_INSIDE_BLOCK=false LINE
+  while IFS= read -r LINE; do
+    if [[ "$LINE" == '```'* ]]; then
+      if $IS_INSIDE_BLOCK; then
+        [[ "$BLOCK" == *IDRAC_HOST* ]] && USAGE_EXAMPLES+=("$BLOCK")
+        BLOCK=""
+      fi
+      $IS_INSIDE_BLOCK && IS_INSIDE_BLOCK=false || IS_INSIDE_BLOCK=true
+      continue
+    fi
+    $IS_INSIDE_BLOCK && BLOCK+="$LINE"$'\n'
+  done < <(printf '%s\n' "$USAGE_SECTION")
+
+  # Without this the loop below would pass by having nothing to iterate over,
+  # which is the failure mode these guards exist to prevent in the first place
+  if (( ${#USAGE_EXAMPLES[@]} < 4 )); then
+    fail "only ${#USAGE_EXAMPLES[@]} usage examples were found in the README, expected at least 4"
+    return 1
+  fi
+
+  local KEY EXAMPLE EXAMPLE_NUMBER
+  while IFS= read -r KEY; do
+    EXAMPLE_NUMBER=1
+    for EXAMPLE in "${USAGE_EXAMPLES[@]}"; do
+      assert_contains "$EXAMPLE" "$KEY" \
+        "$KEY is declared by the Dockerfile, usage example $EXAMPLE_NUMBER should show users how to set it"
+      ((EXAMPLE_NUMBER++))
+    done
+  done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //' | cut -d= -f1)
+}
+
 function test_the_env_example_offers_every_parameter_the_readme_documents() {
   # The test above can only see what the Dockerfile declares, and the Dockerfile
   # declares no ENV for IDRAC_USERNAME and IDRAC_PASSWORD : they are credentials,

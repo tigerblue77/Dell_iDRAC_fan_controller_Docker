@@ -82,6 +82,7 @@ docker run -d \
   -e IDRAC_HOST=local \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
+  -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
@@ -101,6 +102,7 @@ docker run -d \
   -e IDRAC_PASSWORD=<iDRAC password> \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
+  -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
@@ -124,6 +126,7 @@ services:
       - IDRAC_HOST=local
       - FAN_SPEED=<decimal or hexadecimal fan speed>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
+      - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
@@ -148,6 +151,7 @@ services:
       - IDRAC_PASSWORD=<iDRAC password>
       - FAN_SPEED=<decimal or hexadecimal fan speed>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
+      - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
