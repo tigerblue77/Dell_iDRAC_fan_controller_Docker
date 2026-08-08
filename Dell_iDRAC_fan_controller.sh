@@ -172,14 +172,14 @@ IS_TARGET_SERVER_POWERED_OFF=false
 
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
-IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
 
 # Start timer in background
 sleep "$CHECK_INTERVAL" &
 SLEEP_PROCESS_PID=$!
 
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 
+echo "$NUMBER_OF_DETECTED_CPUS CPU temperature sensor(s) detected."
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
@@ -188,17 +188,8 @@ if [ -z "$EXHAUST_TEMPERATURE" ]; then
   # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
   EXHAUST_TEMPERATURE="-"
 fi
-if [ -z "$CPU2_TEMPERATURE" ]; then
-  echo "No CPU2 temperature sensor detected."
-  IS_CPU2_TEMPERATURE_SENSOR_PRESENT=false
-fi
-# Output new line to beautify output if one of the previous conditions have echoed
-if ! $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT || ! $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-  echo ""
-fi
+echo ""
 
-#readonly NUMBER_OF_DETECTED_CPUS=(${CPUS_TEMPERATURES//;/ })
-# TODO : write "X CPU sensors detected." and remove previous ifs
 readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
 
 # Start monitoring
@@ -234,7 +225,7 @@ while true; do
   # before/during the outage (could be the initial pre-loop reading, or readings from before it powered off)
   if $IS_TARGET_SERVER_POWERED_OFF; then
     IS_TARGET_SERVER_POWERED_OFF=false
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   fi
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
@@ -243,27 +234,15 @@ while true; do
   # the intake air is doing, a CPU past its threshold has to get the Dell default profile, and no
   # later branch may reduce the fan speed while that is the case
   #
-  # Check if CPU 1 is overheating then apply Dell default dynamic fan control profile if true
-  if CPU1_OVERHEATING; then
+  # Check if any CPU is overheating then apply Dell default dynamic fan control profile if true
+  if ANY_CPU_OVERHEATING; then
     # The state is only latched if the command actually reached the server: latching on a failure
     # would silence every later cycle through the "!= Dell" guard, leaving the log asserting that the
     # safety profile is active while the fans are still held at the user's speed
     if apply_Dell_default_fan_control_profile && [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
       ACTIVE_FAN_CONTROL_PROFILE="Dell"
 
-      # If CPU 2 temperature sensor is present, check if it is overheating too.
-      # Do not apply Dell default dynamic fan control profile as it has already been applied before
-      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-        COMMENT=$(build_fan_control_fallback_comment "CPU 1" "$CPU1_TEMPERATURE" "CPU 2" "$CPU2_TEMPERATURE")
-      else
-        COMMENT=$(build_fan_control_fallback_comment "CPU 1" "$CPU1_TEMPERATURE")
-      fi
-    fi
-  # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
-  elif $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-    if apply_Dell_default_fan_control_profile && [ "$ACTIVE_FAN_CONTROL_PROFILE" != "Dell" ]; then
-      ACTIVE_FAN_CONTROL_PROFILE="Dell"
-      COMMENT=$(build_fan_control_fallback_comment "CPU 2" "$CPU2_TEMPERATURE")
+      COMMENT=$(build_fan_control_fallback_comment "${OVERHEATING_CPUS_AND_TEMPERATURES[@]}")
     fi
   # Intake air hotter than the server is rated for: a static fan speed is the wrong thing to be
   # holding, so hand control back to iDRAC, which knows the platform's own airflow requirements
@@ -324,5 +303,5 @@ while true; do
   sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 done

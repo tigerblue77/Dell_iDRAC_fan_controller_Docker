@@ -328,42 +328,57 @@ function retrieve_temperature_by_sensor_name() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+# Returns : CPU_TEMPERATURES (indexed array), NUMBER_OF_DETECTED_CPUS, CPUS_TEMPERATURES,
+#           INLET_TEMPERATURE, EXHAUST_TEMPERATURE
+#
+# The CPU 2 presence flag is gone: the CPUs are discovered on every reading, so their count is an
+# output of this function rather than something the caller has to tell it
 function retrieve_temperatures() {
-  if (( $# != 2 )); then
-    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
+  if (( $# != 1 )); then
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
     return 1
   fi
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
-  local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
 
   # stderr is discarded here: this is a read-only diagnostic call (it never changes fan behavior) and some
   # iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
   local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees)
 
-  # Parse CPU data, each CPU being located by its IPMI entity ID (3.1 is CPU 1, 3.2 is CPU 2)
-  CPU1_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.1")
-  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-    CPU2_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.2")
-  else
-    CPU2_TEMPERATURE="-"
-  fi
+  # Discover the CPUs rather than assuming two of them. Entity 3 is the processor, so 3.1 is CPU 1,
+  # 3.2 is CPU 2, and so on: the lookup was already generation-independent, but the enumerated set was
+  # hardcoded to the first two, so a 4-socket R810/R815/R910/R930 ran with half its sockets never
+  # sampled and never checked for overheating -- on a machine whose own thermal management this
+  # container had just disabled
+  local i
+  CPU_TEMPERATURES=()
+  NUMBER_OF_DETECTED_CPUS=0
+  # The bound is defaulted rather than assumed: functions.sh is sourced on its own by healthcheck.sh,
+  # and an unset constant would silently make this loop detect no CPU at all
+  for ((i = 1; i <= ${MAXIMUM_NUMBER_OF_CPUS:-4}; i++)); do
+    local CPU_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.$i")
 
-  # Initialize CPUS_TEMPERATURES. An unreadable CPU 1 reading falls back to the "-" placeholder so that it
-  # still takes up its column when the line is printed : CPUS_TEMPERATURES is split on whitespace to build
-  # the display array, so an empty value would be dropped and shift every following column to the left.
-  # CPU1_TEMPERATURE itself is left untouched, CPU1_OVERHEATING() must still see the invalid reading
-  CPUS_TEMPERATURES="${CPU1_TEMPERATURE:--}"
-  NUMBER_OF_DETECTED_CPUS=1
+    # Dell populates sockets contiguously, so the first entity with no reading at all marks the end of
+    # the populated ones rather than a failed read to be skipped over
+    if [ -z "$CPU_TEMPERATURE" ] && [ $i -gt 1 ]; then
+      break
+    fi
 
-  # If CPU2 is present, parse its temperature data and add it to CPUS_TEMPERATURES.
-  # "-" is the placeholder set above when the sensor is known to be absent, so it must not be counted as a
-  # detected CPU: otherwise servers without a CPU2 sensor get an extra column that the header, built once
-  # from the first reading (when the placeholder isn't set yet), doesn't account for
-  if [ -n "$CPU2_TEMPERATURE" ] && [ "$CPU2_TEMPERATURE" != "-" ]; then
-    CPUS_TEMPERATURES+=";$CPU2_TEMPERATURE"
+    CPU_TEMPERATURES+=("$CPU_TEMPERATURE")
     ((NUMBER_OF_DETECTED_CPUS++))
-  fi
+  done
+
+  # Build the display string. An unreadable reading falls back to the "-" placeholder so that it still
+  # takes up its column when the line is printed : CPUS_TEMPERATURES is split to build the display
+  # array, so an empty value would be dropped and shift every following column to the left.
+  # CPU_TEMPERATURES itself is left untouched, the overheating checks must still see the invalid reading
+  CPUS_TEMPERATURES=""
+  for ((i = 0; i < NUMBER_OF_DETECTED_CPUS; i++)); do
+    if [ -n "$CPUS_TEMPERATURES" ]; then
+      CPUS_TEMPERATURES+=";"
+    fi
+    CPUS_TEMPERATURES+="${CPU_TEMPERATURES[$i]:--}"
+  done
 
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
@@ -583,17 +598,42 @@ function is_temperature_reading_valid() {
   [[ "$1" =~ ^-?[0-9]+$ ]]
 }
 
-# Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
-# If a reading isn't valid, fail safe and report overheating so the Dell default fan control profile
-# kicks in, instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric
-# input) or silently running the low user fan speed on unverified data
-function CPU1_OVERHEATING() {
-  is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
-  [ "$(normalize_decimal_value "$CPU1_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+# Check whether a detected CPU is above the threshold, by its 0-based index in CPU_TEMPERATURES.
+# If a reading isn't a valid number (missing sensor, transient IPMI parsing glitch, etc.), fail safe and
+# report overheating so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt"
+# throws "unary operator expected" on empty/non-numeric input) or silently running the low user fan speed
+# on unverified data
+function CPU_OVERHEATING() {
+  local -r TEMPERATURE="${CPU_TEMPERATURES[$1]}"
+
+  is_temperature_reading_valid "$TEMPERATURE" || return 0
+  [ "$(normalize_decimal_value "$TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
-function CPU2_OVERHEATING() {
-  is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
-  [ "$(normalize_decimal_value "$CPU2_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+
+# Returns 0 (true) if any detected CPU is overheating, 1 (false) otherwise
+# Returns : OVERHEATING_CPUS_AND_TEMPERATURES, alternating "CPU <n>" labels and their readings, in the
+#           pair form build_fan_control_fallback_comment() takes, so it can be passed straight through
+#
+# Every detected CPU is checked rather than the first two: on a 4-socket server the container has just
+# disabled iDRAC's own thermal management, so a CPU it doesn't look at is a CPU nothing is looking at
+function ANY_CPU_OVERHEATING() {
+  local i
+  OVERHEATING_CPUS_AND_TEMPERATURES=()
+
+  # No readable CPU at all is not "nothing is too hot", it means the container is flying blind. An
+  # empty loop below would return false and hold the user's static speed on an unmonitored machine,
+  # so this fails safe the same way an unreadable individual reading does
+  if [ "${NUMBER_OF_DETECTED_CPUS:-0}" -eq 0 ]; then
+    return 0
+  fi
+
+  for ((i = 0; i < NUMBER_OF_DETECTED_CPUS; i++)); do
+    if CPU_OVERHEATING $i; then
+      OVERHEATING_CPUS_AND_TEMPERATURES+=("CPU $((i + 1))" "${CPU_TEMPERATURES[$i]}")
+    fi
+  done
+
+  [ ${#OVERHEATING_CPUS_AND_TEMPERATURES[@]} -gt 0 ]
 }
 
 # Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
@@ -618,8 +658,8 @@ function join_with_and() {
 # Build the comment explaining why the Dell default fan control profile was applied.
 # Usage : build_fan_control_fallback_comment $CPU_NAME $CPU_TEMPERATURE [$CPU_NAME $CPU_TEMPERATURE]...
 #
-# CPU1_OVERHEATING()/CPU2_OVERHEATING() deliberately return true both when a CPU is genuinely too hot
-# and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile.
+# CPU_OVERHEATING() deliberately returns true both when a CPU is genuinely too hot and when its reading
+# is unusable, so an unverifiable temperature still falls back to Dell's profile.
 # The comment has to tell the two apart : reporting "temperature is too high" on a reading that was
 # never obtained sends the user chasing a cooling problem instead of the sensor problem they have
 function build_fan_control_fallback_comment() {
@@ -701,13 +741,11 @@ function SERVER_TOO_COLD() {
   if [ -n "$LOW_CPU_TEMPERATURE_THRESHOLD" ]; then
     IS_ANY_CONDITION_CONFIGURED=true
     # Every detected CPU has to be cold : one busy CPU is enough to mean the chassis isn't
-    [[ "$CPU1_TEMPERATURE" =~ ^-?[0-9]+$ ]] || return 1
-    [ "$(normalize_decimal_value "$CPU1_TEMPERATURE")" -lt "$LOW_CPU_TEMPERATURE_THRESHOLD" ] || return 1
-
-    if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-      [[ "$CPU2_TEMPERATURE" =~ ^-?[0-9]+$ ]] || return 1
-      [ "$(normalize_decimal_value "$CPU2_TEMPERATURE")" -lt "$LOW_CPU_TEMPERATURE_THRESHOLD" ] || return 1
-    fi
+    local i
+    for ((i = 0; i < NUMBER_OF_DETECTED_CPUS; i++)); do
+      [[ "${CPU_TEMPERATURES[$i]}" =~ ^-?[0-9]+$ ]] || return 1
+      [ "$(normalize_decimal_value "${CPU_TEMPERATURES[$i]}")" -lt "$LOW_CPU_TEMPERATURE_THRESHOLD" ] || return 1
+    done
   fi
 
   # Neither threshold configured means the protection is off, not that every condition trivially held
