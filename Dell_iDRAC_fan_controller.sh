@@ -7,6 +7,11 @@
 source functions.sh
 source constants.sh
 
+# Dell's "third-party PCIe card default cooling response" is an OEM command that not every server
+# takes, and the monitoring loop below finds out by sending it and reading the answer rather than by
+# guessing from the model name
+IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+
 # Trap the signals for container exit and run graceful_exit function
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
@@ -111,13 +116,6 @@ fi
 
 # CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
 # instead of counting values, which no longer depends on the server generation
-
-# If server model is Gen 14 (*40) or newer
-if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
-else
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
-fi
 
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
@@ -381,20 +379,44 @@ while true; do
     fi
   fi
 
-  # If server model is not Gen 14 (*40) or newer
-  if ! $DELL_POWEREDGE_GEN_14_OR_NEWER; then
+  # The third-party PCIe card Dell default cooling response is an OEM command that not every server
+  # takes : it no longer exists from the 14th generation on, and a blade or a modular sled has no fan
+  # of its own to apply it to. Which servers those are cannot be read from the model name — Dell never
+  # named the AMD, dense and modular models to a scheme a pattern could follow, so a name-based check
+  # told an R6515 or an MX740c apart from an R730 exactly backwards (issue #173).
+  #
+  # So ask the server and report what it answered. A command that failed is not a verdict on its own :
+  # ipmitool exits non-zero both for a command the BMC does not have and for a BMC it never reached, and
+  # only the completion code it prints tells the two apart. The controller therefore stops asking on the
+  # first genuine "I do not have this command", and never on a network outage, however long it lasts
+  if $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
     # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
     if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Disabled"
       disable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
     else
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Enabled"
       enable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
     fi
+    # The status of the command the branch above just ran
+    THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE=$?
 
-    if "$MONITORING_ONLY_MODE"; then
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+    if [ $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE -eq 0 ]; then
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
+
+      if "$MONITORING_ONLY_MODE"; then
+        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+      fi
+    elif does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
+      # The BMC answered, and answered that it does not have this command. That will not change while
+      # this container runs, so stop sending it
+      IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+    else
+      # The command did not go through, but nothing says the server refused it : an unreachable iDRAC, a
+      # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
     fi
   fi
 

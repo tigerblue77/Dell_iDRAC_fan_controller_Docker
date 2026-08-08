@@ -43,3 +43,4 @@ readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5
 # that has genuinely lost a CPU; the cost of concluding too early is dropping a socket that was merely
 # slow to become readable after POST, and monitoring one heat source less until it shows up again
 readonly CPU_REMOVAL_CONFIRMING_READINGS=5
+
