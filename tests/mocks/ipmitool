@@ -17,6 +17,11 @@
 #                                  non-zero, MOCK_IPMITOOL_FRU_OUTPUT is printed
 #                                  on stderr instead of stdout, like the real
 #                                  tool does when the connection fails
+#   MOCK_IPMITOOL_FRU_STDERR       per-device read failures printed on stderr while
+#                                  MOCK_IPMITOOL_FRU_OUTPUT still reaches stdout. This
+#                                  is the partial failure of a healthy server whose
+#                                  empty bays answer "Device not present", and it comes
+#                                  with a non-zero MOCK_IPMITOOL_FRU_EXIT_CODE
 #   MOCK_IPMITOOL_SDR_OUTPUT       stdout of "ipmitool sdr type temperature"
 #   MOCK_IPMITOOL_SDR_STDERR       stderr of the same command (firmware noise)
 #   MOCK_IPMITOOL_SDR_EXIT_CODE    its exit code (default 0)
@@ -67,6 +72,14 @@ readonly SUB_COMMAND="${ARGUMENTS[0]:-}"
 
 case "$SUB_COMMAND" in
   fru)
+    # Some FRU devices failed to read but the inventory still came back on stdout
+    if [ -n "${MOCK_IPMITOOL_FRU_STDERR:-}" ]; then
+      printf '%s\n' "$MOCK_IPMITOOL_FRU_STDERR" >&2
+      printf '%s\n' "${MOCK_IPMITOOL_FRU_OUTPUT:-}"
+      exit "${MOCK_IPMITOOL_FRU_EXIT_CODE:-0}"
+    fi
+
+    # Nothing was read at all, so what the tool printed is the failure itself
     if [ "${MOCK_IPMITOOL_FRU_EXIT_CODE:-0}" -ne 0 ]; then
       printf '%s\n' "${MOCK_IPMITOOL_FRU_OUTPUT:-}" >&2
       exit "${MOCK_IPMITOOL_FRU_EXIT_CODE}"

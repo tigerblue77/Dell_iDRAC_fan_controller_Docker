@@ -12,15 +12,21 @@
 
 # Build an "ipmitool fru" output
 # Usage : make_fru_output [--manufacturer NAME] [--model NAME] [--board-fields-only] [--no-manufacturer]
+#                         [--with-unreadable-devices]
 #
 # --board-fields-only reproduces the servers that don't fill the "Product *"
 # fields at all and only expose "Board Mfg" / "Board Product", which
 # get_Dell_server_model() falls back on
+#
+# --with-unreadable-devices appends the empty drive backplane and PSU bays that a
+# populated server reports as unreadable. They are what makes the real "ipmitool fru"
+# exit non-zero on hardware that is nonetheless perfectly healthy
 function make_fru_output() {
   local MANUFACTURER="DELL"
   local MODEL="PowerEdge R730xd"
   local BOARD_FIELDS_ONLY=false
   local WITH_MANUFACTURER=true
+  local WITH_UNREADABLE_DEVICES=false
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,6 +34,7 @@ function make_fru_output() {
       --model) MODEL="$2"; shift 2 ;;
       --board-fields-only) BOARD_FIELDS_ONLY=true; shift ;;
       --no-manufacturer) WITH_MANUFACTURER=false; shift ;;
+      --with-unreadable-devices) WITH_UNREADABLE_DEVICES=true; shift ;;
       *) printf 'make_fru_output: unknown option "%s"\n' "$1" >&2; return 1 ;;
     esac
   done
@@ -42,6 +49,9 @@ function make_fru_output() {
   printf ' Board Part Number     : 0599V5A05\n'
 
   if $BOARD_FIELDS_ONLY; then
+    if $WITH_UNREADABLE_DEVICES; then
+      make_unreadable_fru_devices
+    fi
     return 0
   fi
 
@@ -53,6 +63,23 @@ function make_fru_output() {
   printf ' Product Version       : A05\n'
   printf ' Product Serial        : 5N7XXX2\n'
   printf ' Product Asset Tag     :\n'
+
+  if $WITH_UNREADABLE_DEVICES; then
+    make_unreadable_fru_devices
+  fi
+}
+
+# The empty bays of a populated server, as "ipmitool fru" reports them
+function make_unreadable_fru_devices() {
+  printf '\n'
+  printf 'FRU Device Description : BP0 (ID 12)\n'
+  printf ' Device not present (Timeout)\n'
+  printf '\n'
+  printf 'FRU Device Description : BP2 (ID 14)\n'
+  printf ' Device not present (Timeout)\n'
+  printf '\n'
+  printf 'FRU Device Description : PERC2 (ID 11)\n'
+  printf ' Device not present (Parameter out of range)\n'
 }
 
 # Build a single "ipmitool sdr type temperature" line

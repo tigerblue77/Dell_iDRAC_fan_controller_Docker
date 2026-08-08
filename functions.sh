@@ -343,10 +343,6 @@ function get_Dell_server_model() {
   IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>&1)
   local -r ipmitool_exit_code=$?
 
-  if [ $ipmitool_exit_code -ne 0 ]; then
-    print_error_and_exit "Could not establish IPMI connection to iDRAC/IPMI host \"$IDRAC_HOST\". Check that IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD are correct. ipmitool said: $IPMI_FRU_content"
-  fi
-
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
 
@@ -358,6 +354,16 @@ function get_Dell_server_model() {
   # Check if SERVER_MODEL is empty, if yes, assign value based on "Board Product"
   if [ -z "$SERVER_MODEL" ]; then
     SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2}')
+  fi
+
+  # Whether the server could be identified is the reliable signal here, not ipmitool's
+  # exit code : "ipmitool fru" walks every FRU device and returns non-zero as soon as a
+  # single one of them fails to read, which is the normal state of healthy hardware.
+  # An unpopulated drive backplane or PSU bay answers "Device not present (Timeout)"
+  # while the builtin FRU device (ID 0) still returns the manufacturer and the model, so
+  # exiting on the exit code alone refused to start on servers that were perfectly fine.
+  if [ -z "$SERVER_MANUFACTURER" ] && [ -z "$SERVER_MODEL" ]; then
+    print_error_and_exit "Could not establish IPMI connection to iDRAC/IPMI host \"$IDRAC_HOST\". Check that IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD are correct. ipmitool exited with code $ipmitool_exit_code and said: $IPMI_FRU_content"
   fi
 }
 
