@@ -102,7 +102,9 @@ function test_the_comment_closing_a_fallback_says_the_temperatures_are_ok_not_th
 
   local -r OUTPUT=$(run_controller "now OK")
 
-  assert_contains "$OUTPUT" " 81°C   78°C     34°C  Dell default dynamic fan control profile" \
+  # Matched rather than compared, so the gap the profile is right-aligned into stays the business of
+  # the column width guard : this assertion is about which profile the hot row carries, not its layout
+  assert_matches "$OUTPUT" " 81°C   78°C     34°C[[:space:]]+Dell default dynamic fan control profile" \
     "the hot reading must keep the server on Dell's profile"
   assert_contains "$OUTPUT" "All CPU temperatures are now OK (<= 50°C), user's fan control profile applied."
   assert_not_contains "$OUTPUT" "decreased" "a reading that was never obtained cannot have decreased"

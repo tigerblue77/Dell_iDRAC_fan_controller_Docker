@@ -1,0 +1,13 @@
+# SC2086 (quote to prevent word splitting) and SC2206 (quote array expansion) are disabled project-wide
+# because this codebase relies on deliberate word-splitting in a few well-known, consistently used spots:
+#   - IDRAC_LOGIN_STRING (and similar) is built as a single space-separated string of ipmitool arguments
+#     (e.g. "lanplus -H <host> -U <user> -E"), and is deliberately left unquoted at every ipmitool call site
+#     so it splits back into separate argv entries. Quoting it would pass ipmitool one argument instead of
+#     several and break every call in network mode.
+#   - Splitting a semicolon-joined string of readings into a bash array
+#     (CPUs_temperatures_array=(${STRING//;/ })) relies on the same word-splitting on purpose.
+# Everywhere else in the codebase, variables are quoted; this file trades a bit of per-line lint precision
+# for not scattering dozens of near-identical "# shellcheck disable=SC2086" comments across every ipmitool
+# call site.
+disable=SC2086
+disable=SC2206

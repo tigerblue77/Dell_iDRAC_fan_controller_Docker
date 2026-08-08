@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034  # Every constant here is consumed by the scripts that source this file, not by this file itself
 
 # Define the interval for printing temperature table header
 readonly TABLE_HEADER_PRINT_INTERVAL=10
@@ -51,8 +52,12 @@ readonly CPU_REMOVAL_CONFIRMING_READINGS=5
 # That column has zero slack by construction : "Dell default dynamic fan control profile" is exactly 40
 # characters, so the " (monitoring only, not applied)" badge -- 31 more -- cannot be made to fit by
 # shortening anything, and the column has to widen with the mode instead. MONITORING_ONLY_MODE is fixed for
-# the container's lifetime, so which of the two applies is settled once at startup
-readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=40
+# the container's lifetime, so which of the two applies is settled once at startup.
+#
+# Outside monitoring only mode the width follows " (not applied)" rather than the bare profile : a refused
+# ipmitool call keeps the table honest by saying the profile is not the one the server is running, and that
+# suffix is 14 characters the bare name does not account for. Sizing on the bare name is what #170 was
+readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=54
 readonly MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=71
 
 # The cooling response column is sized by its own heading, "Third-party PCIe card Dell default cooling
