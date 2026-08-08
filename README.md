@@ -84,6 +84,8 @@ docker run -d \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check> \
+  -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty> \
+  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -104,6 +106,8 @@ docker run -d \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check> \
+  -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty> \
+  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -128,6 +132,8 @@ services:
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check>
+      - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
+      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -153,6 +159,8 @@ services:
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check>
+      - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
+      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -222,6 +230,9 @@ All parameters are optional as they have default values (including default iDRAC
   - The value is read leniently : case is ignored, surrounding whitespace and quotes are stripped, `lm_sensors` and `lmsensors` are accepted as spellings of `lm-sensors`, and an empty value means `auto`. Anything that is still none of the three stops the container at startup rather than silently meaning `auto`.
   - Your inlet and exhaust temperatures keep coming from your iDRAC : `lm-sensors` has no equivalent for them, so only the CPU rows are replaced. On a server that reports neither, both columns show `-`, which is what they already do today.
 - `CHECK_INTERVAL` parameter is the time between each temperature check and potential profile change, in seconds unless a unit suffix (`s`, `m`, `h` or `d`) says otherwise, so `90`, `90s` and `5m` are all valid. Fractions of a second are not. The container refuses to start on a value `sleep` cannot wait for, and on zero, as either would leave the monitoring loop unpaced and running at full speed against your iDRAC. **Default** value is 5(s). A short interval makes the controller react quickly to temperature spikes, at the cost of more IPMI traffic towards the iDRAC and more container log lines. If your iDRAC struggles to keep up (especially over LAN) or if you prefer quieter logs, increase this value.
+- `MAXIMUM_IPMI_UNREACHABLE_DURATION` parameter is how long the iDRAC may stay completely unreachable before the container gives up and exits. **Default** value is 60s, in seconds unless a unit suffix (`s`, `m`, `h` or `d`) says otherwise, exactly like `CHECK_INTERVAL`. Empty disables the escalation. It counts only failures to reach the iDRAC: a server correctly reported as powered off is a state that was observed, not a failure, and never counts however long it stays off; any cycle that reaches the iDRAC resets the count. An unreachable iDRAC accepts no command, so exiting cannot and does not try to move the fans — the point is to obtain a fresh IPMI session, which is what clears an expired session, a rebooted iDRAC or an exhausted session limit, and to make the loss visible to `docker ps` and to anything watching container state instead of it being buried in logs. **Read the paragraph below before relying on it.**
+  > **This only helps if something restarts the container.** With Docker's default `no` restart policy, a container that exits stays dead: `graceful_exit` tries to restore Dell's profile on the way out, but that command goes through the same unreachable iDRAC and fails too, so the fans keep the speed they were last set to with nothing watching them at all. Worse, a container that keeps retrying recovers on its own the moment the iDRAC answers again, whereas one that exited does not. Run with `--restart unless-stopped` (or a Compose `restart:` policy) if you leave this enabled, or set it empty to keep the previous retry-forever behaviour.
+- `MAXIMUM_CONSECUTIVE_IPMI_FAILURES` parameter expresses that same threshold as a raw number of consecutive unreachable cycles instead of a duration. **Default** value is (empty), the duration above being used. When set it takes precedence, being the more specific of the two. Prefer the duration unless you need the count exactly: it keeps meaning the same thing when `CHECK_INTERVAL` changes, where a cycle count silently would not.
 
   This interval is also the controller's reaction time, so it is bounded from above. While your fan control profile is applied, Dell's own dynamic fan control is disabled and the fans are pinned at `FAN_SPEED`: nothing raises them until the *next* check reads a temperature above `CPU_TEMPERATURE_THRESHOLD`. The interval is therefore the longest your server can heat up with its cooling frozen at a speed you chose for an idle machine. Above **60 seconds** the container starts and prints a warning saying so. Above **15 minutes** it refuses to start, that delay being long enough that the controller is not really controlling anything anymore.
 
@@ -334,6 +345,8 @@ export IDRAC_PASSWORD=<iDRAC password>
 export FAN_SPEED=<decimal or hexadecimal fan speed>
 export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
 export CHECK_INTERVAL=<seconds between each check>
+export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
+export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
 export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 export MONITORING_ONLY_MODE=<true or false>
