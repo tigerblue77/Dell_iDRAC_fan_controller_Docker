@@ -255,3 +255,39 @@ function test_the_refusal_never_prints_the_idrac_password() {
   assert_not_contains "$OUTPUT" "$IDRAC_PASSWORD" "the password must never reach the logs"
   assert_contains "$OUTPUT" "<iDRAC password>" "the command is shown with a placeholder instead"
 }
+
+function test_a_transiently_empty_sdr_read_is_waited_out_not_refused() {
+  # ipmitool returning no sensor line at all says nothing about what the server
+  # has : a busy BMC, a partial response or an iDRAC still coming up all produce
+  # it. Concluding "this server has no CPU" on it turns a hiccup at startup into
+  # a container that will not start
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT="$(make_fru_output --model "PowerEdge R730")"
+  export MOCK_IPMITOOL_SDR_OUTPUT=""
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46")
+  MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=2
+
+  local -r OUTPUT=$(run_controller "44°C")
+
+  assert_not_contains "$OUTPUT" "could be read from" \
+    "an empty answer must never be taken for a server without a CPU"
+  assert_contains "$OUTPUT" "No temperature sensor could be read at all" \
+    "the container says what it is waiting on instead of going quiet"
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)." \
+    "and picks the CPUs up on the cycle they answer"
+  assert_contains "$OUTPUT" "44°C" "then monitors them normally"
+}
+
+function test_the_refusal_still_fires_on_a_server_that_did_answer_with_sensors() {
+  # The counterpart : the verdict is about a server that listed its sensors and
+  # had no CPU among them, which stays a fault to report on the first answer
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local OUTPUT
+  OUTPUT=$(run_controller "could be read from")
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE"
+  assert_contains "$OUTPUT" "No CPU temperature sensor could be read from DELL PowerEdge M1000e"
+}
