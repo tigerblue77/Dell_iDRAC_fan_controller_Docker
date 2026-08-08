@@ -59,8 +59,28 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
-# Stop the container unless the given parameter is a duration sleep can actually wait for
-# Usage : validate_check_interval_parameter "$PARAMETER_NAME" "$VALUE"
+# Convert a check interval into a number of seconds, so it can be compared against a threshold
+# Usage : convert_check_interval_to_seconds "5m"
+# Returns : the equivalent number of seconds
+#
+# The value must already have passed validate_check_interval_parameter's format check : this only
+# reads the shapes that regex allows. The suffix is stripped and 10# forces base 10 so that a padded
+# value ("00", "08") is read as the decimal number the user meant instead of an invalid octal one
+function convert_check_interval_to_seconds() {
+  local -r VALUE="$1"
+  local -r NUMBER="$((10#${VALUE%[smhd]}))"
+
+  case "$VALUE" in
+    *m) echo "$((NUMBER * 60))" ;;
+    *h) echo "$((NUMBER * 3600))" ;;
+    *d) echo "$((NUMBER * 86400))" ;;
+    *) echo "$NUMBER" ;;
+  esac
+}
+
+# Stop the container unless the given parameter is a duration sleep can actually wait for, and unless
+# that duration is short enough for the controller to still be reacting to temperature changes
+# Usage : validate_check_interval_parameter "$PARAMETER_NAME" "$VALUE" ["$MONITORING_ONLY_MODE"]
 #
 # CHECK_INTERVAL is the monitoring loop's only pacing mechanism and reaches sleep as unchecked text.
 # The loop starts the timer in background then waits on its PID without ever looking at what wait
@@ -82,22 +102,50 @@ function convert_hexadecimal_value_to_decimal() {
 # would break it for no benefit. The fractional values sleep also accepts ("0.5") are refused all the
 # same, a sub-second cycle being exactly the hammering this check exists to prevent.
 #
+# The interval is bounded from above too, because it is the controller's reaction time. Once
+# apply_user_fan_control_profile has run, Dell's own dynamic fan control is disabled (raw 0x30 0x30
+# 0x01 0x00) and the fans are pinned at FAN_SPEED (raw 0x30 0x30 0x02 0xff ...), so nothing raises them
+# again until a later check reads a temperature above CPU_TEMPERATURE_THRESHOLD. The interval is
+# therefore the longest the server can heat up with its cooling frozen at a speed chosen for an idle
+# machine, which is why a long one is worth a warning and a very long one is refused outright.
+#
+# Both bounds are lifted in monitoring only mode : no fan control profile is ever applied there, Dell's
+# dynamic fan control keeps the fans, and the interval is only how often temperatures are logged. There
+# is no reaction time to warn about, and refusing a slow logging cadence would reject a configuration
+# that carries no thermal risk whatsoever. The argument defaults to false so that a call that omits it
+# keeps the strictest reading, fan control being the assumption that fails safe.
+#
 # This function must be called as a statement, never through a command substitution : the exit inside
 # print_error_and_exit would otherwise only leave the subshell and the container would keep running
 function validate_check_interval_parameter() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
+  local -r IS_MONITORING_ONLY_MODE="${3:-false}"
 
   if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
     print_error_and_exit "$PARAMETER_NAME must be a number of seconds, optionally suffixed with s, m, h or d, but is \"$VALUE\""
   fi
 
+  local -r VALUE_IN_SECONDS=$(convert_check_interval_to_seconds "$VALUE")
+
   # Zero is the third failing case, and the only one sleep itself accepts : it parses fine, returns
   # immediately, and spins the loop just like an unparseable value. It is therefore rejected on its own
-  # terms rather than on its format. The suffix is stripped and 10# forces base 10 so that a padded
-  # value ("00", "08") is read as the decimal number the user meant instead of an invalid octal one
-  if [ "$((10#${VALUE%[smhd]}))" -eq 0 ]; then
+  # terms rather than on its format
+  if [ "$VALUE_IN_SECONDS" -eq 0 ]; then
     print_error_and_exit "$PARAMETER_NAME must be greater than zero, but is \"$VALUE\""
+  fi
+
+  if [ "$IS_MONITORING_ONLY_MODE" == "true" ]; then
+    return
+  fi
+
+  if [ "$VALUE_IN_SECONDS" -gt "$MAXIMUM_CHECK_INTERVAL_IN_SECONDS" ]; then
+    print_error_and_exit "$PARAMETER_NAME must not exceed $((MAXIMUM_CHECK_INTERVAL_IN_SECONDS / 60)) minutes when this container drives the fans, but is \"$VALUE\". Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the server would be left heating up unattended for that long. Use a shorter interval, or set MONITORING_ONLY_MODE=true if all you want is temperature logging"
+  fi
+
+  if [ "$VALUE_IN_SECONDS" -gt "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" ]; then
+    print_warning "$PARAMETER_NAME is \"$VALUE\", over $CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS seconds. Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the controller will take up to that long to react to a temperature spike"
+    printf "\n"
   fi
 }
 
