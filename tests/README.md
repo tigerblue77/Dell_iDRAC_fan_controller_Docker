@@ -31,6 +31,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/25_check_interval_validation.sh` | `CHECK_INTERVAL` values the monitoring loop can actually be paced by, and the reaction time bounds above them |
 | `cases/26_boolean_parameter_validation.sh` | The boolean parameters, which are dispatched by running their value as a command |
 | `cases/27_configuration_error_format.sh` | The one shape every startup refusal reports in, so the reason survives a `docker logs` scroll |
+| `cases/28_comparison_operands.sh` | That no accepted configuration makes bash complain about a comparison operand |
 | `cases/30_idrac_login_string.sh` | Local (`/dev/ipmi0`) and network (`lanplus`) modes, password handling |
 | `cases/35_message_output.sh` | How error and warning messages reach the log, read at their junction with the line that follows |
 | `cases/40_temperature_parsing.sh` | Reading the sensors out of `ipmitool sdr type temperature` |
