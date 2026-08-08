@@ -22,6 +22,52 @@ function test_the_controller_applies_the_user_fan_control_profile_on_a_healthy_s
     "Dell's dynamic profile is only applied once, when the container is stopped"
 }
 
+function test_the_very_first_line_says_when_the_server_started_out_hot() {
+  # A server already above its threshold when the container starts. The comment
+  # column explains a profile CHANGE, and the first cycle changes nothing -- it
+  # establishes the profile -- so this stayed silent : Dell's profile applied, and
+  # a bare "-" where the reason belongs.
+  #
+  # The neighbouring case, a server with no readable CPU sensor at all, is already
+  # covered by the startup waiting path and is deliberately not retested here : it
+  # passes with or without this change, so asserting on it would prove nothing
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "80 41"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
+}
+
+function test_the_very_first_line_still_explains_a_healthy_start() {
+  # The branch that already spoke must keep speaking : the fix must not trade one
+  # silence for another
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "40 41"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "user's fan control profile applied."
+}
+
+function test_the_explanation_is_printed_once_not_on_every_cycle() {
+  # It explains a change, so a server that stays hot must not repeat it forever :
+  # that would be the log spam the comment column exists to avoid.
+  #
+  # The second cycle reports a different reading, still above the threshold, so
+  # the harness has a positive signal to wait for. Waiting for the message NOT to
+  # reappear would mean waiting for the poll budget to run out -- eight seconds
+  # per run, and a test whose meaning depends on a timeout rather than on output
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "80 41"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "81 41")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  local -r OUTPUT=$(run_controller "81°C")
+
+  assert_contains "$OUTPUT" "81°C" "the second cycle must have been reached"
+  assert_equals "1" "$(printf '%s' "$OUTPUT" | grep -c "CPU 1 temperature is too high")" \
+    "the reason is stated on the cycle that established the profile, then not again"
+}
+
 function test_the_controller_falls_back_on_the_dell_default_profile_when_a_cpu_starts_overheating() {
   # Cold CPUs on the first cycle, CPU 2 above the threshold from the second one :
   # the profile change is what the user must see in the logs
