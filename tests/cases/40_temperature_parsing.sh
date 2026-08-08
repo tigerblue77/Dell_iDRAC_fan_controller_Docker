@@ -58,10 +58,11 @@ function test_the_sign_survives_the_whole_read_not_just_the_extraction() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "-40 -5" --inlet -3 --exhaust 12)
 
-  retrieve_temperatures true true
+  detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  retrieve_temperatures true
 
-  assert_equals "-40" "$CPU1_TEMPERATURE"
-  assert_equals "-5" "$CPU2_TEMPERATURE"
+  assert_equals "-40" "${DETECTED_CPU_TEMPERATURES[0]}"
+  assert_equals "-5" "${DETECTED_CPU_TEMPERATURES[1]}"
   assert_equals "-3" "$INLET_TEMPERATURE"
   assert_equals "-40;-5" "$CPUS_TEMPERATURES"
 }

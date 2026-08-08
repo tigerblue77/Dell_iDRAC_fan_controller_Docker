@@ -93,6 +93,87 @@ function test_the_test_context_starts_from_the_docker_images_defaults() {
   done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //')
 }
 
+# The README states the default of every parameter, the Dockerfile declares the
+# real one, and nothing compared the two : the documentation could tell the reader
+# one thing while the container did another, with no test going red. That is the
+# same drift the test case above guards one level down, where the harness kept
+# CHECK_INTERVAL=60 after the image had dropped it to 5.
+#
+# The value is stated in several shapes -- "local", 5(%), 50(°C), false followed by
+# a clause -- so it is normalised rather than matched literally : the wording is
+# free to change, only a value that disagrees fails.
+# Usage : documented_default_value "5(%)" -> "5"
+function documented_default_value() {
+  local VALUE="$1"
+  # Keep what precedes the first comma : some defaults are followed by a clause
+  VALUE="${VALUE%%,*}"
+  # Drop a trailing unit in parentheses : "5(%)", "50(°C)", "5(s)"
+  VALUE="${VALUE%%(*}"
+  # Drop the quotes and backticks the prose wraps some values in
+  VALUE="${VALUE//[\"\`]/}"
+  # Trim
+  VALUE="${VALUE#"${VALUE%%[![:space:]]*}"}"
+  VALUE="${VALUE%"${VALUE##*[![:space:]]}"}"
+  printf '%s' "$VALUE"
+}
+
+function test_the_readme_documents_the_defaults_the_image_actually_ships() {
+  if [ ! -f "$REPO_ROOT/Dockerfile" ] || [ ! -f "$REPO_ROOT/README.md" ]; then
+    # The suite is running inside the built image, which carries neither
+    skip_test "no Dockerfile and README next to the scripts"
+    return 0
+  fi
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  local ENV_DECLARATION KEY DOCKERFILE_VALUE DOCUMENTED_SENTENCE
+  while IFS= read -r ENV_DECLARATION; do
+    KEY="${ENV_DECLARATION%%=*}"
+    DOCKERFILE_VALUE="${ENV_DECLARATION#*=}"
+
+    DOCUMENTED_SENTENCE=$(printf '%s' "$README_CONTENT" |
+      grep -oE '`'"$KEY"'`[^*]*\*\*Default\*\* value is [^.]*' | head -1)
+
+    if [ -z "$DOCUMENTED_SENTENCE" ]; then
+      fail "$KEY is shipped by the Dockerfile but the README states no default for it"
+      continue
+    fi
+
+    assert_equals "$DOCKERFILE_VALUE" \
+      "$(documented_default_value "${DOCUMENTED_SENTENCE##*value is }")" \
+      "the README's default for $KEY should be the one the Dockerfile ships"
+  done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //')
+}
+
+function test_the_env_example_offers_every_parameter_the_image_declares() {
+  # .env.example is what a user copies to configure the container, and its own
+  # header points at the README for the details. A parameter the image declares
+  # but that file omits is a parameter nobody discovers by following the
+  # documented path : MONITORING_ONLY_MODE was missing from it while the
+  # controller's error messages told users to set that very variable. This is
+  # the guard against that drift
+  if [ ! -f "$REPO_ROOT/Dockerfile" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # Dockerfile that produced it nor the example file shipped beside it
+    skip_test "no Dockerfile and .env.example next to the scripts"
+    return 0
+  fi
+
+  # Space padded on both ends so a key can be matched whole, the same way the
+  # test above tells IDRAC_HOST apart from a key merely containing it
+  local ENV_EXAMPLE_KEYS=" "
+  local LINE
+  while IFS= read -r LINE; do
+    ENV_EXAMPLE_KEYS+="${LINE%%=*} "
+  done < <(grep -E '^[A-Z_]+=' "$REPO_ROOT/.env.example")
+
+  local KEY
+  while IFS= read -r KEY; do
+    assert_contains "$ENV_EXAMPLE_KEYS" " $KEY " \
+      "$KEY is declared by the Dockerfile, .env.example should show users how to set it"
+  done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //' | cut -d= -f1)
+}
+
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
   local OUTPUT
   OUTPUT=$(bash "$REPO_ROOT/healthcheck.sh" 2>&1)

@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Fake lm-sensors "sensors" used by the test suite.
+#
+# It stands in for the utility the controller asks for the CPUs' own "high"
+# temperature, so that threshold detection can be exercised on any machine,
+# including one with no hwmon chip at all (which is what a CI runner usually is).
+#
+# Recognized environment variables:
+#   MOCK_SENSORS_OUTPUT      stdout of "sensors -u", interpreted by printf so
+#                            that a test can write a chip block on a single line
+#   MOCK_SENSORS_EXIT_CODE   exit code (default 0). When non-zero, the failure
+#                            message goes to stderr, the way the real tool
+#                            reports "No sensors found!"
+#
+# Only "sensors -u" is ever called by the controller, so no other form is simulated.
+
+readonly NO_SENSORS_FOUND='No sensors found!\nMake sure you loaded all the kernel drivers you need.\n'
+
+if [ "${MOCK_SENSORS_EXIT_CODE:-0}" -ne 0 ]; then
+  printf '%b' "${MOCK_SENSORS_OUTPUT:-$NO_SENSORS_FOUND}" >&2
+  exit "$MOCK_SENSORS_EXIT_CODE"
+fi
+
+printf '%b' "$MOCK_SENSORS_OUTPUT"

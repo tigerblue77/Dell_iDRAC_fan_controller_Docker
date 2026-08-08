@@ -22,7 +22,9 @@ It exits `0` when every test case passed, `1` otherwise.
 | --- | --- |
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, healthcheck |
 | `cases/20_fan_speed_conversions.sh` | `FAN_SPEED` given as a percentage or as a hexadecimal byte |
+| `cases/22_cpu_temperature_threshold.sh` | `CPU_TEMPERATURE_THRESHOLD`, and reading "auto" off the CPUs with `lm-sensors` |
 | `cases/25_check_interval_validation.sh` | `CHECK_INTERVAL` values the monitoring loop can actually be paced by, and the reaction time bounds above them |
+| `cases/26_boolean_parameter_validation.sh` | The boolean parameters, which are dispatched by running their value as a command |
 | `cases/30_idrac_login_string.sh` | Local (`/dev/ipmi0`) and network (`lanplus`) modes, password handling |
 | `cases/40_temperature_parsing.sh` | Reading the sensors out of `ipmitool sdr type temperature` |
 | `cases/50_server_model_detection.sh` | Identifying the server, and detecting Gen 14 or newer |
@@ -66,7 +68,7 @@ tests/
 │   ├── fixtures.sh                 builders for the ipmitool outputs (FRU, SDR)
 │   ├── harness.sh                  the environment a test case runs in, and its helpers
 │   └── reports.sh                  the JUnit XML and Markdown reports
-└── mocks/                          fake ipmitool, date and sleep, put first in the PATH
+└── mocks/                          fake ipmitool, sensors, date and sleep, put first in the PATH
 ```
 
 Each test case runs in its own subshell, starting from the environment
