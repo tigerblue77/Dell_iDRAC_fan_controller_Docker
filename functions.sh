@@ -809,7 +809,12 @@ function get_Dell_server_model() {
 }
 
 # Builds the two header lines of the temperatures table, sized for the CPUs actually detected
-# Usage : build_header $CPU_COLUMN_CONTENT_WIDTH "CPU 1" "CPU 2" ...
+# Usage : build_header $CPU_COLUMN_CONTENT_WIDTH ["CPU 1" "CPU 2" ...]
+#
+# No label at all is a valid table : monitoring only mode runs on a server exposing no processor
+# entity, and its inlet and exhaust are still worth logging. The banner then spans "Inlet  Exhaust",
+# which is the width of its own title, so it comes out with no dashes on either side rather than
+# mis-sized
 function build_header() {
   if (( $# < 1 )); then
     print_error "build_header() requires a column content width"
