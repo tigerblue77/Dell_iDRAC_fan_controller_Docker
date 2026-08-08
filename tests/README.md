@@ -31,6 +31,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/26_boolean_parameter_validation.sh` | The boolean parameters, which are dispatched by running their value as a command |
 | `cases/27_configuration_error_format.sh` | The one shape every startup refusal reports in, so the reason survives a `docker logs` scroll |
 | `cases/30_idrac_login_string.sh` | Local (`/dev/ipmi0`) and network (`lanplus`) modes, password handling |
+| `cases/35_message_output.sh` | How errors and warnings reach `docker logs`, read at their junction with the line that follows |
 | `cases/40_temperature_parsing.sh` | Reading the sensors out of `ipmitool sdr type temperature` |
 | `cases/50_server_model_detection.sh` | Reading the manufacturer and model out of the FRU inventory, and refusing to run on an unreachable iDRAC |
 | `cases/55_enclosure_housed_servers.sh` | Blades and modular servers, whose fans belong to their enclosure |
