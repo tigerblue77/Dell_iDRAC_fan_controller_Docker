@@ -22,6 +22,14 @@ validate_fan_speed_parameter "FAN_SPEED" "$FAN_SPEED"
 validate_integer_parameter "CPU_TEMPERATURE_THRESHOLD" "$CPU_TEMPERATURE_THRESHOLD" -128 127
 validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL"
 
+# The booleans are validated for the same reason, their failure mode just being quieter still: they are
+# dispatched by running their value as a command, so anything that isn't literally "true" or "false" is
+# a command that doesn't exist, exits 127, and takes the branch as false. "True", "1" and "Yes" would
+# each give the user the exact opposite of what they configured, without a word about it
+validate_boolean_parameter "DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"
+validate_boolean_parameter "KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT" "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"
+validate_boolean_parameter "MONITORING_ONLY_MODE" "$MONITORING_ONLY_MODE"
+
 # Leading zeros are stripped so that the value used in comparisons is the one the user meant, "09"
 # being read as an invalid octal number everywhere else
 CPU_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$CPU_TEMPERATURE_THRESHOLD")
@@ -144,7 +152,7 @@ if $IS_LOW_TEMPERATURE_PROTECTION_ENABLED; then
 else
   echo "Low temperature protection: Disabled"
 fi
-if $MONITORING_ONLY_MODE; then
+if "$MONITORING_ONLY_MODE"; then
   echo "Monitoring only mode: Enabled (no fan control profile will be applied, temperatures will only be logged)"
 else
   echo "Monitoring only mode: Disabled"
@@ -291,7 +299,7 @@ while true; do
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
     fi
 
-    if $MONITORING_ONLY_MODE; then
+    if "$MONITORING_ONLY_MODE"; then
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
     fi
   fi
