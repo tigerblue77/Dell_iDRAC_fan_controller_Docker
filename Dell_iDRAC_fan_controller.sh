@@ -346,9 +346,9 @@ while true; do
   # named the AMD, dense and modular models to a scheme a pattern could follow, so a name-based check
   # told an R6515 or an MX740c apart from an R730 exactly backwards (issue #173).
   #
-  # So ask the server and believe its answer. Once it has refused the command, stop sending it : the
-  # refusal is a permanent property of that BMC, not a transient failure, and it would be refused on
-  # every cycle forever otherwise
+  # So ask the server and report what it answered. A single refusal is not a verdict, though :
+  # ipmitool exits non-zero both for a command the BMC does not implement and for a BMC it could not
+  # reach, so the controller only stops asking once the refusal has repeated, and says so
   if $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
     # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
