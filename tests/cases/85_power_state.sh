@@ -65,3 +65,90 @@ function test_the_power_status_is_queried_through_the_idrac_login_string() {
   assert_contains "$(recorded_ipmitool_calls)" "-H 10.0.0.42 -U administrator -E" \
     "the power status must be read from the same iDRAC as the temperatures"
 }
+
+function test_the_escalation_can_be_disabled_by_emptying_both_parameters() {
+  # Exiting only helps a container something restarts, and Docker's default policy
+  # is "no", so emptying both has to remain a supported configuration : it restores
+  # the retry-forever behaviour, which recovers on its own when the iDRAC answers
+  export MAXIMUM_IPMI_UNREACHABLE_DURATION=""
+  export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=""
+  simulate_server "PowerEdge R740" --cpus 2
+  # Reachable long enough to start, then unreachable and staying so
+  export MOCK_IPMITOOL_POWER_EXIT_CODE_SEQUENCE="0 1"
+
+  local -r OUTPUT=$(run_controller "Cannot reach the iDRAC" 4)
+
+  assert_contains "$OUTPUT" "Cannot reach the iDRAC" \
+    "the container must keep reporting the unreachable iDRAC"
+  assert_not_contains "$OUTPUT" "times in a row" \
+    "no escalation may happen once both parameters are emptied"
+}
+
+function test_the_container_exits_after_the_configured_consecutive_failures() {
+  export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=3
+  simulate_server "PowerEdge R740" --cpus 2
+  export MOCK_IPMITOOL_POWER_EXIT_CODE=1
+
+  local -r OUTPUT=$(run_controller "times in a row")
+
+  assert_contains "$OUTPUT" "could not be reached 3 times in a row" \
+    "the message must say how many consecutive failures were reached"
+  assert_contains "$OUTPUT" "restart policy" \
+    "and why exiting is the useful move, since it cannot move the fans itself"
+}
+
+function test_a_powered_off_server_never_counts_towards_the_escalation() {
+  # A chassis correctly reported as off is a state that was observed, not a failure
+  # to reach anything : counting it would exit on a server simply left switched off
+  export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=2
+  simulate_server "PowerEdge R740" --cpus 2
+  export MOCK_IPMITOOL_POWER_STATUS="Chassis Power is off"
+
+  local -r OUTPUT=$(run_controller "Target server is powered off" 5)
+
+  assert_contains "$OUTPUT" "Target server is powered off"
+  assert_not_contains "$OUTPUT" "times in a row" \
+    "a powered off server must never trigger the escalation, however long it stays off"
+}
+
+function test_the_duration_is_resolved_into_cycles_against_the_check_interval() {
+  # The duration is what users configure, so it has to keep meaning the same thing
+  # whatever CHECK_INTERVAL is : 60s is 12 cycles at 5s and 6 at 10s
+  resolve_IPMI_failures_before_exit "" "60s" 5
+  assert_equals "12" "$IPMI_FAILURES_BEFORE_EXIT" "60s at a 5s interval is 12 cycles"
+
+  resolve_IPMI_failures_before_exit "" "60s" 10
+  assert_equals "6" "$IPMI_FAILURES_BEFORE_EXIT" "the same duration is fewer cycles at a longer interval"
+
+  resolve_IPMI_failures_before_exit "" "5m" 5
+  assert_equals "60" "$IPMI_FAILURES_BEFORE_EXIT" "a unit suffix is understood like CHECK_INTERVAL's"
+
+  # Rounded up, never below one : a threshold shorter than a cycle still has to let
+  # one failure happen before anything can be concluded from it
+  resolve_IPMI_failures_before_exit "" "7s" 5
+  assert_equals "2" "$IPMI_FAILURES_BEFORE_EXIT" "a partial cycle rounds up rather than down"
+  resolve_IPMI_failures_before_exit "" "1s" 30
+  assert_equals "1" "$IPMI_FAILURES_BEFORE_EXIT" "shorter than one cycle still allows one failure"
+}
+
+function test_an_explicit_cycle_count_takes_precedence_over_the_duration() {
+  resolve_IPMI_failures_before_exit "3" "60s" 5
+  assert_equals "3" "$IPMI_FAILURES_BEFORE_EXIT" \
+    "the count is the more specific of the two and wins when set"
+
+  resolve_IPMI_failures_before_exit "" "" 5
+  assert_empty "$IPMI_FAILURES_BEFORE_EXIT" "both empty disables the escalation"
+}
+
+function test_the_container_exits_after_the_configured_unreachable_duration() {
+  # 10s at the 5s interval the tests run with is 2 cycles
+  export MAXIMUM_IPMI_UNREACHABLE_DURATION=10s
+  simulate_server "PowerEdge R740" --cpus 2
+  export MOCK_IPMITOOL_POWER_EXIT_CODE=1
+
+  local -r OUTPUT=$(run_controller "times in a row")
+
+  assert_contains "$OUTPUT" "could not be reached 2 times in a row" \
+    "the duration must be honoured through the cycle count it represents"
+  assert_contains "$OUTPUT" "restart policy"
+}
