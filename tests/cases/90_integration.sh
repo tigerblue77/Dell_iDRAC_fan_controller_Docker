@@ -222,3 +222,24 @@ function test_stopping_the_container_restores_dells_profile_whatever_the_generat
     fi
   done
 }
+
+function test_a_removed_cpu_is_reported_as_removed_and_not_merely_as_silent() {
+  # The decision is deterministic, so the line has to say what the controller
+  # concluded and the rule it applied, not just that a sensor went quiet : a
+  # sensor going quiet is not a reason to stop watching a CPU, a CPU being gone
+  # is. The CPUs are named with the labels their columns carried until then,
+  # which is what the reader has just been looking at
+  simulate_server "PowerEdge R930" --cpus 4 --cpu-temperatures "41 40 39 38"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "41 40")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+  export CPU_TEMPERATURE_SENSOR_EXPIRY=0
+
+  local -r OUTPUT=$(run_controller "considered removed")
+
+  assert_contains "$OUTPUT" "CPU 3 and CPU 4 are considered removed from the server" \
+    "the line must state the conclusion, with the labels the table was showing"
+  assert_contains "$OUTPUT" "(entities 3.3 and 3.4)" \
+    "and the entities, so the line can be matched against an ipmitool output"
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)."
+}

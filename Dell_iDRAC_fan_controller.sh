@@ -200,6 +200,7 @@ while true; do
   # on a power transition, and reusing the data retrieve_temperatures() just fetched, so it costs no
   # extra IPMI round-trip
   PREVIOUS_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
+  PREVIOUS_CPU_LABELS=("${DETECTED_CPU_LABELS[@]}")
   if refresh_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA" "$(date +%s)"; then
     NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
     CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
@@ -208,21 +209,26 @@ while true; do
     TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 
     # Which CPUs left is computed from the sets themselves rather than from the count, so that CPUs
-    # leaving and appearing on the same cycle can't cancel each other out and pass unreported
-    EXPIRED_CPU_ENTITY_IDS=()
-    for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
-      if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " != *" $CPU_ENTITY_ID "* ]]; then
-        EXPIRED_CPU_ENTITY_IDS+=("$CPU_ENTITY_ID")
+    # leaving and appearing on the same cycle can't cancel each other out and pass unreported.
+    # They are named with the labels their columns carried until now, which is what the reader has just
+    # been looking at, and with their entity so the line can be matched against an ipmitool output
+    REMOVED_CPU_LABELS=()
+    REMOVED_CPU_ENTITY_IDS=()
+    for INDEX in "${!PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+      if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " != *" ${PREVIOUS_CPU_ENTITY_IDS[INDEX]} "* ]]; then
+        REMOVED_CPU_LABELS+=("${PREVIOUS_CPU_LABELS[INDEX]}")
+        REMOVED_CPU_ENTITY_IDS+=("${PREVIOUS_CPU_ENTITY_IDS[INDEX]}")
       fi
     done
 
     # A CPU leaving the table means one less heat source watched, which deserves more than the plain
-    # count : it is the only trace left that the server used to have it. Named by entity, the labels
-    # having just been renumbered
-    if [ "${#EXPIRED_CPU_ENTITY_IDS[@]}" -eq 1 ]; then
-      printf "%19s  CPU temperature sensor %s stopped reporting for more than %ss and is no longer monitored, %s.\n" "$(date +"%d-%m-%Y %T")" "${EXPIRED_CPU_ENTITY_IDS[0]}" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
-    elif [ "${#EXPIRED_CPU_ENTITY_IDS[@]}" -gt 1 ]; then
-      printf "%19s  CPU temperature sensors %s stopped reporting for more than %ss and are no longer monitored, %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${EXPIRED_CPU_ENTITY_IDS[@]}")" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
+    # count : it is the only trace left that the server used to have it. The line states the conclusion
+    # the controller drew and the rule it applied to draw it, rather than the symptom alone : a sensor
+    # that went quiet is not a reason to stop watching a CPU, a CPU that is gone is
+    if [ "${#REMOVED_CPU_LABELS[@]}" -eq 1 ]; then
+      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) has reported nothing for more than %ss. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
+    elif [ "${#REMOVED_CPU_LABELS[@]}" -gt 1 ]; then
+      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) have reported nothing for more than %ss. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
     else
       printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
     fi
