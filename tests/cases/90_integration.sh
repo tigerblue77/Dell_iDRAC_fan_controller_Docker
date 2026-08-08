@@ -13,7 +13,7 @@ function test_the_controller_applies_the_user_fan_control_profile_on_a_healthy_s
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge R730xd"
   assert_contains "$OUTPUT" "Fan speed objective: 5%"
   assert_contains "$OUTPUT" "CPU temperature threshold: 50°C"
-  assert_contains "$OUTPUT" "Check interval: 60s"
+  assert_contains "$OUTPUT" "Check interval: 5s"
   assert_contains "$OUTPUT" "CPU 1  CPU 2 " "a dual CPU server gets two CPU columns"
   assert_contains "$OUTPUT" "User static fan control profile (5%)"
   assert_contains "$OUTPUT" "CPU temperature decreased and is now OK (<= 50°C), user's fan control profile applied."

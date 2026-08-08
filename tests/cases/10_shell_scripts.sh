@@ -60,6 +60,39 @@ function test_every_file_sourced_at_runtime_is_shipped_in_the_docker_image() {
     awk '{print $2}' | sort -u)
 }
 
+function test_the_test_context_starts_from_the_docker_images_defaults() {
+  # Every test case starts from setup_test_context, which claims to reproduce
+  # the environment the Docker image gives the controller. When the Dockerfile
+  # changes a default and the harness does not follow, the whole suite quietly
+  # starts validating a configuration nobody runs, and nothing goes red to say
+  # so : that is exactly how CHECK_INTERVAL stayed at 60s after the image
+  # dropped it to 5s. This is the guard against that drift
+  if [ ! -f "$REPO_ROOT/Dockerfile" ]; then
+    # The suite is running inside the built image, which does not carry the
+    # Dockerfile that produced it
+    skip_test "no Dockerfile next to the scripts"
+    return 0
+  fi
+
+  # IDRAC_HOST is the one deliberate difference : the image defaults to local
+  # mode, the suite to network mode, which is the one with a login string to
+  # build, a reachable host to name in errors and a power state to poll
+  local -r DELIBERATELY_DIFFERENT=" IDRAC_HOST "
+
+  local ENV_DECLARATION KEY EXPECTED_VALUE
+  while IFS= read -r ENV_DECLARATION; do
+    KEY="${ENV_DECLARATION%%=*}"
+    EXPECTED_VALUE="${ENV_DECLARATION#*=}"
+
+    if [[ "$DELIBERATELY_DIFFERENT" == *" $KEY "* ]]; then
+      continue
+    fi
+
+    assert_equals "$EXPECTED_VALUE" "${!KEY-}" \
+      "$KEY should start from the value the Dockerfile gives the container"
+  done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //')
+}
+
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
   local OUTPUT
   OUTPUT=$(bash "$REPO_ROOT/healthcheck.sh" 2>&1)
