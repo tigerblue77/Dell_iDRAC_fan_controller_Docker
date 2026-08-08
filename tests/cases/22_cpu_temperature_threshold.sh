@@ -85,6 +85,18 @@ function test_amd_chips_are_ignored() {
   assert_detected_threshold_is "" "k8temp publishes no limit at all"
 }
 
+function test_a_real_dual_socket_poweredge_is_read_correctly() {
+  # Captured on a PowerEdge T630 : two coretemp chips at high = 83 / crit = 85, an
+  # i350 NIC whose own limits are inverted (high = 120 above crit = 110), two NVMe
+  # drives with no limits at all, and an ACPI power meter. Only the CPUs may count.
+  #
+  # This SKU is also why the gap between "high" and "crit" must not be assumed : it
+  # is 2°C here, against 10°C on the CPU issue #26 was opened with
+  export MOCK_SENSORS_OUTPUT='coretemp-isa-0000\nAdapter: ISA adapter\nPackage id 0:\n  temp1_input: 59.000\n  temp1_max: 83.000\n  temp1_crit: 85.000\n  temp1_crit_alarm: 0.000\nCore 0:\n  temp2_input: 52.000\n  temp2_max: 83.000\n  temp2_crit: 85.000\nnvme-pci-0200\nAdapter: PCI adapter\nComposite:\n  temp1_input: 48.850\ni350bb-pci-0100\nAdapter: PCI adapter\nloc1:\n  temp1_input: 56.000\n  temp1_max: 120.000\n  temp1_crit: 110.000\ncoretemp-isa-0001\nAdapter: ISA adapter\nPackage id 1:\n  temp1_input: 58.000\n  temp1_max: 83.000\n  temp1_crit: 85.000\npower_meter-acpi-0\nAdapter: ACPI interface\npower1:\n  power1_average: 334.000\nnvme-pci-0400\nAdapter: PCI adapter\nComposite:\n  temp1_input: 47.850\n'
+
+  assert_detected_threshold_is 83 "the CPUs' own high value, not the NIC's 120°C nor a drive's"
+}
+
 function test_an_implausible_reading_is_refused() {
   local VALUE
   for VALUE in 3 200; do
