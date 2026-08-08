@@ -277,11 +277,27 @@ while true; do
     # been looking at, and with their entity so the line can be matched against an ipmitool output
     REMOVED_CPU_LABELS=()
     REMOVED_CPU_ENTITY_IDS=()
+    # Columns are numbered from 1 in entity order, so a CPU joining the table renumbers every column
+    # above it : an entity that was "CPU 2" becomes "CPU 3" when a lower entity becomes readable. That
+    # is reachable in normal use -- a socket slow to become readable after POST, or a CPU added while
+    # the server was powered off -- and unreported it makes an older "CPU 3 temperature is too high"
+    # comment and today's "CPU 3" column name two different physical sockets
+    RENUMBERED_CPU_DESCRIPTIONS=()
     for INDEX in "${!PREVIOUS_CPU_ENTITY_IDS[@]}"; do
       if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " != *" ${PREVIOUS_CPU_ENTITY_IDS[INDEX]} "* ]]; then
         REMOVED_CPU_LABELS+=("${PREVIOUS_CPU_LABELS[INDEX]}")
         REMOVED_CPU_ENTITY_IDS+=("${PREVIOUS_CPU_ENTITY_IDS[INDEX]}")
+        continue
       fi
+
+      for NEW_INDEX in "${!DETECTED_CPU_ENTITY_IDS[@]}"; do
+        if [ "${DETECTED_CPU_ENTITY_IDS[NEW_INDEX]}" == "${PREVIOUS_CPU_ENTITY_IDS[INDEX]}" ]; then
+          if [ "${DETECTED_CPU_LABELS[NEW_INDEX]}" != "${PREVIOUS_CPU_LABELS[INDEX]}" ]; then
+            RENUMBERED_CPU_DESCRIPTIONS+=("${PREVIOUS_CPU_LABELS[INDEX]} is now ${DETECTED_CPU_LABELS[NEW_INDEX]} (entity ${PREVIOUS_CPU_ENTITY_IDS[INDEX]})")
+          fi
+          break
+        fi
+      done
     done
 
     # A CPU leaving the table means one less heat source watched, which deserves more than the plain
@@ -294,6 +310,13 @@ while true; do
       printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
     else
       printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
+    fi
+
+    # Printed on its own line rather than folded into the ones above, so that it shows up whichever of
+    # them was taken : a CPU can be renumbered by another one joining, by another one leaving, or by
+    # both on the same cycle
+    if [ "${#RENUMBERED_CPU_DESCRIPTIONS[@]}" -gt 0 ]; then
+      printf "%19s  Columns were renumbered: %s. A comment naming a CPU refers to the numbering in force on the cycle it was printed.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${RENUMBERED_CPU_DESCRIPTIONS[@]}")"
     fi
 
     # Checked again here and not only at startup : a mis-parse can just as well show up mid-run

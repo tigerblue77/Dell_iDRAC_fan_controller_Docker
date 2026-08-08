@@ -300,3 +300,22 @@ function test_a_removed_cpu_is_reported_as_removed_and_not_merely_as_silent() {
     "and the entities, so the line can be matched against an ipmitool output"
   assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)."
 }
+
+function test_the_controller_says_when_adopting_a_cpu_renumbered_the_columns() {
+  # Columns are numbered from 1 in entity order, so a CPU joining renumbers every
+  # column above it : entity 3.3, shown as "CPU 2" while 3.2 was unreadable,
+  # becomes "CPU 3" once 3.2 answers. Unreported, an older "CPU 3 temperature is
+  # too high" comment and today's "CPU 3" column name two different sockets
+  simulate_server "PowerEdge R930" --cpus 4 --cpu-temperatures "41 39 38" --cpu2-disabled
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "41 40 39 38")
+  MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=2
+
+  local -r OUTPUT=$(run_controller "Columns were renumbered")
+
+  assert_contains "$OUTPUT" "Columns were renumbered" "the renumbering must not pass silently"
+  assert_contains "$OUTPUT" "CPU 2 is now CPU 3 (entity 3.3)" \
+    "the line must name the entity, which is the only stable identifier across a renumbering"
+  assert_contains "$OUTPUT" "CPU 3 is now CPU 4 (entity 3.4)"
+  assert_contains "$OUTPUT" "4 CPU temperature sensors detected (entities 3.1 3.2 3.3 3.4)."
+}
