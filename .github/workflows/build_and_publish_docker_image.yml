@@ -9,6 +9,15 @@ on:
   # already exists, instead of having to delete and re-push it
   workflow_dispatch:
 
+# Without this block the whole workflow runs on the repository-wide default
+# token. This one grants only what its two publishing steps need : "contents"
+# for the GitHub release "Generate release note" creates, "packages" for the
+# image pushed to ghcr.io. Everything else the default token may carry
+# (issues, pull requests, deployments...) is dropped
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build:
     name: Build and publish Docker image to Docker Hub and GitHub Containers Repository
