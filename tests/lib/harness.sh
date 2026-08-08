@@ -17,6 +17,7 @@ function setup_test_context() {
   export IDRAC_PASSWORD="calvin"
   export FAN_SPEED=5
   export CPU_TEMPERATURE_THRESHOLD=auto
+  export CPU_TEMPERATURE_SOURCE=auto
   export CHECK_INTERVAL=5
   export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
   export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
@@ -26,6 +27,9 @@ function setup_test_context() {
   DECIMAL_FAN_SPEED=5
   HEXADECIMAL_FAN_SPEED="0x05"
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -E"
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR=0
 
   # Mock defaults : a healthy, powered-on dual CPU Gen 13 server
   export MOCK_IPMITOOL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/ipmitool_calls.log"
@@ -35,6 +39,8 @@ function setup_test_context() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output)"
   export MOCK_IPMITOOL_POWER_STATUS="Chassis Power is on"
+  export MOCK_SENSORS_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/sensors_calls.log"
+  : > "$MOCK_SENSORS_CALL_LOG"
   export MOCK_DATE_OUTPUT="01-01-2024 00:00:00"
   # Short enough to keep the suite fast, long enough for run_controller to stop
   # the controller while it is idle between two cycles rather than mid-cycle
@@ -69,6 +75,40 @@ function capture_output() {
   CAPTURED_OUTPUT=$(cat "$CAPTURE_FILE")
 
   return "$EXIT_CODE"
+}
+
+# Make "local" mode runnable : set_iDRAC_login_string() refuses to start the
+# controller without the Docker host's IPMI device, so a test that needs local
+# mode has to have one. /dev is only writable when the suite runs as root (in the
+# Docker image, or in a CI container), hence the graceful failure : the caller
+# skips rather than reporting a failure about something it never got to test.
+#
+# Usage : if ! provide_local_ipmi_device; then skip_test "..."; return 0; fi
+function provide_local_ipmi_device() {
+  FAKE_LOCAL_IPMI_DEVICE_CREATED=false
+
+  if [ -e /dev/ipmi0 ] || [ -e /dev/ipmi/0 ] || [ -e /dev/ipmidev/0 ]; then
+    return 0
+  fi
+
+  if ! (mkdir -p /dev/ipmi && touch /dev/ipmi/0) 2> /dev/null; then
+    return 1
+  fi
+
+  FAKE_LOCAL_IPMI_DEVICE_CREATED=true
+}
+
+# Undo provide_local_ipmi_device(), so that the cases asserting on the absence of
+# an IPMI device keep seeing a machine without one
+# Usage : withdraw_local_ipmi_device
+function withdraw_local_ipmi_device() {
+  if ! ${FAKE_LOCAL_IPMI_DEVICE_CREATED:-false}; then
+    return 0
+  fi
+
+  rm -f /dev/ipmi/0
+  rmdir /dev/ipmi 2> /dev/null
+  FAKE_LOCAL_IPMI_DEVICE_CREATED=false
 }
 
 # A COMPLETE line of the temperature table. The controller prints a line with

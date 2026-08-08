@@ -184,7 +184,7 @@ function test_an_explicit_value_is_reported_without_a_provenance() {
   assert_not_contains "$OUTPUT" "CPU temperature threshold: 65°C (" "a value the user set needs no explanation"
 }
 
-function test_a_padded_value_is_read_as_decimal_not_octal() {
+function test_a_padded_threshold_is_read_as_decimal_not_octal() {
   export CPU_TEMPERATURE_THRESHOLD=050
   assert_startup_reports 'CPU temperature threshold: 50°C' "050 is 50°C, not an invalid octal number"
 }

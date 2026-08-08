@@ -93,6 +93,20 @@ ${PROBE_PREFIX}_without_the_function_keyword() { pass; }"
   assert_contains "$PROBE_OUTPUT" "without the function keyword" "the bare form should run"
 }
 
+function test_a_test_case_name_declared_twice_fails_the_run() {
+  # Case files are all sourced into the runner's own shell, so the second
+  # definition replaces the first without a word : both names are discovered,
+  # both run the second body, everything passes, and one of the two test cases
+  # has stopped existing. The suite reports more coverage than it has
+  run_the_runner_on_a_probe_case_file "function ${PROBE_PREFIX}_declared_twice() { pass; }
+function ${PROBE_PREFIX}_declared_twice() { pass; }"
+
+  assert_equals 1 "$PROBE_EXIT_CODE" "a test case name declared twice should fail the run"
+  assert_contains "$PROBE_OUTPUT" "${PROBE_PREFIX}_declared_twice" \
+    "the report should name the test case that was declared twice"
+  assert_contains "$PROBE_OUTPUT" "declared more than once"
+}
+
 function test_a_test_case_the_runner_cannot_discover_fails_the_run() {
   # The safety net behind the discovery pattern : whatever form escapes it, a
   # test case that exists and would never run has to be loud

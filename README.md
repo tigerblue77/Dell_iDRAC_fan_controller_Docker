@@ -208,6 +208,14 @@ All parameters are optional as they have default values (including default iDRAC
   - Automatic detection only works on **Intel** CPUs. AMD's `k10temp` driver publishes no "high" value at all on Zen parts (every EPYC server), and on older parts it publishes a fixed 70°C that is a Linux driver constant rather than an AMD specification, so it is deliberately ignored. AMD servers use the fallback value below.
   - Whenever the threshold can't be detected, the container falls back to 50(°C) and logs why at startup.
   - :warning: **This default changed.** Previous versions used a fixed 50°C. On Intel servers in "local" mode, "auto" typically resolves to a **higher** value (roughly 62 to 96°C depending on the CPU model — read the exact one from the startup log), so the fans stay at `FAN_SPEED` longer than they used to before Dell's profile takes over. This matches what your CPU actually asks for, but it also means the whole chassis runs at `FAN_SPEED` for longer, and the CPU is the only component this container watches. If you were relying on the old behaviour, set `CPU_TEMPERATURE_THRESHOLD=50` explicitly.
+- `CPU_TEMPERATURE_SOURCE` parameter selects where the CPU temperatures the container supervises are read from. **Default** value is "auto".
+  - `auto` reads them from your iDRAC, and falls back to [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) only if your iDRAC turns out to report no CPU temperature **at all**. Some older iDRACs accept Dell's raw fan control commands but answer nothing usable to a temperature query ([issue #216](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)) : on those, the container used to be able to do nothing but hand the fans back to Dell's own profile forever. The fallback only engages after 3 consecutive checks have all come back without a single readable CPU temperature sensor, so a busy or briefly unreachable iDRAC does not trigger it, and it is logged when it does. Once engaged it stays for the life of the container: an iDRAC that reports no processor entity does so because of its firmware, not because of a passing condition, and changing the meaning of the table's numbers mid-run would be worse than keeping a source that works.
+  - `ipmi` never reads `lm-sensors`, whatever your iDRAC reports. Set it if you want the source to be the iDRAC and nothing else.
+  - `lm-sensors` reads them from `lm-sensors` from the start, without waiting for your iDRAC to prove it cannot report them. The container refuses to start if `lm-sensors` reports no CPU temperature, rather than silently supervising nothing.
+  - Whatever the source, **fan control still goes through your iDRAC** : `lm-sensors` replaces the readings, not the IPMI commands. A server whose iDRAC rejects `raw 0x30 0x30` cannot be cooled by this container at all, and this parameter changes nothing for it.
+  - `lm-sensors` is only available in "local" mode, for the same reason automatic threshold detection is : it reads the CPUs of the machine the container runs on, which is the controlled server itself only in that mode. In network mode, `auto` never falls back and `lm-sensors` is refused at startup.
+  - It also only works on **Intel** CPUs, again like threshold detection : AMD's `k10temp` driver reports `Tctl`, a control value that is not the physical temperature your iDRAC reports for the same CPU. AMD servers keep reading their CPUs through IPMI.
+  - Your inlet and exhaust temperatures keep coming from your iDRAC : `lm-sensors` has no equivalent for them, so only the CPU rows are replaced. On a server that reports neither, both columns show `-`, which is what they already do today.
 - `CHECK_INTERVAL` parameter is the time between each temperature check and potential profile change, in seconds unless a unit suffix (`s`, `m`, `h` or `d`) says otherwise, so `90`, `90s` and `5m` are all valid. Fractions of a second are not. The container refuses to start on a value `sleep` cannot wait for, and on zero, as either would leave the monitoring loop unpaced and running at full speed against your iDRAC. **Default** value is 5(s). A short interval makes the controller react quickly to temperature spikes, at the cost of more IPMI traffic towards the iDRAC and more container log lines. If your iDRAC struggles to keep up (especially over LAN) or if you prefer quieter logs, increase this value.
 
   This interval is also the controller's reaction time, so it is bounded from above. While your fan control profile is applied, Dell's own dynamic fan control is disabled and the fans are pinned at `FAN_SPEED`: nothing raises them until the *next* check reads a temperature above `CPU_TEMPERATURE_THRESHOLD`. The interval is therefore the longest your server can heat up with its cooling frozen at a speed you chose for an idle machine. Above **60 seconds** the container starts and prints a warning saying so. Above **15 minutes** it refuses to start, that delay being long enough that the controller is not really controlling anything anymore.
@@ -254,6 +262,35 @@ CPU 3 and CPU 4 are considered removed from the server: their temperature sensor
 Several agreeing readings are required because a populated socket can still be unreadable for a few checks after a reboot, while its iDRAC reports it exactly like a socket that is gone. Following the CPUs this way costs no extra IPMI command: it reuses the sensor data each cycle already reads.
 
 Note that on chassis products (VRTX, FX2, M1000e, MX7000) each server node has its own iDRAC with its own address: point the container at a node's iDRAC, not at the chassis CMC, which doesn't answer IPMI at all.
+
+### None of your CPUs appears in the temperatures table
+
+If your iDRAC reports **no** readable CPU temperature sensor at all, the container has nothing to supervise: it keeps Dell's own dynamic fan control profile applied and logs, once, why it isn't printing temperatures yet.
+
+```
+No CPU temperature sensor could be read (see the troubleshooting section of the README), Dell default dynamic fan control profile applied for safety while waiting...
+```
+
+Some older iDRACs are in that state permanently: they accept Dell's raw fan control commands but answer nothing usable to a temperature query. In "local" mode, the machine running the container **is** the server, so its CPUs can be read directly instead, through `lm-sensors`. That is what `CPU_TEMPERATURE_SOURCE=auto` (the default) does after 3 consecutive checks have all come back without a single readable sensor:
+
+```
+08-08-2026 15:04:31  The iDRAC reported no readable CPU temperature sensor on 3 consecutive checks, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.
+2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 coretemp-isa-0001).
+```
+
+If that line never appears, the fallback couldn't engage. In order:
+
+1. **You're in network mode.** `lm-sensors` reads the machine the container runs on, which isn't the controlled server there. Nothing can replace your iDRAC's readings remotely.
+2. **Your Docker host doesn't expose its CPU temperatures.** Check with `docker exec <container name> sensors -u`, which must print a `Package id 0:` block. If it prints nothing, load the `coretemp` kernel module on the host (`modprobe coretemp`) and make sure `/sys` is readable from the container.
+3. **Your CPUs are AMD.** `k10temp` reports `Tctl`, a control value that is not the physical temperature your iDRAC reports, so it is deliberately not read. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model, `sensors -u` and `ipmitool -I open sdr elist all` if you have such a server: hardware output is what's missing to support it.
+
+Whatever the source, **fan control itself always goes through your iDRAC**. If the raw commands are rejected too:
+
+```
+/!\ Error /!\ Failed to enable manual fan control. ipmitool said: Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xc1): Invalid command.
+```
+
+then no temperature source changes anything: your server's fans cannot be driven through this container. That is expected on blades and sleds, whose fans belong to their enclosure and are driven by its CMC.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 

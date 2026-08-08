@@ -77,7 +77,7 @@ function test_a_unit_suffix_is_accepted() {
   assert_check_interval_is_accepted_with_a_warning "5m"
 }
 
-function test_a_padded_value_is_read_as_decimal_not_octal() {
+function test_a_padded_check_interval_is_read_as_decimal_not_octal() {
   # "08" is not a valid octal number : the zero check must not abort on it
   assert_check_interval_is_accepted "08" "08 seconds is 8 seconds, not an invalid octal number"
   # Warned about rather than silent, which is the proof it was read as 90 and

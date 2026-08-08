@@ -3,8 +3,9 @@
 # Fake lm-sensors "sensors" used by the test suite.
 #
 # It stands in for the utility the controller asks for the CPUs' own "high"
-# temperature, so that threshold detection can be exercised on any machine,
-# including one with no hwmon chip at all (which is what a CI runner usually is).
+# temperature, and for their current temperature when the iDRAC reports none, so
+# that both can be exercised on any machine, including one with no hwmon chip at
+# all (which is what a CI runner usually is).
 #
 # Recognized environment variables:
 #   MOCK_SENSORS_OUTPUT      stdout of "sensors -u", interpreted by printf so
@@ -12,14 +13,36 @@
 #   MOCK_SENSORS_EXIT_CODE   exit code (default 0). When non-zero, the failure
 #                            message goes to stderr, the way the real tool
 #                            reports "No sensors found!"
+#   MOCK_SENSORS_CALL_LOG            file every invocation is appended to, which
+#                                    is what makes the switch below countable
+#   MOCK_SENSORS_SECOND_OUTPUT       readings returned from the
+#                                    MOCK_SENSORS_SWITCH_AFTER_CALLS+1-th call
+#                                    onwards, so that a running controller can be
+#                                    made to see its CPUs heat up between two
+#                                    cycles, like MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+#                                    does for the readings coming from the iDRAC
+#   MOCK_SENSORS_SWITCH_AFTER_CALLS  when to switch (default 1)
 #
 # Only "sensors -u" is ever called by the controller, so no other form is simulated.
 
 readonly NO_SENSORS_FOUND='No sensors found!\nMake sure you loaded all the kernel drivers you need.\n'
+
+if [ -n "${MOCK_SENSORS_CALL_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$MOCK_SENSORS_CALL_LOG"
+fi
 
 if [ "${MOCK_SENSORS_EXIT_CODE:-0}" -ne 0 ]; then
   printf '%b' "${MOCK_SENSORS_OUTPUT:-$NO_SENSORS_FOUND}" >&2
   exit "$MOCK_SENSORS_EXIT_CODE"
 fi
 
-printf '%b' "$MOCK_SENSORS_OUTPUT"
+OUTPUT="${MOCK_SENSORS_OUTPUT:-}"
+if [ -n "${MOCK_SENSORS_SECOND_OUTPUT:-}" ] && [ -n "${MOCK_SENSORS_CALL_LOG:-}" ]; then
+  # The current call is already in the log, so this counts it too
+  CALL_NUMBER=$(wc -l < "$MOCK_SENSORS_CALL_LOG")
+  if [ "$CALL_NUMBER" -gt "${MOCK_SENSORS_SWITCH_AFTER_CALLS:-1}" ]; then
+    OUTPUT="$MOCK_SENSORS_SECOND_OUTPUT"
+  fi
+fi
+
+printf '%b' "$OUTPUT"

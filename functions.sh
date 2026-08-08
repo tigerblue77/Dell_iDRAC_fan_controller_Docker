@@ -245,6 +245,253 @@ function retrieve_CPU_high_temperature_from_lm_sensors() {
   fi
 }
 
+# Where the CPU temperatures the controller supervises are actually being read from : "ipmi" (the
+# iDRAC's sensor records) or "lm-sensors" (the host's own hwmon chips). It is not the CPU_TEMPERATURE_SOURCE
+# parameter, which is what the user asked for : on "auto" this starts at "ipmi" and only ever becomes
+# "lm-sensors" once the iDRAC has proven it reports no CPU temperature at all
+CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+
+# Number of consecutive checks the iDRAC answered without exposing a single readable CPU temperature
+# sensor. Reset is deliberately absent : the count only ever grows before the first reading is
+# obtained, and the controller leaves that loop as soon as one is
+CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR=0
+
+# Normalize a CPU_TEMPERATURE_SOURCE value into one of "auto", "ipmi" or "lm-sensors"
+# Usage : normalize_CPU_temperature_source "$CPU_TEMPERATURE_SOURCE"
+# Returns : the normalized value, or the input itself when it is none of them, so that the caller can
+#           report what the user actually wrote
+#
+# The same shapes CPU_TEMPERATURE_THRESHOLD has to tolerate reach this parameter : Docker's --env-file
+# parser keeps the trailing space of a "CPU_TEMPERATURE_SOURCE=ipmi " line, and copying the documented
+# placeholder can carry quotes along. The separator inside "lm-sensors" is accepted in its three
+# plausible spellings, none of which can be confused with another value
+function normalize_CPU_temperature_source() {
+  local VALUE="$1"
+
+  VALUE="${VALUE//[[:space:]]/}"
+  VALUE="${VALUE#[\"\']}"
+  VALUE="${VALUE%[\"\']}"
+  VALUE="${VALUE,,}"
+  VALUE="${VALUE:-auto}"
+
+  case "$VALUE" in
+    lm_sensors | lmsensors) VALUE="lm-sensors" ;;
+  esac
+
+  printf '%s' "$VALUE"
+}
+
+# Read the CPUs' current temperatures from the lm-sensors utility
+# Usage : retrieve_CPU_temperatures_from_lm_sensors
+# Returns : one "<socket> <chip> <temperature>" line per populated socket, sorted by socket number,
+#           or nothing at all when lm-sensors is unavailable or exposes no CPU temperature
+#
+# /!\ lm-sensors reads the CPUs of the machine this script runs on, so this is only meaningful in local
+# mode, where that machine is the very server whose fans are being controlled /!\
+#
+# Only Intel's "coretemp" chips are read, for the same reason threshold detection only reads them : the
+# other chips lm-sensors exposes (chipset, NVMe drives...) are not CPUs, and AMD's k10temp publishes
+# "Tctl", a control value on a scale that is not the physical temperature the iDRAC reports on the very
+# same server. An AMD server therefore keeps reading its CPUs through IPMI, which is where they are
+# right, instead of silently being supervised against a number that means something else
+#
+# Only the package sub-feature is read. The per-core ones ("Core 0", "Core 1"...) describe parts of the
+# same die and would each get a column of their own, turning a two-socket server into a twenty-CPU table
+function retrieve_CPU_temperatures_from_lm_sensors() {
+  if ! command -v sensors > /dev/null 2>&1; then
+    return
+  fi
+
+  # "sensors -u" prints raw sub-feature values ("temp1_input: 45.000") instead of the decorated,
+  # localized human-readable format ("Package id 0:  +45.0°C"), which keeps the parsing independent
+  # from locale and layout
+  sensors -u 2>/dev/null | awk '
+    # Chip names, feature labels and sub-features are told apart by their indentation : a chip name and
+    # a feature label are both unindented, but a feature label always ends with a colon ("Package id 0:")
+    # and a chip name never does. "Adapter:" is neither
+    /^[^[:space:]]/ {
+      if ($0 ~ /^Adapter:/) next
+      if ($0 ~ /:[[:space:]]*$/) {
+        FEATURE = $0
+        sub(/:[[:space:]]*$/, "", FEATURE)
+        next
+      }
+      CHIP = $0
+      IS_CPU_CHIP = (CHIP ~ /^coretemp-/)
+      FEATURE = ""
+      next
+    }
+    !IS_CPU_CHIP { next }
+    FEATURE !~ /^Package id [0-9]+$/ { next }
+    # The package feature is temp1 on coretemp, but the sub-feature number is not what identifies it
+    # here : the feature label above already did, so any "_input" under it is the reading. The first one
+    # wins, a second one for the same package being a shape this driver does not produce
+    $1 ~ /^temp[0-9]+_input:$/ && $2 ~ /^-?[0-9]+(\.[0-9]+)?$/ {
+      split(FEATURE, PACKAGE, " ")
+      SOCKET = PACKAGE[3] + 0
+      if (SOCKET in READING) next
+      READING[SOCKET] = $2 + 0
+      CHIP_OF[SOCKET] = CHIP
+    }
+    END {
+      for (SOCKET in READING) {
+        # Rounded rather than truncated : this is a reading, not the threshold it is compared against,
+        # and reporting a 45.8°C CPU as 45°C would under-report it by nearly a degree on every cycle.
+        # iDRAC hands out whole degrees too, so this keeps both sources on the same scale
+        printf "%d %s %d\n", SOCKET, CHIP_OF[SOCKET], (READING[SOCKET] >= 0 ? READING[SOCKET] + 0.5 : READING[SOCKET] - 0.5)
+      }
+    }' | sort -n -k1,1
+}
+
+# Returns 0 (true) if lm-sensors exposes at least one CPU temperature on this machine
+# Usage : is_lm_sensors_reporting_CPU_temperatures
+function is_lm_sensors_reporting_CPU_temperatures() {
+  [ -n "$(retrieve_CPU_temperatures_from_lm_sensors)" ]
+}
+
+# Render the CPU temperatures lm-sensors reports as the "ipmitool sdr type temperature" lines the rest
+# of the controller already parses
+# Usage : build_CPU_temperature_sdr_lines_from_lm_sensors
+#
+# Everything downstream -- detecting the CPUs, reading them by entity, following the ones that appear or
+# go silent, building the table -- is written against that one shape. Rendering the readings into it,
+# rather than teaching each of those steps about a second source, is what keeps a single code path
+# supervising the temperatures whichever source they came from.
+#
+# Sockets are numbered after coretemp's own "Package id N", which is the physical package : socket 0
+# becomes processor entity 3.1, exactly as the iDRAC would report it. A depopulated socket therefore
+# leaves a gap, which is a shape the detection already handles (entity instances are not required to be
+# contiguous). The chip name is carried in the sensor name column so that the startup log can name the
+# chip each CPU column is read from, and the sensor ID column holds "--" : there is no IPMI sensor here
+# and inventing a plausible hexadecimal ID would be the one thing that could mislead
+function build_CPU_temperature_sdr_lines_from_lm_sensors() {
+  local SOCKET CHIP TEMPERATURE
+  while read -r SOCKET CHIP TEMPERATURE; do
+    [ -n "$CHIP" ] || continue
+    printf '%-16s | %s | %-3s | %4s | %s degrees C\n' "$CHIP" "--" "ok" "3.$((SOCKET + 1))" "$TEMPERATURE"
+  done < <(retrieve_CPU_temperatures_from_lm_sensors)
+}
+
+# Replace the processor entities of an ipmitool sdr output with the ones lm-sensors reports
+# Usage : merge_lm_sensors_CPU_temperatures_into_temperature_data "$SDR_DATA"
+#
+# Only the CPU rows are replaced : whatever else the iDRAC does report -- most notably the inlet and
+# exhaust temperatures, which lm-sensors has no equivalent for -- is kept exactly as it came. The
+# fallback therefore fills the one hole the iDRAC leaves instead of blinding the controller to
+# everything else it can still read.
+#
+# The iDRAC's own processor rows are dropped rather than kept alongside : a socket it lists as
+# "Disabled" carries no reading but still matches its entity, and retrieve_temperature_by_entity_id()
+# stops at the first match, so leaving it in would shadow the lm-sensors reading meant to replace it
+function merge_lm_sensors_CPU_temperatures_into_temperature_data() {
+  local -r SDR_DATA="$1"
+
+  if [ -n "$SDR_DATA" ]; then
+    printf '%s\n' "$SDR_DATA" | awk -F'|' '
+      { ENTITY_ID = $4; gsub(/^[[:space:]]+|[[:space:]]+$/, "", ENTITY_ID) }
+      ENTITY_ID !~ /^3\.[0-9]+$/'
+  fi
+
+  build_CPU_temperature_sdr_lines_from_lm_sensors
+}
+
+# Decide where the CPU temperatures will be read from, and refuse to start on a request that cannot be
+# honoured
+# Usage : resolve_CPU_temperature_source "$CPU_TEMPERATURE_SOURCE" "$NETWORK_MODE"
+# Sets : CPU_TEMPERATURE_SOURCE (normalized), CPU_TEMPERATURE_SOURCE_IN_USE and
+#        CPU_TEMPERATURE_SOURCE_DESCRIPTION, the startup log line's provenance clause
+#
+# The iDRAC stays the source in every case where it can be one : it is the only one that describes the
+# controlled server whatever the mode, it is the source every existing installation is running on, and
+# it is the one the fan control commands go to anyway. lm-sensors is the answer to a single, narrow
+# situation -- an iDRAC that drives the fans but reports no CPU temperature at all -- so it is engaged
+# either by the user saying so, or by the iDRAC proving over several consecutive checks that it is in
+# exactly that situation. It is never engaged just because one query came back empty.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+function resolve_CPU_temperature_source() {
+  local -r REQUESTED_SOURCE="$1"
+  local -r IS_NETWORK_MODE="$2"
+
+  CPU_TEMPERATURE_SOURCE=$(normalize_CPU_temperature_source "$REQUESTED_SOURCE")
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  CPU_TEMPERATURE_SOURCE_DESCRIPTION=""
+
+  case "$CPU_TEMPERATURE_SOURCE" in
+    auto)
+      if [ "$IS_NETWORK_MODE" == "true" ]; then
+        CPU_TEMPERATURE_SOURCE_DESCRIPTION="iDRAC (IPMI), the lm-sensors fallback being only available in local mode"
+      else
+        CPU_TEMPERATURE_SOURCE_DESCRIPTION="iDRAC (IPMI), falling back to lm-sensors if it turns out to report no CPU temperature at all"
+      fi
+      ;;
+    ipmi)
+      CPU_TEMPERATURE_SOURCE_DESCRIPTION="iDRAC (IPMI), as requested"
+      ;;
+    lm-sensors)
+      # Refused rather than quietly downgraded to IPMI : the user asked for a specific source, and a
+      # container that silently supervises the wrong CPUs is the failure this whole parameter exists
+      # to make impossible
+      if [ "$IS_NETWORK_MODE" == "true" ]; then
+        print_error_and_exit "CPU_TEMPERATURE_SOURCE is \"lm-sensors\", which reads the CPUs of the machine this container runs on. In network mode that machine is not the server whose fans are being controlled, so those readings would describe the wrong hardware. Set IDRAC_HOST to \"local\", or leave CPU_TEMPERATURE_SOURCE to its default"
+      fi
+
+      # Checked now rather than discovered in the monitoring loop : with no reading at all, every cycle
+      # would hand the fans back to Dell's profile forever, which looks exactly like a container doing
+      # its job and is the hardest possible way to find out that a kernel module is missing
+      if ! is_lm_sensors_reporting_CPU_temperatures; then
+        print_error_and_exit "CPU_TEMPERATURE_SOURCE is \"lm-sensors\", but no CPU temperature could be read from it. Check that your Docker host exposes them through /sys (the \"coretemp\" kernel module) and that \"sensors\" reports a \"Package id\" temperature. Note that only Intel CPUs are supported here: AMD's \"k10temp\" driver reports \"Tctl\", which is not the physical temperature the iDRAC reports"
+      fi
+
+      CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
+      CPU_TEMPERATURE_SOURCE_DESCRIPTION="lm-sensors, as requested (the iDRAC is still the one driving the fans)"
+      ;;
+    *)
+      # Left in place, an unrecognized value would silently mean "auto" : the user would believe one
+      # source is being read while another one is
+      print_error_and_exit "CPU_TEMPERATURE_SOURCE must be \"auto\", \"ipmi\" or \"lm-sensors\", but is \"$REQUESTED_SOURCE\""
+      ;;
+  esac
+}
+
+# Record a check the iDRAC answered without exposing a single readable CPU temperature sensor, and
+# switch the controller over to lm-sensors once enough of them have agreed
+# Usage : note_check_without_readable_CPU_temperature_sensor
+# Returns : 0 (true) if this call switched the source, 1 otherwise
+#
+# The switch takes effect on the next reading rather than on this one, which costs a single check
+# interval and keeps the caller a plain loop : the fans are on the Dell default profile meanwhile,
+# which is where they already were for every check that got here
+function note_check_without_readable_CPU_temperature_sensor() {
+  ((CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR++))
+
+  # Only the automatic mode ever switches on its own : "ipmi" is the user asking for no surprise, and
+  # "lm-sensors" has already been resolved at startup
+  if [ "$CPU_TEMPERATURE_SOURCE" != "auto" ] || [ "$CPU_TEMPERATURE_SOURCE_IN_USE" != "ipmi" ]; then
+    return 1
+  fi
+
+  # In network mode lm-sensors describes the machine running the container, not the controlled server,
+  # so there is nothing to fall back on. The same constraint already applies to threshold detection
+  if [ "$NETWORK_MODE" == "true" ]; then
+    return 1
+  fi
+
+  if (( CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR < LM_SENSORS_FALLBACK_CONFIRMING_READINGS )); then
+    return 1
+  fi
+
+  # Nothing to switch to : the controller keeps waiting for the iDRAC, which is what it does today
+  if ! is_lm_sensors_reporting_CPU_temperatures; then
+    return 1
+  fi
+
+  CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
+  printf "%19s  The iDRAC reported no readable CPU temperature sensor on %s consecutive checks, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.\n" "$(date +"%d-%m-%Y %T")" "$CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR"
+  return 0
+}
+
 # Extract the temperature reading carried by a single ipmitool sdr line
 # Usage : extract_temperature_from_sdr_line "$SDR_LINE"
 # Returns : the temperature in degrees Celsius, or an empty string if that line carries no reading
@@ -316,6 +563,28 @@ function retrieve_temperature_by_entity_id() {
   extract_temperature_from_sdr_line "$SDR_LINE"
 }
 
+# Extract the name of the sensor a reading comes from, located by its IPMI entity ID
+# Usage : retrieve_sensor_name_by_entity_id "$SDR_DATA" $ENTITY_ID
+# Returns : the sensor's name, or an empty string if that entity is not in the data
+#
+# The name is the 1st pipe-delimited column. On a real iDRAC it is the uninformative "Temp" every CPU
+# shares, which is why the entity is what identifies a CPU everywhere else. It becomes worth reading
+# when the readings come from lm-sensors, where that column carries the hwmon chip each CPU was read
+# from and is the only thing that can tell the user which one their column shows
+function retrieve_sensor_name_by_entity_id() {
+  local -r SDR_DATA="$1"
+  local -r ENTITY_ID="$2"
+
+  printf '%s\n' "$SDR_DATA" | awk -F'|' -v ENTITY="$ENTITY_ID" '
+    {
+      SENSOR_ENTITY_ID = $4
+      SENSOR_NAME = $1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", SENSOR_ENTITY_ID)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", SENSOR_NAME)
+    }
+    SENSOR_ENTITY_ID == ENTITY { print SENSOR_NAME; exit }'
+}
+
 # Extract a single temperature reading from ipmitool sdr output, located by its sensor name
 # Usage : retrieve_temperature_by_sensor_name "$SDR_DATA" "$SENSOR_NAME"
 # Returns : the temperature in degrees Celsius, or an empty string if no such sensor has a reading
@@ -341,6 +610,20 @@ function retrieve_temperature_by_sensor_name() {
 # iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
 function retrieve_sdr_temperature_data() {
   ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees
+}
+
+# Read the temperature sensors data the controller supervises, from whichever source is in use
+# Usage : retrieve_temperature_data
+# Returns : "sdr type temperature" shaped lines holding an actual reading
+#
+# This is the single place the two sources meet. Everything above and below it -- detection, per-entity
+# reads, the table, the overheating check -- sees the same shape either way
+function retrieve_temperature_data() {
+  if [ "${CPU_TEMPERATURE_SOURCE_IN_USE:-ipmi}" == "lm-sensors" ]; then
+    merge_lm_sensors_CPU_temperatures_into_temperature_data "$(retrieve_sdr_temperature_data)"
+  else
+    retrieve_sdr_temperature_data
+  fi
 }
 
 # Detect the CPU temperature sensors the server exposes
@@ -487,11 +770,35 @@ function refresh_CPU_temperature_sensors() {
 # Describes the detected CPU temperature sensors, along with the IPMI entities they are read from : that
 # is what the README asks users to correlate with their own "ipmitool sdr type temperature" output
 # Usage : format_detected_CPU_temperature_sensors
+#
+# When the readings come from lm-sensors, the entities are the controller's own numbering rather than
+# something the iDRAC ever reported, so naming them would send the user looking for rows that do not
+# exist in their "ipmitool sdr type temperature" output. The hwmon chips are named instead, which is
+# how "sensors" itself names them and therefore what can be correlated
 function format_detected_CPU_temperature_sensors() {
-  if (( ${#DETECTED_CPU_ENTITY_IDS[@]} == 1 )); then
-    printf '1 CPU temperature sensor detected (entity %s)' "${DETECTED_CPU_ENTITY_IDS[0]}"
+  local -r NUMBER_OF_SENSORS=${#DETECTED_CPU_ENTITY_IDS[@]}
+  local SOURCES=("${DETECTED_CPU_ENTITY_IDS[@]}")
+  local SINGULAR_LABEL="entity"
+  local PLURAL_LABEL="entities"
+
+  if [ "${CPU_TEMPERATURE_SOURCE_IN_USE:-ipmi}" == "lm-sensors" ]; then
+    SINGULAR_LABEL="lm-sensors chip"
+    PLURAL_LABEL="lm-sensors chips"
+
+    local INDEX CHIP
+    for INDEX in "${!DETECTED_CPU_ENTITY_IDS[@]}"; do
+      CHIP=$(retrieve_sensor_name_by_entity_id "$SDR_TEMPERATURE_DATA" "${DETECTED_CPU_ENTITY_IDS[INDEX]}")
+      # A CPU whose chip went silent keeps its column until it is confirmed gone, and the data no
+      # longer holds a row to read its name from : the entity it is still being looked up by is what
+      # is left to name it
+      SOURCES[INDEX]="${CHIP:-${DETECTED_CPU_ENTITY_IDS[INDEX]}}"
+    done
+  fi
+
+  if (( NUMBER_OF_SENSORS == 1 )); then
+    printf '1 CPU temperature sensor detected (%s %s)' "$SINGULAR_LABEL" "${SOURCES[0]}"
   else
-    printf '%d CPU temperature sensors detected (entities %s)' "${#DETECTED_CPU_ENTITY_IDS[@]}" "${DETECTED_CPU_ENTITY_IDS[*]}"
+    printf '%d CPU temperature sensors detected (%s %s)' "$NUMBER_OF_SENSORS" "$PLURAL_LABEL" "${SOURCES[*]}"
   fi
 }
 
@@ -546,7 +853,7 @@ function retrieve_temperatures() {
   if (( $# == 2 )); then
     SDR_TEMPERATURE_DATA="$2"
   else
-    SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+    SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
   fi
   local -r DATA="$SDR_TEMPERATURE_DATA"
 

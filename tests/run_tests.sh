@@ -172,6 +172,24 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   done < <(test_case_names_of_file "$TEST_FILE")
 done
 
+# Case files are all sourced into this shell before anything runs, so a test case
+# name declared twice does not collide : the second definition silently replaces
+# the first, and the name discovered in the first file then runs the second file's
+# body. Both entries pass, the run stays green, and one of the two test cases has
+# simply stopped existing. Same failure mode as the check below, one level up
+declare -a DUPLICATED_TEST_CASES=()
+while IFS= read -r DUPLICATED_TEST_CASE; do
+  [ -n "$DUPLICATED_TEST_CASE" ] || continue
+  DUPLICATED_TEST_CASES+=("$DUPLICATED_TEST_CASE")
+done < <(printf '%s\n' "${DISCOVERED_TEST_CASES[@]}" | sort | uniq -d)
+
+if [ "${#DUPLICATED_TEST_CASES[@]}" -ne 0 ]; then
+  printf 'These test case names are declared more than once, so only the last definition of each would run :\n' >&2
+  printf '  %s\n' "${DUPLICATED_TEST_CASES[@]}" >&2
+  printf 'Test case names must be unique across the whole suite, every case file being sourced into the same shell.\n' >&2
+  exit 1
+fi
+
 # Discovery reads the files as text, execution runs what bash actually defined.
 # When the two disagree, a test case exists and never runs - the failure mode
 # that costs the most, because the suite stays green while covering less than
