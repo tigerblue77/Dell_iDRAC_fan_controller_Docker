@@ -14,6 +14,15 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # readonly DELL_FRESH_AIR_COMPLIANCE=45
 
+# The boolean parameters are dispatched by running their value as a command ("if $MONITORING_ONLY_MODE"),
+# an idiom that is only safe once the value is known to be one of the two literals it expects : anything
+# else is read as false without a word, or run as whatever command it happens to name. Validate them
+# first, before the first IPMI command and before anything reads them. MONITORING_ONLY_MODE especially,
+# since it decides how the check interval just below is bounded and what graceful_exit does on the way out
+validate_boolean_parameter "MONITORING_ONLY_MODE" "$MONITORING_ONLY_MODE"
+validate_boolean_parameter "DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"
+validate_boolean_parameter "KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT" "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"
+
 # CHECK_INTERVAL paces the whole monitoring loop and is handed straight to sleep, whose exit status the
 # loop never looks at, so an unusable value doesn't stop anything : it makes every cycle return at once
 # and turns the loop into a busy loop hammering the iDRAC. It is also the controller's reaction time,
@@ -124,7 +133,7 @@ if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
 else
   echo "Check interval: $CHECK_INTERVAL"
 fi
-if $MONITORING_ONLY_MODE; then
+if "$MONITORING_ONLY_MODE"; then
   echo "Monitoring only mode: Enabled (no fan control profile will be applied, temperatures will only be logged)"
 else
   echo "Monitoring only mode: Disabled"
@@ -134,6 +143,14 @@ echo ""
 TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 # Set the flag used to check if the active fan control profile has changed
 IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
+# The comment column explains a profile CHANGE, and the first cycle changes nothing:
+# it establishes the profile. Without this, whichever branch the first cycle takes
+# stays silent -- and since the flag above starts at true, the silent one is the
+# fail-safe branch, so a server whose sensors could not be read has its fans handed
+# to Dell's profile with no explanation, which is exactly when the user needs one.
+# No starting value of that flag fixes it: setting it the other way just moves the
+# silence onto the healthy path
+IS_FIRST_MONITORING_CYCLE=true
 # Tracks whether the target server was powered off on the previous cycle, so temperatures can be
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
@@ -335,7 +352,7 @@ while true; do
   if is_any_CPU_overheating; then
     apply_Dell_default_fan_control_profile
 
-    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
+    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 
       # is_any_CPU_overheating() collected every CPU concerned, however many of them there are, each
@@ -350,7 +367,7 @@ while true; do
     apply_user_fan_control_profile
 
     # Check if user fan control profile is applied then apply it if not
-    if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
+    if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=false
       # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included.
       # It says the temperatures are OK rather than that they decreased, because the Dell default profile
@@ -376,7 +393,7 @@ while true; do
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
     fi
 
-    if $MONITORING_ONLY_MODE; then
+    if "$MONITORING_ONLY_MODE"; then
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
     fi
   fi
@@ -387,6 +404,7 @@ while true; do
     TABLE_HEADER_PRINT_COUNTER=0
   fi
   print_temperature_array_line "$CPU_COLUMN_CONTENT_WIDTH" "$INLET_TEMPERATURE" "$CPUS_TEMPERATURES" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
+  IS_FIRST_MONITORING_CYCLE=false
   ((TABLE_HEADER_PRINT_COUNTER++))
 
   wait $SLEEP_PROCESS_PID

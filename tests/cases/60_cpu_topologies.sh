@@ -327,6 +327,65 @@ function test_a_socket_slow_to_become_readable_after_a_reboot_keeps_its_column()
 }
 
 
+function test_two_sensors_sharing_an_entity_get_a_single_column() {
+  # retrieve_temperature_by_entity_id() stops at its first match, so a duplicated
+  # entity would otherwise get two columns both showing the same reading
+  local -r SDR_DATA="$(make_sdr_line "Temp" "0Eh" "ok" "3.1" "40 degrees C")
+$(make_sdr_line "Temp" "0Fh" "ok" "3.1" "41 degrees C")
+$(make_sdr_line "Temp" "10h" "ok" "3.2" "42 degrees C")"
+
+  detect_CPU_temperature_sensors "$SDR_DATA"
+
+  assert_equals "3.1 3.2" "${DETECTED_CPU_ENTITY_IDS[*]}" "the repeated entity is counted once"
+  assert_equals "CPU 1 CPU 2" "${DETECTED_CPU_LABELS[*]}"
+}
+
+function test_a_tenth_processor_entity_sorts_after_the_second_one() {
+  # A lexicographic sort puts 3.10 between 3.1 and 3.2, which would label the
+  # sockets in an order that doesn't match the entities they are read from
+  local -r SDR_DATA="$(make_sdr_line "Temp" "20h" "ok" "3.10" "43 degrees C")
+$(make_sdr_line "Temp" "0Eh" "ok" "3.1" "40 degrees C")
+$(make_sdr_line "Temp" "0Fh" "ok" "3.2" "41 degrees C")"
+
+  detect_CPU_temperature_sensors "$SDR_DATA"
+
+  assert_equals "3.1 3.2 3.10" "${DETECTED_CPU_ENTITY_IDS[*]}" "instances are sorted as numbers"
+  assert_equals "CPU 1 CPU 2 CPU 3" "${DETECTED_CPU_LABELS[*]}" "columns stay numbered from 1"
+}
+
+function test_a_non_processor_entity_is_not_taken_for_a_cpu() {
+  # The entity is matched anchored : "13.1" and "30.1" both contain "3.1" but
+  # neither is entity 3, and counting them would add columns for heat sources
+  # that don't exist
+  local -r SDR_DATA="$(make_sdr_line "Temp" "0Eh" "ok" "3.1" "40 degrees C")
+$(make_sdr_line "Temp" "11h" "ok" "13.1" "44 degrees C")
+$(make_sdr_line "Temp" "12h" "ok" "30.1" "45 degrees C")"
+
+  detect_CPU_temperature_sensors "$SDR_DATA"
+
+  assert_equals "3.1" "${DETECTED_CPU_ENTITY_IDS[*]}" "only entity 3 is a processor"
+  assert_equals "CPU 1" "${DETECTED_CPU_LABELS[*]}"
+}
+
+function test_every_cpu_going_silent_at_once_never_empties_the_table() {
+  # Every socket falling silent together is an IPMI or host problem, not four
+  # CPUs being unplugged at the same instant. Emptying the table would leave
+  # is_any_CPU_overheating() with nothing to fail safe on
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
+  detect_then_retrieve_temperatures
+
+  IS_CPU_REMOVAL_ALLOWED=true
+  PENDING_CPU_REMOVAL_SIGNATURE=""
+
+  local READING
+  for ((READING = 1; READING <= CPU_REMOVAL_CONFIRMING_READINGS + 2; READING++)); do
+    refresh_CPU_temperature_sensors ""
+    assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" \
+      "reading $READING left the table intact"
+  done
+}
+
 function test_adopting_a_lower_entity_shifts_the_labels_above_it() {
   # The mechanism behind the renumbering notice the entrypoint prints : labels are
   # recomputed from 1 in entity order on every refresh, so they are only stable
