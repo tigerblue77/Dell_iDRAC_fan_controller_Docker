@@ -231,6 +231,30 @@ All parameters are optional as they have default values (including default iDRAC
 
 - Run the image using usual `docker run` command instead of UnRAID Community Apps or Docker UI. [More informations here.](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/89#issuecomment-4166458799)
 
+### Not all of your CPUs appear in the temperatures table
+
+At startup, the container logs the CPU temperature sensors it found, with the IPMI entities they were read from (`4 CPU temperature sensors detected (entities 3.1 3.2 3.3 3.4).`), and prints one column per detected CPU. There is no built-in limit on that number, so 4-socket servers (R930, R830, R920, R940...) get all of their CPUs monitored.
+
+If fewer sensors are listed than the number of CPUs installed, your iDRAC isn't reporting the missing sockets as readable IPMI processor entities. Check what it does report with :
+```bash
+ipmitool -I lanplus \
+  -H <iDRAC IP address> \
+  -U <iDRAC username> \
+  -P <iDRAC password> \
+  sdr type temperature
+```
+CPUs are the lines whose 4th column is an entity `3.<something>` and whose reading ends in `degrees C`. They need not be contiguous nor in order: a socket that is empty or unreadable is usually still listed, but as `Disabled` or `No Reading` instead of a temperature, and is therefore not monitored. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model and that output if a CPU that does report a temperature is missing from the table.
+
+The container follows those sensors while it runs, so there is no need to restart it after changing the CPUs of the target server. A CPU that starts reporting a temperature is picked up and monitored on the next check.
+
+A CPU that stops reporting one keeps its column, reading `-`, and the Dell default fan control profile is applied meanwhile, since its temperature is unknown. It is only dropped from the table if it is still silent on several consecutive checks after the server has been switched off and back on, that being the only way a CPU can physically leave the machine: a sensor going quiet on a running server is a fault, not a missing socket, and dropping it would silently stop watching a CPU that is still installed. The conclusion is logged as such :
+```
+CPU 3 and CPU 4 are considered removed from the server: their temperature sensors (entities 3.3 and 3.4) reported nothing on the 5 readings that followed the server powering back on. 2 CPU temperature sensors detected (entities 3.1 3.2).
+```
+Several agreeing readings are required because a populated socket can still be unreadable for a few checks after a reboot, while its iDRAC reports it exactly like a socket that is gone. Following the CPUs this way costs no extra IPMI command: it reuses the sensor data each cycle already reads.
+
+Note that on chassis products (VRTX, FX2, M1000e, MX7000) each server node has its own iDRAC with its own address: point the container at a node's iDRAC, not at the chassis CMC, which doesn't answer IPMI at all.
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- CONTRIBUTING -->
