@@ -364,9 +364,12 @@ function retrieve_temperature_by_sensor_name() {
   local -r SDR_DATA="$1"
   local -r SENSOR_NAME="$2"
 
-  # On the (unexpected) event of several sensors matching the name, the last one wins, as it did when
-  # the reading was picked with "grep -Po ... | tail -1"
-  local -r SDR_LINE=$(echo "$SDR_DATA" | grep "$SENSOR_NAME" | tail -1)
+  # The name is matched at the start of the line, the sensor name being the first pipe-delimited column.
+  # Matching it anywhere would let "PSU1 Inlet Temp" and "PSU2 Inlet Temp" -- which most servers with
+  # redundant power supplies report -- answer for "Inlet Temp", and the last of them would win, so the
+  # intake column showed a power supply's own intake instead of the chassis air intake (issue #231).
+  # tail -1 is kept for the genuinely unexpected case of two sensors sharing the same leading name
+  local -r SDR_LINE=$(echo "$SDR_DATA" | grep -E "^[[:space:]]*$SENSOR_NAME" | tail -1)
 
   extract_temperature_from_sdr_line "$SDR_LINE"
 }
