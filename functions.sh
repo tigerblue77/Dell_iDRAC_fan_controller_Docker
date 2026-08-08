@@ -33,7 +33,7 @@ function apply_Dell_default_fan_control_profile() {
 # In monitoring only mode, the profile is only logged, not actually applied
 function apply_static_fan_control_profile() {
   if (( $# != 3 )); then
-    print_error "Illegal number of parameters.\nUsage: apply_static_fan_control_profile \$DECIMAL_SPEED \$HEXADECIMAL_SPEED \"\$PROFILE_NAME\""
+    print_error "Illegal number of parameters, usage: apply_static_fan_control_profile \$DECIMAL_SPEED \$HEXADECIMAL_SPEED \"\$PROFILE_NAME\""
     return 1
   fi
   local -r DECIMAL_SPEED="$1"
@@ -777,26 +777,29 @@ function print_configuration_error_and_exit() {
   exit 1
 }
 
+# Each of these terminates its own line. print_error() used not to, which was deliberate only for
+# print_error_and_exit()'s " Exiting." suffix : every standalone call left the message unterminated, so
+# it fused with the next thing printed. The realistic case is an iDRAC rejecting the fan speed command,
+# which errors on every cycle and prefixes every table row with ~180 characters, moving the timestamp
+# out of column 1 and breaking any log parser keyed on it. The exit variants keep their exact wording
 function print_error() {
   local -r ERROR_MESSAGE="$1"
-  printf "/!\ Error /!\ %s." "$ERROR_MESSAGE" >&2
+  printf "/!\ Error /!\ %s.\n" "$ERROR_MESSAGE" >&2
 }
 
 function print_error_and_exit() {
   local -r ERROR_MESSAGE="$1"
-  print_error "$ERROR_MESSAGE"
-  printf " Exiting.\n" >&2
+  printf "/!\ Error /!\ %s. Exiting.\n" "$ERROR_MESSAGE" >&2
   exit 1
 }
 
 function print_warning() {
   local -r WARNING_MESSAGE="$1"
-  printf "/!\ Warning /!\ %s." "$WARNING_MESSAGE"
+  printf "/!\ Warning /!\ %s.\n" "$WARNING_MESSAGE"
 }
 
 function print_warning_and_exit() {
   local -r WARNING_MESSAGE="$1"
-  print_warning "$WARNING_MESSAGE"
-  printf " Exiting.\n"
+  printf "/!\ Warning /!\ %s. Exiting.\n" "$WARNING_MESSAGE"
   exit 0
 }
