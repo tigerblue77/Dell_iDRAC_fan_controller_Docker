@@ -13,5 +13,7 @@ readonly TABLE_HEADER_PRINT_INTERVAL=10
 readonly MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER=4
 
 # A temperature renders as "NNN°C", i.e. 5 display columns. A CPU column only gets wider than that when
-# its label is wider (e.g. "CPU 10")
+# a label is wider, which does not take ten CPUs : a label carries the IPMI entity instance the CPU is
+# read from, a 7-bit field (0-127) that has nothing to do with the socket count. A BMC using
+# device-relative instances (0x60 and up) labels a two-CPU server "CPU 96" and "CPU 97"
 readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5

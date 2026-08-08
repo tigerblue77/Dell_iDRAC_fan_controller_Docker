@@ -215,8 +215,10 @@ function format_detected_CPU_temperature_sensors() {
   fi
 }
 
-# The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), but a label such
-# as "CPU 10" is wider and would otherwise push every column on its right by one
+# The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), but a label can
+# be wider and would then push every column on its right by one. That doesn't take ten CPUs : a label
+# carries the IPMI entity instance, a 7-bit field unrelated to the socket count, so a BMC using
+# device-relative instances labels a two-CPU server "CPU 96" and "CPU 97"
 # Usage : compute_CPU_column_content_width "CPU 1" "CPU 2" ...
 function compute_CPU_column_content_width() {
   local WIDTH=$MINIMUM_CPU_COLUMN_CONTENT_WIDTH
@@ -408,7 +410,7 @@ function build_header() {
   header+="${LEFT_DASHES// /-}${TITLE}${RIGHT_DASHES// /-}"$'\n'
   header+='    Date & time      Inlet '
 
-  # Each CPU label is right-aligned in the shared column width, so that a wider label (e.g. "CPU 10")
+  # Each CPU label is right-aligned in the shared column width, so that a label wider than a reading
   # widens every column consistently instead of shifting the ones on its right
   local CPU_LABEL
   for CPU_LABEL in "${CPU_LABELS[@]}"; do
