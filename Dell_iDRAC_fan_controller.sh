@@ -18,7 +18,8 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 # command. All of them are unchecked text until here, and each one fails silently rather than loudly
 # when malformed: FAN_SPEED converts to 0x00 and stops the fans, CPU_TEMPERATURE_THRESHOLD makes the
 # overheating checks return "not overheating" and disables the safety fallback, and a CHECK_INTERVAL
-# sleep cannot parse makes it return at once, turning the monitoring loop into a busy loop
+# sleep cannot parse makes it return at once, turning the monitoring loop into a busy loop hammering
+# the iDRAC. Refuse to start rather than fail silently once running
 validate_fan_speed_parameter "FAN_SPEED" "$FAN_SPEED"
 # IPMI reports temperatures as a signed byte, so no threshold outside that range can ever be crossed
 validate_integer_parameter "CPU_TEMPERATURE_THRESHOLD" "$CPU_TEMPERATURE_THRESHOLD" -128 127
@@ -67,7 +68,9 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
-# The unit is only appended when the value doesn't already carry one, "60s" being an accepted form
+# The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
+# forms that would otherwise be logged as "90ss" and "5ms". The fractional forms sleep accepts ("0.5")
+# carry no unit either, so they take the "s" just the same
 if [[ "$CHECK_INTERVAL" =~ ^[0-9.]+$ ]]; then
   echo "Check interval: ${CHECK_INTERVAL}s"
 else
