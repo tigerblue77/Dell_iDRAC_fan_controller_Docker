@@ -163,10 +163,11 @@ SLEEP_PROCESS_PID=$!
 # Detect the CPU temperature sensors before entering the monitoring loop, the table header being built
 # from them. The loop then keeps watching for CPUs showing up later, so a partial set read here is not
 # final.
-# The target server may be powered off, or its iDRAC may not be answering yet, when the container starts.
-# No sensor can be read then, so keep waiting instead of giving up : this container is expected to
-# outlive its target server being powered off, and exiting here would just make it restart in a loop
-WAITING_FOR_CPU_TEMPERATURE_SENSORS_CYCLES=0
+# The target server may be powered off when the container starts. No sensor can be read then, so keep
+# waiting instead of giving up : this container is expected to outlive its target server being powered
+# off, and exiting there would just make it restart in a loop.
+# A server that does answer is a different matter, and is handled inside the loop : it has CPUs, so
+# reporting none of them is a fault to report rather than a state to wait out
 while true; do
   IS_TARGET_SERVER_ANSWERING=true
   if $NETWORK_MODE && ! is_server_powered_on; then
@@ -182,45 +183,26 @@ while true; do
       break
     fi
 
-    # The server answers but exposes no readable CPU temperature, so nothing can be supervised. Hand the
-    # fans back to Dell rather than leave them wherever they were: a previous run of this container may
-    # have left the BMC in manual mode, in which case they would stay pinned at the user's low speed
-    # with nobody watching the temperatures
+    # The server answers, and answers that it has no readable CPU temperature sensor. Every PowerEdge
+    # has at least one CPU, so this is not a state to sit and wait out : an iDRAC that exposes no
+    # processor entity does so on every check, not on this one. Retrying forever would leave a container
+    # that looks alive and supervises nothing.
+    #
+    # Hand the fans back to Dell before leaving, rather than leave them wherever they were : a previous
+    # run of this container may have left the BMC in manual mode, in which case they would stay pinned
+    # at the user's low speed with nobody watching the temperatures. graceful_exit is not reached here,
+    # the trap only covering the termination signals
     apply_Dell_default_fan_control_profile
 
-    # The third-party PCIe card cooling response is a setting the user asked for, not a reaction to a
-    # temperature : it has nothing to do with the CPU sensors being readable, and the monitoring loop
-    # applies it on every one of its own cycles
-    apply_third_party_PCIe_card_cooling_response_setting \
-      "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
+    print_error_and_exit "No CPU temperature sensor could be read from $SERVER_MANUFACTURER $SERVER_MODEL, and every PowerEdge has at least one CPU.
+ Run \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type temperature\" (drop the connection options in local mode) and look for lines whose 4th column is an entity \"3.<something>\" and whose reading ends in \"degrees C\".
+ If some are listed and the container still reports none, or if none is listed at all, please open an issue with your server model and that output : https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues
+ Dell default dynamic fan control profile applied for safety before exiting."
   fi
 
-  if ! $IS_TARGET_SERVER_ANSWERING; then
-    # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
-    # same powered-off server, only observed before the first reading rather than after
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
-  elif (( WAITING_FOR_CPU_TEMPERATURE_SENSORS_CYCLES % TABLE_HEADER_PRINT_INTERVAL == 0 )); then
-    # The server answers but exposes nothing readable. Repeated on the same rhythm the monitoring loop
-    # reprints its table header, rather than once and never again : a container that says one thing at
-    # startup and then stays silent for days is indistinguishable from a hung one, and this is the
-    # state a user aiming IDRAC_HOST at a chassis controller sits in permanently
-    if $NETWORK_MODE; then
-      WAITING_REASON="is the target server still starting up ?"
-    else
-      # In local mode the server is by definition powered on, so pointing at its power state would send
-      # the user looking in the wrong direction: the sensors are there, they just can't be parsed
-      WAITING_REASON="see the troubleshooting section of the README"
-    fi
-
-    # The profile is only claimed when it was really sent : applying it is a no-op in monitoring only mode
-    if $MONITORING_ONLY_MODE; then
-      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
-    else
-      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
-    fi
-  fi
-
-  ((WAITING_FOR_CPU_TEMPERATURE_SENSORS_CYCLES++))
+  # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
+  # same powered-off server, only observed before the first reading rather than after
+  printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
 
   wait $SLEEP_PROCESS_PID
 
@@ -374,8 +356,36 @@ while true; do
   # ipmitool exits non-zero both for a command the BMC does not have and for a BMC it never reached, and
   # only the completion code it prints tells the two apart. The controller therefore stops asking on the
   # first genuine "I do not have this command", and never on a network outage, however long it lasts
-  apply_third_party_PCIe_card_cooling_response_setting \
-    "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
+  if $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
+    # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
+    # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
+    if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Disabled"
+      disable_third_party_PCIe_card_Dell_default_cooling_response
+    else
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Enabled"
+      enable_third_party_PCIe_card_Dell_default_cooling_response
+    fi
+    # The status of the command the branch above just ran
+    THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE=$?
+
+    if [ $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE -eq 0 ]; then
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
+
+      if "$MONITORING_ONLY_MODE"; then
+        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+      fi
+    elif does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
+      # The BMC answered, and answered that it does not have this command. That will not change while
+      # this container runs, so stop sending it
+      IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+    else
+      # The command did not go through, but nothing says the server refused it : an unreachable iDRAC, a
+      # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
+    fi
+  fi
 
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
   if [ $TABLE_HEADER_PRINT_COUNTER -eq $TABLE_HEADER_PRINT_INTERVAL ]; then

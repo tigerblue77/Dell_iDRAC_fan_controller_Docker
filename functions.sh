@@ -676,62 +676,6 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 
 # Whether the given ipmitool stderr says the BMC itself answered and does not have the command, as
 # opposed to ipmitool never having reached it.
-# Apply the user's third-party PCIe card Dell default cooling response setting, and report what the
-# server answered.
-# Usage : apply_third_party_PCIe_card_cooling_response_setting \
-#           "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
-# Reads and updates : IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED, latched false once the
-#                     server has answered that it does not have the command
-# Returns : THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS, the string the table's column shows
-#
-# Extracted so the monitoring loop and the loop waiting for readable CPU sensors apply it the same way.
-# It is a setting the user asked for, not a reaction to a temperature, so it must not depend on whether
-# a CPU can be read : a server whose sensors never become readable would otherwise keep whatever cooling
-# response state its iDRAC was left in, silently and for as long as the wait lasts
-function apply_third_party_PCIe_card_cooling_response_setting() {
-  if (( $# != 2 )); then
-    print_error "Illegal number of parameters. Usage: apply_third_party_PCIe_card_cooling_response_setting \$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE \$MONITORING_ONLY_MODE"
-    return 1
-  fi
-  local -r IS_DISABLE_REQUESTED="$1"
-  local -r IS_MONITORING_ONLY_MODE="$2"
-
-  if ! $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
-    return 0
-  fi
-
-  # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response.
-  # No comment is displayed when this changes : it is not related to the temperature of any device, only to
-  # the settings the user made when launching the container
-  local REQUESTED_COOLING_RESPONSE
-  if "$IS_DISABLE_REQUESTED"; then
-    REQUESTED_COOLING_RESPONSE="Disabled"
-    disable_third_party_PCIe_card_Dell_default_cooling_response
-  else
-    REQUESTED_COOLING_RESPONSE="Enabled"
-    enable_third_party_PCIe_card_Dell_default_cooling_response
-  fi
-  # The status of the command the branch above just ran
-  local -r COOLING_RESPONSE_EXIT_CODE=$?
-
-  if [ "$COOLING_RESPONSE_EXIT_CODE" -eq 0 ]; then
-    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_COOLING_RESPONSE"
-
-    if "$IS_MONITORING_ONLY_MODE"; then
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
-    fi
-  elif does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
-    # The BMC answered, and answered that it does not have this command. That will not change while
-    # this container runs, so stop sending it
-    IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
-    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
-  else
-    # The command did not go through, but nothing says the server refused it : an unreachable iDRAC, a
-    # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
-    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
-  fi
-}
-
 # Usage : does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"
 #
 # ipmitool exits non-zero for both, which is exactly why the text is needed. A BMC that answered reports

@@ -200,33 +200,49 @@ function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_sa
     "no fan speed must be sent either"
 }
 
-function test_the_controller_keeps_saying_why_it_is_waiting_instead_of_going_silent() {
-  # A container that states its reason once at startup and then never prints
-  # anything again is indistinguishable from a hung one, and this is the state a
-  # user who aimed IDRAC_HOST at a chassis controller sits in permanently
+function test_the_controller_refuses_to_run_on_a_server_reporting_no_cpu_sensor() {
+  # Every PowerEdge has at least one CPU, and an iDRAC that exposes no processor
+  # entity exposes none on every check : waiting it out would leave a container
+  # that looks alive and supervises nothing. It has to say so and stop, with what
+  # the user needs to report the problem
   simulate_enclosure_management_controller "PowerEdge M1000e"
 
-  # Wait for the reason to have been printed more than once rather than for a
-  # temperature line, which this server can never produce
-  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read(.|\n)*No CPU temperature sensor could be read")
+  local OUTPUT
+  OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+  local -r EXIT_CODE=$?
 
-  local -r OCCURRENCES=$(grep -c "No CPU temperature sensor could be read" <<< "$OUTPUT")
-  assert_command_succeeds \
-    "the reason must be repeated, not printed once and never again (seen $OCCURRENCES times)" \
-    test "$OCCURRENCES" -ge 2
+  assert_equals 1 "$EXIT_CODE" "the container must stop rather than wait forever"
+  assert_contains "$OUTPUT" "No CPU temperature sensor could be read"
+  assert_contains "$OUTPUT" "every PowerEdge has at least one CPU"
+  assert_contains "$OUTPUT" "sdr type temperature" "the user is told what to run"
+  assert_contains "$OUTPUT" "github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues" \
+    "and where to report it"
 }
 
-function test_the_third_party_pcie_card_setting_is_applied_while_waiting_for_cpu_sensors() {
-  # It is a setting the user asked for, not a reaction to a temperature : a
-  # server whose CPU sensors never become readable would otherwise keep whatever
-  # cooling response state its iDRAC was left in, silently and indefinitely
-  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+function test_the_fans_are_handed_back_to_dell_before_refusing_to_run() {
+  # A previous run of this container may have left the BMC in manual mode, in
+  # which case exiting without a word would leave the fans pinned at the user's
+  # low speed with nobody watching the temperatures. graceful_exit is not reached
+  # on this path, the trap only covering the termination signals
   simulate_enclosure_management_controller "PowerEdge M1000e"
 
   run_controller "No CPU temperature sensor could be read" > /dev/null
 
-  local -r COOLING_RESPONSE_CALLS=$(count_ipmitool_calls_matching "raw 0x30 0xce 0x00 0x16 0x05")
-  assert_command_succeeds \
-    "the user's third-party PCIe card cooling response setting must be applied while waiting (seen $COOLING_RESPONSE_CALLS times)" \
-    test "$COOLING_RESPONSE_CALLS" -ge 1
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "Dell's own dynamic profile must be applied before exiting"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")" \
+    "and no fan speed must ever be sent on readings the controller never got"
+}
+
+function test_the_refusal_never_prints_the_idrac_password() {
+  # The message tells the user which ipmitool command to run, and the connection
+  # string the controller uses carries -P <password> : printing it would put the
+  # iDRAC password in the container logs
+  export IDRAC_PASSWORD="hunter2-should-never-be-logged"
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+
+  assert_not_contains "$OUTPUT" "$IDRAC_PASSWORD" "the password must never reach the logs"
+  assert_contains "$OUTPUT" "<iDRAC password>" "the command is shown with a placeholder instead"
 }
