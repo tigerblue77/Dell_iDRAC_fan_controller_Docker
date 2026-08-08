@@ -44,9 +44,3 @@ readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5
 # slow to become readable after POST, and monitoring one heat source less until it shows up again
 readonly CPU_REMOVAL_CONFIRMING_READINGS=5
 
-# How many cycles in a row the server has to refuse Dell's OEM third-party PCIe card cooling response
-# command before the controller stops sending it. ipmitool exits non-zero both for a command the BMC
-# does not implement and for a BMC it could not reach at all, and those two must not be confused : a
-# server that has no such setting refuses every single time, an iDRAC being reset or a momentary
-# network glitch refuses once
-readonly THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_REFUSALS_BEFORE_GIVING_UP=3

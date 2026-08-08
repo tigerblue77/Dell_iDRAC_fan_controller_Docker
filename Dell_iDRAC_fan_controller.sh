@@ -11,7 +11,6 @@ source constants.sh
 # takes, and the monitoring loop below finds out by sending it and reading the answer rather than by
 # guessing from the model name
 IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
-THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS=0
 
 # Trap the signals for container exit and run graceful_exit function
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
@@ -363,9 +362,10 @@ while true; do
   # named the AMD, dense and modular models to a scheme a pattern could follow, so a name-based check
   # told an R6515 or an MX740c apart from an R730 exactly backwards (issue #173).
   #
-  # So ask the server and report what it answered. A single refusal is not a verdict, though :
-  # ipmitool exits non-zero both for a command the BMC does not implement and for a BMC it could not
-  # reach, so the controller only stops asking once the refusal has repeated, and says so
+  # So ask the server and report what it answered. A command that failed is not a verdict on its own :
+  # ipmitool exits non-zero both for a command the BMC does not have and for a BMC it never reached, and
+  # only the completion code it prints tells the two apart. The controller therefore stops asking on the
+  # first genuine "I do not have this command", and never on a network outage, however long it lasts
   if $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
     # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
@@ -380,25 +380,20 @@ while true; do
     THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE=$?
 
     if [ $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE -eq 0 ]; then
-      THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS=0
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
 
       if "$MONITORING_ONLY_MODE"; then
         THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
       fi
+    elif does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
+      # The BMC answered, and answered that it does not have this command. That will not change while
+      # this container runs, so stop sending it
+      IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
     else
-      ((THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS++))
-      # Report the refusal on the cycle it happened rather than the setting the user asked for, which
-      # is the whole point : the column must say what the server did, not what it was told to do
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Refused by this server"
-
-      # ipmitool exits non-zero for a command the BMC does not implement and for a BMC it could not
-      # reach, and nothing here can tell the two apart. Only stop asking once the refusal has repeated:
-      # a server without the setting refuses every time, a network glitch refuses once
-      if [ "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS" -ge "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_REFUSALS_BEFORE_GIVING_UP" ]; then
-        IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
-        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
-      fi
+      # The command did not go through, but nothing says the server refused it : an unreachable iDRAC, a
+      # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
     fi
   fi
 

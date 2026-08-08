@@ -26,14 +26,13 @@ function test_an_enclosure_housed_server_is_told_the_cooling_response_is_not_its
   simulate_enclosure_housed_server "PowerEdge MX760c" --cpus 2
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30|0x30 0xce"
 
-  # Wait until the controller has concluded, which takes as many refusals as the
-  # constant allows before it gives up
   local -r OUTPUT=$(run_controller "Not supported by this server")
 
   assert_matches "$OUTPUT" "fan control profile.*Not supported by this server" \
     "the table must report what the sled answered, not what the user asked for"
-  assert_matches "$OUTPUT" "fan control profile.*Refused by this server" \
-    "the earlier refusals are reported as refusals, not yet as a verdict"
+  # The one asked on the first cycle, plus the one graceful_exit sends on the way out
+  assert_equals "2" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "the sled answered rsp=0xc1, which settles it on the first try"
 }
 
 function test_the_catalogue_covers_every_enclosure_dell_shipped() {

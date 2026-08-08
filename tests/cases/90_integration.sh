@@ -215,25 +215,22 @@ function test_the_controller_stops_sending_a_command_the_server_refused() {
   local -r OUTPUT=$(run_controller "" 5)
 
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge R6515"
-  assert_matches "$OUTPUT" "fan control profile.*Refused by this server" \
-    "the first refusals must be reported as what they are"
   assert_matches "$OUTPUT" "fan control profile.*Not supported by this server" \
-    "once the refusal has repeated, the controller concludes and says so"
-  # One per refusal before giving up, plus the one graceful_exit sends on the way
-  # out. That last one is deliberately NOT gated on having given up : if the
-  # controller gave up for the wrong reason — an iDRAC that was being reset — then
-  # skipping the reset would leave the server on the user's setting for good
-  assert_equals "$((THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_REFUSALS_BEFORE_GIVING_UP + 1))" \
-    "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
-    "the command must stop being sent once the server has refused it enough times"
+    "rsp=0xc1 is the BMC saying it does not have the command, which settles it on the first try"
+  # The one asked on the first cycle, plus the one graceful_exit sends on the way
+  # out. That last one is deliberately NOT gated on the conclusion : one refused
+  # command on the way out costs nothing, a setting left behind on a server
+  # nothing monitors any more does
+  assert_equals "2" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "an answered refusal settles it, so the command is never sent again"
 }
 
 function test_a_transient_ipmi_failure_does_not_disable_the_cooling_response_for_good() {
   # ipmitool exits non-zero both for a command the BMC does not implement and for
-  # a BMC it could not reach, and the controller cannot tell them apart. A single
-  # refusal must therefore not be taken as a verdict : an iDRAC being reset or a
-  # momentary network glitch would otherwise permanently disable the setting on a
-  # perfectly healthy server, and make the column report the opposite of reality —
+  # a BMC it could not reach. Only the completion code it prints tells the two
+  # apart, and an unreachable iDRAC prints none : an iDRAC being reset or a
+  # momentary network glitch must not permanently disable the setting on a
+  # perfectly healthy server and make the column report the opposite of reality —
   # exactly the defect this whole change exists to remove
   export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
   simulate_server "PowerEdge R730xd" --cpus 2
@@ -252,6 +249,30 @@ function test_a_transient_ipmi_failure_does_not_disable_the_cooling_response_for
     pass
   else
     fail "the controller must keep sending the command after a transient refusal" \
+      "calls: $(recorded_ipmitool_calls)"
+  fi
+}
+
+function test_an_unreachable_idrac_never_becomes_a_verdict_however_long_it_lasts() {
+  # The counting version of this decision gave up after a fixed number of cycles,
+  # so a long enough outage concluded "Not supported by this server" on a server
+  # that supports it perfectly well. Reading the completion code removes the
+  # deadline entirely : no answer, no verdict, however many cycles go by
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_server "PowerEdge R730xd" --cpus 2
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Error: Unable to establish IPMI v2 / RMCP+ session"
+
+  local -r OUTPUT=$(run_controller "" 6)
+
+  assert_not_contains "$OUTPUT" "Not supported by this server" \
+    "nothing answered, so there is nothing to conclude"
+  assert_matches "$OUTPUT" "fan control profile.*Could not be applied on this cycle" \
+    "the column reports the cycle that failed, without drawing a conclusion from it"
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 6 ]; then
+    pass
+  else
+    fail "the command must keep being retried while the iDRAC is unreachable" \
       "calls: $(recorded_ipmitool_calls)"
   fi
 }
