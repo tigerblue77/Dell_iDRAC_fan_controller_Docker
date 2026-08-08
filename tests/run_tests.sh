@@ -90,12 +90,6 @@ source "$TESTS_DIRECTORY/lib/reports.sh"
 source "$REPO_ROOT/functions.sh"
 source "$REPO_ROOT/constants.sh"
 
-GENERATION_14_OR_NEWER_REGEX="$(read_generation_detection_regex)"
-readonly GENERATION_14_OR_NEWER_REGEX
-if [ -z "$GENERATION_14_OR_NEWER_REGEX" ]; then
-  printf 'Could not read the generation detection regular expression from Dell_iDRAC_fan_controller.sh\n' >&2
-  exit 1
-fi
 
 # Collect the test case names of a file, in declaration order (declare -F would
 # sort them alphabetically, which would scramble the story each file tells)
