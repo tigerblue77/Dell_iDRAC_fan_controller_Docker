@@ -431,10 +431,7 @@ function test_the_controller_supervises_a_server_whose_idrac_reports_no_cpu() {
   # The whole point : an iDRAC that answers, drives the fans, and reports not a
   # single processor entity. Before the fallback, this container could do nothing
   # but hand the fans back to Dell forever
-  if ! provide_local_ipmi_device; then
-    skip_test "no IPMI device available and /dev is not writable"
-    return 0
-  fi
+  provide_local_ipmi_device
 
   export IDRAC_HOST="local"
   export CPU_TEMPERATURE_SOURCE="auto"
@@ -442,8 +439,6 @@ function test_the_controller_supervises_a_server_whose_idrac_reports_no_cpu() {
   simulate_readable_CPUs_in_lm_sensors 45.000 47.000
 
   local -r OUTPUT=$(run_controller)
-
-  withdraw_local_ipmi_device
 
   assert_contains "$OUTPUT" "reading the CPUs from lm-sensors instead"
   assert_contains "$OUTPUT" "2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 coretemp-isa-0001)"
@@ -454,10 +449,7 @@ function test_the_controller_supervises_a_server_whose_idrac_reports_no_cpu() {
 }
 
 function test_the_inlet_and_exhaust_sensors_of_such_a_server_are_still_reported() {
-  if ! provide_local_ipmi_device; then
-    skip_test "no IPMI device available and /dev is not writable"
-    return 0
-  fi
+  provide_local_ipmi_device
 
   export IDRAC_HOST="local"
   export CPU_TEMPERATURE_SOURCE="auto"
@@ -465,8 +457,6 @@ function test_the_inlet_and_exhaust_sensors_of_such_a_server_are_still_reported(
   simulate_readable_CPUs_in_lm_sensors 45.000 47.000
 
   local -r OUTPUT=$(run_controller)
-
-  withdraw_local_ipmi_device
 
   assert_not_contains "$OUTPUT" "No exhaust temperature sensor detected." \
     "this iDRAC does report an exhaust sensor, only its CPUs are missing"
@@ -477,10 +467,7 @@ function test_the_inlet_and_exhaust_sensors_of_such_a_server_are_still_reported(
 function test_an_overheating_cpu_read_from_lm_sensors_falls_back_on_dells_profile() {
   # The readings have to reach the same decision the IPMI ones do, or the fallback
   # would be supervision in name only
-  if ! provide_local_ipmi_device; then
-    skip_test "no IPMI device available and /dev is not writable"
-    return 0
-  fi
+  provide_local_ipmi_device
 
   export IDRAC_HOST="local"
   export CPU_TEMPERATURE_SOURCE="lm-sensors"
@@ -498,8 +485,6 @@ function test_an_overheating_cpu_read_from_lm_sensors_falls_back_on_dells_profil
 
   local -r OUTPUT=$(run_controller "temperature is too high")
 
-  withdraw_local_ipmi_device
-
   assert_contains "$OUTPUT" "User static fan control profile" \
     "the cool readings should have been supervised, and the user's fan speed applied"
   assert_contains "$OUTPUT" "CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
@@ -508,10 +493,7 @@ function test_an_overheating_cpu_read_from_lm_sensors_falls_back_on_dells_profil
 function test_the_controller_keeps_waiting_when_the_idrac_and_lm_sensors_both_report_nothing() {
   # Neither source has a CPU to offer. The controller must keep Dell's own profile
   # applied and say why, rather than print a table it can never fill
-  if ! provide_local_ipmi_device; then
-    skip_test "no IPMI device available and /dev is not writable"
-    return 0
-  fi
+  provide_local_ipmi_device
 
   export IDRAC_HOST="local"
   export CPU_TEMPERATURE_SOURCE="auto"
@@ -520,8 +502,6 @@ function test_the_controller_keeps_waiting_when_the_idrac_and_lm_sensors_both_re
   export MOCK_SENSORS_OUTPUT=""
 
   local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
-
-  withdraw_local_ipmi_device
 
   assert_contains "$OUTPUT" "No CPU temperature sensor could be read"
   assert_not_contains "$OUTPUT" "reading the CPUs from lm-sensors instead"
@@ -545,10 +525,7 @@ function test_a_healthy_idrac_is_never_second_guessed() {
   # The negative control of the whole feature : a server whose iDRAC reports its
   # CPUs must be supervised through it, and lm-sensors must never be consulted
   # even though it would answer
-  if ! provide_local_ipmi_device; then
-    skip_test "no IPMI device available and /dev is not writable"
-    return 0
-  fi
+  provide_local_ipmi_device
 
   export IDRAC_HOST="local"
   export CPU_TEMPERATURE_SOURCE="auto"
@@ -556,8 +533,6 @@ function test_a_healthy_idrac_is_never_second_guessed() {
   simulate_readable_CPUs_in_lm_sensors 45.000 47.000
 
   local -r OUTPUT=$(run_controller)
-
-  withdraw_local_ipmi_device
 
   assert_not_contains "$OUTPUT" "reading the CPUs from lm-sensors instead"
   assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)"

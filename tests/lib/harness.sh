@@ -30,6 +30,8 @@ function setup_test_context() {
   NETWORK_MODE=true
   CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
   CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR=0
+  # The repository itself : only provide_local_ipmi_device() moves it
+  CONTROLLER_WORKING_DIRECTORY="$REPO_ROOT"
   # Set before the trap by the controller, so graceful_exit can read it whenever a signal lands
   IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
 
@@ -85,32 +87,46 @@ function capture_output() {
 # Docker image, or in a CI container), hence the graceful failure : the caller
 # skips rather than reporting a failure about something it never got to test.
 #
-# Usage : if ! provide_local_ipmi_device; then skip_test "..."; return 0; fi
+# Make run_controller() start the whole controller in "local" mode, on a machine
+# that has no IPMI device of its own.
+#
+# The controller refuses to start without one, and the lookup it walks lives in
+# the IPMI_DEVICE_PATHS array so that it can be pointed elsewhere (issue #190) --
+# but a bash array cannot cross a process boundary, and run_controller() starts
+# the controller as its own process. That seam is deliberately out of reach of the
+# environment, precisely so that "docker run -e IPMI_DEVICE_PATHS=..." cannot
+# redirect it, and this must not weaken that.
+#
+# The controller sources "functions.sh" by a relative path, so the directory it
+# runs from is the seam that is left. A throwaway one is built here, holding
+# symbolic links to the real scripts and, in place of functions.sh, three lines
+# that source the real one and then point the lookup at a file of this run's own
+# temporary directory. Nothing is written outside it, and no root is needed, so
+# these cases run on the CI runner as well as in the Docker image rather than
+# skipping on whichever machine has no /dev to write to.
+#
+# Usage : provide_local_ipmi_device; OUTPUT=$(run_controller)
 function provide_local_ipmi_device() {
-  FAKE_LOCAL_IPMI_DEVICE_CREATED=false
+  local -r LOCAL_MODE_DIRECTORY="$TEST_TEMPORARY_DIRECTORY/local_mode_repository"
+  local -r FAKE_IPMI_DEVICE="$LOCAL_MODE_DIRECTORY/ipmi0"
 
-  if [ -e /dev/ipmi0 ] || [ -e /dev/ipmi/0 ] || [ -e /dev/ipmidev/0 ]; then
-    return 0
-  fi
+  rm -rf "$LOCAL_MODE_DIRECTORY"
+  mkdir -p "$LOCAL_MODE_DIRECTORY"
 
-  if ! (mkdir -p /dev/ipmi && touch /dev/ipmi/0) 2> /dev/null; then
-    return 1
-  fi
+  local REPOSITORY_FILE
+  for REPOSITORY_FILE in "$REPO_ROOT"/*.sh; do
+    [ "$(basename "$REPOSITORY_FILE")" == "functions.sh" ] && continue
+    ln -s "$REPOSITORY_FILE" "$LOCAL_MODE_DIRECTORY/"
+  done
 
-  FAKE_LOCAL_IPMI_DEVICE_CREATED=true
-}
+  {
+    printf 'source "%s/functions.sh"\n' "$REPO_ROOT"
+    printf 'IPMI_DEVICE_PATHS=("%s")\n' "$FAKE_IPMI_DEVICE"
+  } > "$LOCAL_MODE_DIRECTORY/functions.sh"
 
-# Undo provide_local_ipmi_device(), so that the cases asserting on the absence of
-# an IPMI device keep seeing a machine without one
-# Usage : withdraw_local_ipmi_device
-function withdraw_local_ipmi_device() {
-  if ! ${FAKE_LOCAL_IPMI_DEVICE_CREATED:-false}; then
-    return 0
-  fi
+  touch "$FAKE_IPMI_DEVICE"
 
-  rm -f /dev/ipmi/0
-  rmdir /dev/ipmi 2> /dev/null
-  FAKE_LOCAL_IPMI_DEVICE_CREATED=false
+  CONTROLLER_WORKING_DIRECTORY="$LOCAL_MODE_DIRECTORY"
 }
 
 # A COMPLETE line of the temperature table. The controller prints a line with
@@ -148,7 +164,9 @@ function run_controller() {
 
   local EXIT_CODE=0
   (
-    cd "$REPO_ROOT" || exit 1
+    # The repository itself, unless provide_local_ipmi_device() has pointed this at
+    # the throwaway one it builds to make local mode runnable
+    cd "${CONTROLLER_WORKING_DIRECTORY:-$REPO_ROOT}" || exit 1
 
     bash ./Dell_iDRAC_fan_controller.sh > "$OUTPUT_FILE" 2>&1 &
     CONTROLLER_PID=$!
