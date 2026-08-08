@@ -181,7 +181,7 @@ function test_the_header_of_a_server_exposing_no_processor_entity() {
   # the space the title is padded with on its right -- the one no dash replaces at
   # this width -- survives an editor trimming trailing whitespace
   local -r BANNER_LINE="                      Temperatures "
-  local -r COLUMNS_LINE="    Date & time      Inlet  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
+  local -r COLUMNS_LINE="    Date & time      Inlet  Exhaust           Active fan speed profile           Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$BANNER_LINE"$'\n'"$COLUMNS_LINE" "$(build_header 5)"
 }
@@ -195,21 +195,21 @@ function test_the_temperature_line_of_a_server_exposing_no_processor_entity() {
 
 function test_the_header_of_a_single_cpu_server() {
   local -r EXPECTED_HEADER="                     ---- Temperatures ---
-    Date & time      Inlet  CPU 1  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
+    Date & time      Inlet  CPU 1  Exhaust           Active fan speed profile           Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1")"
 }
 
 function test_the_header_of_a_dual_cpu_server() {
   local -r EXPECTED_HEADER="                     ------- Temperatures -------
-    Date & time      Inlet  CPU 1  CPU 2  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
+    Date & time      Inlet  CPU 1  CPU 2  Exhaust           Active fan speed profile           Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1" "CPU 2")"
 }
 
 function test_the_header_of_a_quad_cpu_server() {
   local -r EXPECTED_HEADER="                     -------------- Temperatures --------------
-    Date & time      Inlet  CPU 1  CPU 2  CPU 3  CPU 4  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
+    Date & time      Inlet  CPU 1  CPU 2  CPU 3  CPU 4  Exhaust           Active fan speed profile           Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1" "CPU 2" "CPU 3" "CPU 4")"
 }
@@ -476,12 +476,16 @@ function test_the_table_columns_line_up_whatever_the_profile_and_the_mode() {
   assert_the_table_columns_line_up false "Dell default dynamic fan control profile" "Enabled"
   assert_the_table_columns_line_up false "User static fan control profile (5%)" "Could not be applied on this cycle"
   assert_the_table_columns_line_up false "User static fan control profile (100%)" "Not supported by this server"
+  assert_the_table_columns_line_up false "Low temperature fan control profile (10%)" "Enabled"
+  assert_the_table_columns_line_up false "Low temperature fan control profile (100%)" "Enabled"
 
   assert_the_table_columns_line_up true "Dell default dynamic fan control profile (monitoring only, not applied)" \
     "Enabled (not applied: monitoring only mode)"
   assert_the_table_columns_line_up true "User static fan control profile (5%) (monitoring only, not applied)" \
     "Disabled (not applied: monitoring only mode)"
   assert_the_table_columns_line_up true "User static fan control profile (100%) (monitoring only, not applied)" \
+    "Enabled (not applied: monitoring only mode)"
+  assert_the_table_columns_line_up true "Low temperature fan control profile (100%) (monitoring only, not applied)" \
     "Enabled (not applied: monitoring only mode)"
 }
 
@@ -501,6 +505,7 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
     local -a PROFILES=("Dell default dynamic fan control profile")
     for SPEED in 1 5 10 50 100; do
       PROFILES+=("User static fan control profile ($SPEED%)")
+      PROFILES+=("Low temperature fan control profile ($SPEED%)")
     done
 
     local WIDEST_PROFILE_WIDTH=0

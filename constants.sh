@@ -48,12 +48,13 @@ readonly CPU_REMOVAL_CONFIRMING_READINGS=5
 # from these, rather than each repeating a literal of its own, which is how the profile column came to
 # reserve less in the header than the rows were printing into it.
 #
-# That column has zero slack by construction : "Dell default dynamic fan control profile" is exactly 40
-# characters, so the " (monitoring only, not applied)" badge -- 31 more -- cannot be made to fit by
-# shortening anything, and the column has to widen with the mode instead. MONITORING_ONLY_MODE is fixed for
-# the container's lifetime, so which of the two applies is settled once at startup
-readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=40
-readonly MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=71
+# That column has zero slack by construction : its widest value, "Low temperature fan control profile
+# (100%)", is exactly the 42 characters it reserves, so the " (monitoring only, not applied)" badge -- 31
+# more -- cannot be made to fit by shortening anything, and the column has to widen with the mode instead.
+# MONITORING_ONLY_MODE is fixed for the container's lifetime, so which of the two applies is settled once
+# at startup
+readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=42
+readonly MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=73
 
 # The cooling response column is sized by its own heading, "Third-party PCIe card Dell default cooling
 # response", which is longer than anything that column ever holds : its widest value is "Disabled (not

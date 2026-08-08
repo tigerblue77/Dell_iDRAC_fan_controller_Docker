@@ -76,13 +76,11 @@ if [ -n "$LOW_INLET_TEMPERATURE_THRESHOLD" ]; then
 fi
 readonly LOW_INLET_TEMPERATURE_THRESHOLD
 
+# Only the parameter's own shape is checked here. Comparing it against CPU_TEMPERATURE_THRESHOLD has to
+# wait for that one to be resolved, which happens further down : see the check placed right after it
 if [ -n "$LOW_CPU_TEMPERATURE_THRESHOLD" ]; then
   validate_temperature_threshold_parameter "LOW_CPU_TEMPERATURE_THRESHOLD" "$LOW_CPU_TEMPERATURE_THRESHOLD"
   LOW_CPU_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$LOW_CPU_TEMPERATURE_THRESHOLD")
-
-  if [ "$LOW_CPU_TEMPERATURE_THRESHOLD" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
-    print_configuration_error_and_exit "LOW_CPU_TEMPERATURE_THRESHOLD" "${LOW_CPU_TEMPERATURE_THRESHOLD}°C" "lower than CPU_TEMPERATURE_THRESHOLD (${CPU_TEMPERATURE_THRESHOLD}°C) : a CPU cannot be both cold enough to slow the fans and hot enough to trip the overheating fallback"
-  fi
 fi
 readonly LOW_CPU_TEMPERATURE_THRESHOLD
 
@@ -171,6 +169,16 @@ else
   print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "$CPU_TEMPERATURE_THRESHOLD" "a positive integer number of degrees Celsius, or \"auto\" to take the CPUs' own \"high\" temperature as reported by lm-sensors"
 fi
 readonly CPU_TEMPERATURE_THRESHOLD
+
+# /!\ This check must stay after the CPU_TEMPERATURE_THRESHOLD resolution above /!\
+# The two thresholds bound the same temperature from opposite ends, so one has to be lower than the
+# other, but the comparison is only meaningful once the right operand is a number : against the literal
+# "auto", the default, bash's "-ge" returns 2, which reads as "not greater or equal" and lets the
+# contradictory configuration through in silence. The resolved value is named with the source it came
+# from, an automatically detected threshold being a number the user never typed anywhere
+if [ -n "$LOW_CPU_TEMPERATURE_THRESHOLD" ] && [ "$LOW_CPU_TEMPERATURE_THRESHOLD" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+  print_configuration_error_and_exit "LOW_CPU_TEMPERATURE_THRESHOLD" "${LOW_CPU_TEMPERATURE_THRESHOLD}°C" "lower than CPU_TEMPERATURE_THRESHOLD (${CPU_TEMPERATURE_THRESHOLD}°C${CPU_TEMPERATURE_THRESHOLD_SOURCE}) : a CPU cannot be both cold enough to slow the fans and hot enough to trip the overheating fallback"
+fi
 
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 

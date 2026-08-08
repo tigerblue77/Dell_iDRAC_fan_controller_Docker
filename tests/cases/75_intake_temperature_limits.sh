@@ -134,3 +134,43 @@ function test_a_reduced_speed_below_the_configured_one_is_accepted() {
   assert_not_contains "$OUTPUT" "Invalid configuration" \
     "a genuinely reduced speed is the supported configuration"
 }
+
+function test_the_cold_cpu_threshold_is_compared_against_the_resolved_one() {
+  # CPU_TEMPERATURE_THRESHOLD defaults to "auto" and only becomes a number once
+  # the entrypoint has resolved it, which is the whole point of the "/!\ must stay
+  # ahead of everything that reads it as a number /!\" note above that resolution.
+  # Comparing against it too early is the #149 shape all over again : "-ge" against
+  # the literal "auto" returns 2, which reads as "not greater or equal" and lets a
+  # cold threshold ABOVE the overheating one through -- a configuration where every
+  # CPU is at once cold enough to slow the fans and hot enough to trip the fallback
+  export FAN_SPEED=30
+  export CPU_TEMPERATURE_THRESHOLD=auto
+  export LOW_CPU_TEMPERATURE_THRESHOLD=60
+  export LOW_TEMPERATURE_FAN_SPEED=10
+  simulate_server "PowerEdge R740" --cpus 2
+
+  local OUTPUT
+  OUTPUT=$(run_controller "Invalid configuration" 2>&1 || true)
+
+  assert_contains "$OUTPUT" "LOW_CPU_TEMPERATURE_THRESHOLD" \
+    "a cold threshold above the resolved CPU_TEMPERATURE_THRESHOLD must stop the container"
+  assert_not_contains "$OUTPUT" "integer expression expected" \
+    "and the comparison must have a resolved number on its right, not the literal \"auto\""
+}
+
+function test_a_cold_cpu_threshold_below_the_resolved_one_is_accepted() {
+  # The mirror of the case above : the same "auto" default, a threshold genuinely
+  # below what it resolves to, and a container that starts without a word about it
+  export FAN_SPEED=30
+  export CPU_TEMPERATURE_THRESHOLD=auto
+  export LOW_CPU_TEMPERATURE_THRESHOLD=35
+  export LOW_TEMPERATURE_FAN_SPEED=10
+  simulate_server "PowerEdge R740" --cpus 2 --cpu-temperatures "40 40" --inlet 25
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_not_contains "$OUTPUT" "Invalid configuration" \
+    "a cold threshold below the resolved one is the supported configuration"
+  assert_not_contains "$OUTPUT" "integer expression expected" \
+    "and it is not accepted by a comparison that failed its way past the guard"
+}

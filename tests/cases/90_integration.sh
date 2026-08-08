@@ -102,7 +102,7 @@ function test_the_comment_closing_a_fallback_says_the_temperatures_are_ok_not_th
 
   local -r OUTPUT=$(run_controller "now OK")
 
-  assert_contains "$OUTPUT" " 81°C   78°C     34°C  Dell default dynamic fan control profile" \
+  assert_contains "$OUTPUT" " 81°C   78°C     34°C    Dell default dynamic fan control profile" \
     "the hot reading must keep the server on Dell's profile"
   assert_contains "$OUTPUT" "All CPU temperatures are now OK (<= 50°C), user's fan control profile applied."
   assert_not_contains "$OUTPUT" "decreased" "a reading that was never obtained cannot have decreased"
