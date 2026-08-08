@@ -544,7 +544,11 @@ function build_header() {
     header+=" CPU $i "
   done
 
-  header+=$' Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment'
+  # The two right-hand columns are padded to the same widths the data rows use, so that widening them
+  # for the monitoring only mode badge keeps the headings above their values
+  header+=$' Exhaust  '
+  header+=$(printf "%*s  %*s" "$FAN_CONTROL_PROFILE_COLUMN_WIDTH" "Active fan speed profile" "$COOLING_RESPONSE_COLUMN_WIDTH" "Third-party PCIe card Dell default cooling response")
+  header+='  Comment'
   printf "%s" "$header"
 }
 
@@ -567,7 +571,7 @@ function print_temperature_array_line() {
 
   # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
   # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
-  printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+  printf " %5s°C  %*s  %*s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$FAN_CONTROL_PROFILE_COLUMN_WIDTH" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$COOLING_RESPONSE_COLUMN_WIDTH" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
 # Formats a temperature reading as a right-aligned, 3-character-wide decimal number for display.
