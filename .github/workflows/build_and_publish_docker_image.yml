@@ -55,7 +55,7 @@ jobs:
           fetch-depth: 0
 
       - name: Generate release note
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
 
