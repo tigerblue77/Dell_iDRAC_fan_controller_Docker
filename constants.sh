@@ -19,6 +19,10 @@ readonly MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=125
 # Past the warning threshold that delay is worth pointing out, past the maximum it stops being a
 # configuration choice. Both are only meaningful when the controller actually drives the fans, so
 # validate_check_interval_parameter ignores them in monitoring only mode
+# A cycle costs 4 to 5 IPMI commands, so anything under a second means sending them more than once a
+# second to a BMC that answers in tens or hundreds of milliseconds : that is the hammering the check
+# interval validation exists to prevent
+readonly MINIMUM_CHECK_INTERVAL_IN_MILLISECONDS=1000
 readonly CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS=60
 readonly MAXIMUM_CHECK_INTERVAL_IN_SECONDS=900
 

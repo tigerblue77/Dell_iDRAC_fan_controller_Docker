@@ -79,22 +79,37 @@ function convert_hexadecimal_value_to_decimal() {
 # Convert a duration into a number of seconds, so it can be compared against a threshold
 # Usage : convert_duration_to_seconds "5m"
 #
-# Shared by every parameter written in that grammar -- CHECK_INTERVAL and
-# MAXIMUM_IPMI_UNREACHABLE_DURATION -- so they accept the exact same spellings
-# Returns : the equivalent number of seconds
-#
-# The value must already have passed validate_check_interval_parameter's format check : this only
-# reads the shapes that regex allows. The suffix is stripped and 10# forces base 10 so that a padded
-# value ("00", "08") is read as the decimal number the user meant instead of an invalid octal one
+# Goes through milliseconds so that a fractional duration survives the conversion. sleep accepts one,
+# and the plain "$((10#...))" this used to do throws "invalid arithmetic operator" on "0.5" rather than
+# rounding it, so every caller had to keep such a value away from here
 function convert_duration_to_seconds() {
+  echo "$(( $(convert_duration_to_milliseconds "$1") / 1000 ))"
+}
+
+# Express a duration in milliseconds, the smallest unit any caller needs to tell apart
+# Usage : convert_duration_to_milliseconds "0.5"
+#
+# Integer arithmetic throughout : bash has no floats, so the fractional part is padded or truncated to
+# three digits and folded into the total rather than divided
+function convert_duration_to_milliseconds() {
   local -r VALUE="$1"
-  local -r NUMBER="$((10#${VALUE%[smhd]}))"
+  local -r NUMBER="${VALUE%[smhd]}"
+  local -r INTEGER_PART="${NUMBER%%.*}"
+
+  local FRACTIONAL_PART=""
+  if [[ "$NUMBER" == *.* ]]; then
+    FRACTIONAL_PART="${NUMBER#*.}"
+  fi
+  FRACTIONAL_PART="${FRACTIONAL_PART}000"
+  FRACTIONAL_PART="${FRACTIONAL_PART:0:3}"
+
+  local -r MILLISECONDS=$((10#${INTEGER_PART:-0} * 1000 + 10#$FRACTIONAL_PART))
 
   case "$VALUE" in
-    *m) echo "$((NUMBER * 60))" ;;
-    *h) echo "$((NUMBER * 3600))" ;;
-    *d) echo "$((NUMBER * 86400))" ;;
-    *) echo "$NUMBER" ;;
+    *m) echo "$((MILLISECONDS * 60))" ;;
+    *h) echo "$((MILLISECONDS * 3600))" ;;
+    *d) echo "$((MILLISECONDS * 86400))" ;;
+    *) echo "$MILLISECONDS" ;;
   esac
 }
 
@@ -296,8 +311,11 @@ function validate_check_interval_parameter() {
   local -r VALUE="$2"
   local -r IS_MONITORING_ONLY_MODE="${3:-false}"
 
-  if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a number of seconds, optionally suffixed with s, m, h or d (for example 60, 90s, 5m or 1h)"
+  # sleep takes a fractional duration as readily as a whole one. The bound below is on the duration
+  # itself rather than on its spelling : what has to be kept out is a sub-second cycle, and "2.5m" is
+  # 150 seconds, no more a hammering than "150" is
+  if [[ ! "$VALUE" =~ ^([0-9]+(\.[0-9]+)?|\.[0-9]+)[smhd]?$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a duration sleep can wait for : a number, optionally fractional, optionally suffixed with s, m, h or d (for example 60, 0.5, 90s, 5m or 1h)"
   fi
 
   local -r VALUE_IN_SECONDS=$(convert_duration_to_seconds "$VALUE")
@@ -305,8 +323,16 @@ function validate_check_interval_parameter() {
   # Zero is the third failing case, and the only one sleep itself accepts : it parses fine, returns
   # immediately, and spins the loop just like an unparseable value. It is therefore rejected on its own
   # terms rather than on its format
-  if [ "$VALUE_IN_SECONDS" -eq 0 ]; then
+  # Measured in milliseconds, not in seconds : truncating first would make every sub-second duration
+  # indistinguishable from a zero, and report "0.5" as if the user had asked for no pause at all
+  local -r VALUE_IN_MILLISECONDS=$(convert_duration_to_milliseconds "$VALUE")
+
+  if [ "$VALUE_IN_MILLISECONDS" -eq 0 ]; then
     print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a duration greater than zero, otherwise the monitoring loop would never pause between two readings"
+  fi
+
+  if [ "$VALUE_IN_MILLISECONDS" -lt "$MINIMUM_CHECK_INTERVAL_IN_MILLISECONDS" ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at least one second. A cycle sends 4 to 5 IPMI commands, so a shorter interval means hammering the iDRAC with them more than once a second, which it answers too slowly to keep up with"
   fi
 
   if [ "$IS_MONITORING_ONLY_MODE" == "true" ]; then

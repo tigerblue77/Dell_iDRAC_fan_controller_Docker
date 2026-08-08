@@ -10,6 +10,10 @@
 # validate_check_interval_parameter answers by stopping the controller, so the
 # call has to happen in the subshell a command substitution creates : the exit
 # inside print_error_and_exit would otherwise take the test runner down with it
+function refuse_check_interval_output() {
+  ( validate_check_interval_parameter "CHECK_INTERVAL" "$1" 2>&1 )
+}
+
 function assert_check_interval_is_refused() {
   local -r VALUE="$1"
   local -r MESSAGE="${2:-\"$VALUE\" should stop the controller}"
@@ -103,14 +107,40 @@ function test_a_zero_check_interval_stops_the_controller() {
   done
 }
 
-function test_a_fractional_value_is_refused_although_sleep_accepts_it() {
+function test_a_sub_second_interval_is_refused_although_sleep_accepts_it() {
   # sleep waits for "0.5" happily, so this is a decision rather than an oversight :
   # a sub-second cycle would send the 4 to 5 IPMI commands a cycle costs more than
   # once a second, which is the hammering this validation exists to prevent
   local VALUE
-  for VALUE in "0.5" ".5" "1.5" "0.5s" "2.5m"; do
+  for VALUE in "0.5" ".5" "0.999" "0.5s"; do
     assert_check_interval_is_refused "$VALUE" "\"$VALUE\" is refused on purpose, despite sleep accepting it"
   done
+}
+
+function test_the_refusal_is_about_the_duration_not_about_the_fraction() {
+  # The bound is a second, not a spelling. "2.5m" is 150 seconds and "1.5s" is one and a half : neither
+  # hammers anything, and both waited correctly before this validation existed, so refusing them would
+  # stop a working container for a reason that does not apply to it
+  local VALUE
+  for VALUE in "1.0" "1.5s" "59.5s"; do
+    assert_check_interval_is_accepted "$VALUE" "\"$VALUE\" is a second or more, so the sub-second bound does not apply to it"
+  done
+
+  # 150 seconds : past the warning threshold like any other value that long, and warned about for that
+  # reason rather than refused for carrying a dot
+  assert_check_interval_is_accepted_with_a_warning "2.5m" \
+    "\"2.5m\" is 150 seconds, warned about for its length and not refused for its spelling"
+}
+
+function test_a_sub_second_interval_is_not_reported_as_a_zero() {
+  # Measured in milliseconds : truncating to seconds first would make every sub-second value look like
+  # a zero and send the user to the wrong explanation
+  local -r OUTPUT=$(refuse_check_interval_output "0.5")
+
+  assert_contains "$OUTPUT" "at least one second" \
+    "a sub-second interval is refused for being sub-second"
+  assert_not_contains "$OUTPUT" "greater than zero" \
+    "a sub-second interval is not reported as if the user had asked for no pause at all"
 }
 
 function test_the_suffix_decides_how_long_the_interval_really_is() {
