@@ -539,7 +539,12 @@ function refresh_CPU_temperature_sensors() {
     done
   fi
 
-  mapfile -t CPU_ENTITY_INSTANCES < <(printf '%s\n' "${CPU_ENTITY_INSTANCES[@]}" | sort -n)
+  # Guarded because printf with a format but no argument still prints it once : sorting an empty set
+  # would hand back one empty line, which becomes a phantom "CPU 1" reading entity "3." and never
+  # holding a temperature. Reachable on a server exposing no processor entity at all
+  if (( ${#CPU_ENTITY_INSTANCES[@]} > 0 )); then
+    mapfile -t CPU_ENTITY_INSTANCES < <(printf '%s\n' "${CPU_ENTITY_INSTANCES[@]}" | sort -n)
+  fi
   set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
 
   # The window closes as soon as it has been used, or as soon as the server has come back with every CPU
@@ -555,7 +560,12 @@ function refresh_CPU_temperature_sensors() {
 # is what the README asks users to correlate with their own "ipmitool sdr type temperature" output
 # Usage : format_detected_CPU_temperature_sensors
 function format_detected_CPU_temperature_sensors() {
-  if (( ${#DETECTED_CPU_ENTITY_IDS[@]} == 1 )); then
+  if (( ${#DETECTED_CPU_ENTITY_IDS[@]} == 0 )); then
+    # A server can legitimately expose none : an enclosure or CMC aimed at instead of a blade reports
+    # its chassis sensors and no processor entity. The inlet and the exhaust are still monitored, and a
+    # socket becoming readable later is still adopted, so this states a fact rather than a failure
+    printf 'No CPU temperature sensor detected, only the chassis temperatures will be monitored'
+  elif (( ${#DETECTED_CPU_ENTITY_IDS[@]} == 1 )); then
     printf '1 CPU temperature sensor detected (entity %s)' "${DETECTED_CPU_ENTITY_IDS[0]}"
   else
     printf '%d CPU temperature sensors detected (entities %s)' "${#DETECTED_CPU_ENTITY_IDS[@]}" "${DETECTED_CPU_ENTITY_IDS[*]}"
@@ -770,10 +780,14 @@ function get_Dell_server_model() {
 }
 
 # Builds the two header lines of the temperatures table, sized for the CPUs actually detected
-# Usage : build_header $CPU_COLUMN_CONTENT_WIDTH "CPU 1" "CPU 2" ...
+# Usage : build_header $CPU_COLUMN_CONTENT_WIDTH ["CPU 1" "CPU 2" ...]
+#
+# No label at all is a valid table : a server exposing no readable processor entity still has an inlet
+# and an exhaust worth logging. The banner then spans "Inlet  Exhaust" exactly, which is the width of
+# its own title, so it comes out with no dashes on either side rather than mis-sized
 function build_header() {
-  if (( $# < 2 )); then
-    print_error "build_header() requires a column content width and at least one CPU label"
+  if (( $# < 1 )); then
+    print_error "build_header() requires a column content width"
     return 1
   fi
 
@@ -892,8 +906,9 @@ function is_any_CPU_overheating() {
   done
 
   # Not being able to read a single CPU means nothing can be verified, so fail safe rather than trust
-  # the absence of data. refresh_CPU_temperature_sensors() keeps the set from ever emptying, so this
-  # only guards against a caller reaching here before any detection ran
+  # the absence of data. Reached on every cycle by a server exposing no processor entity at all -- an
+  # enclosure or CMC aimed at instead of a blade -- which is monitored for its chassis sensors with its
+  # fans left on Dell's own profile, and reached by a caller getting here before any detection ran
   if (( ${#DETECTED_CPU_TEMPERATURES[@]} == 0 )); then
     return 0
   fi

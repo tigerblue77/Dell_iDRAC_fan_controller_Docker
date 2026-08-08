@@ -257,6 +257,11 @@ Several agreeing readings are required because a populated socket can still be u
 
 Note that on chassis products (VRTX, FX2, M1000e, MX7000) each server node has its own iDRAC with its own address: point the container at a node's iDRAC, not at the chassis CMC, which doesn't answer IPMI at all.
 
+A server exposing no readable processor entity at all is still monitored: the container says so once at startup, then logs the chassis temperatures it can read with no CPU column in the table, and keeps the Dell default fan control profile applied since no temperature can be verified. Any socket becoming readable later is picked up and given its column, like any other CPU appearing mid-run.
+```
+No CPU temperature sensor detected, only the chassis temperatures will be monitored.
+```
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- CONTRIBUTING -->
