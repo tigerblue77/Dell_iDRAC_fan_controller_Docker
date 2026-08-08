@@ -235,3 +235,34 @@ function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_sa
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")" \
     "no fan speed must be sent either"
 }
+
+function test_the_controller_keeps_saying_why_it_is_waiting_instead_of_going_silent() {
+  # A container that states its reason once at startup and then never prints
+  # anything again is indistinguishable from a hung one, and this is the state a
+  # user who aimed IDRAC_HOST at a chassis controller sits in permanently
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  # Wait for the reason to have been printed more than once rather than for a
+  # temperature line, which this server can never produce
+  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read(.|\n)*No CPU temperature sensor could be read")
+
+  local -r OCCURRENCES=$(grep -c "No CPU temperature sensor could be read" <<< "$OUTPUT")
+  assert_command_succeeds \
+    "the reason must be repeated, not printed once and never again (seen $OCCURRENCES times)" \
+    test "$OCCURRENCES" -ge 2
+}
+
+function test_the_third_party_pcie_card_setting_is_applied_while_waiting_for_cpu_sensors() {
+  # It is a setting the user asked for, not a reaction to a temperature : a
+  # server whose CPU sensors never become readable would otherwise keep whatever
+  # cooling response state its iDRAC was left in, silently and indefinitely
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  run_controller "No CPU temperature sensor could be read" > /dev/null
+
+  local -r COOLING_RESPONSE_CALLS=$(count_ipmitool_calls_matching "raw 0x30 0xce 0x00 0x16 0x05")
+  assert_command_succeeds \
+    "the user's third-party PCIe card cooling response setting must be applied while waiting (seen $COOLING_RESPONSE_CALLS times)" \
+    test "$COOLING_RESPONSE_CALLS" -ge 1
+}

@@ -151,7 +151,7 @@ SLEEP_PROCESS_PID=$!
 # The target server may be powered off, or its iDRAC may not be answering yet, when the container starts.
 # No sensor can be read then, so keep waiting instead of giving up : this container is expected to
 # outlive its target server being powered off, and exiting here would just make it restart in a loop
-IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=false
+WAITING_FOR_CPU_TEMPERATURE_SENSORS_CYCLES=0
 while true; do
   IS_TARGET_SERVER_ANSWERING=true
   if $NETWORK_MODE && ! is_server_powered_on; then
@@ -172,17 +172,24 @@ while true; do
     # have left the BMC in manual mode, in which case they would stay pinned at the user's low speed
     # with nobody watching the temperatures
     apply_Dell_default_fan_control_profile
+
+    # The third-party PCIe card cooling response is a setting the user asked for, not a reaction to a
+    # temperature: it has nothing to do with the CPU sensors being readable, and the monitoring loop
+    # applies it on every one of its own cycles. Leaving it out here means a server that never becomes
+    # readable keeps whatever state its iDRAC was left in, silently and for as long as the wait lasts
+    apply_third_party_PCIe_card_cooling_response_setting \
+      "$DELL_POWEREDGE_GEN_14_OR_NEWER" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
   fi
 
   if ! $IS_TARGET_SERVER_ANSWERING; then
     # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
     # same powered-off server, only observed before the first reading rather than after
     printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
-  elif ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
-    # The server answers but exposes nothing readable. Logged once only, to say why the container isn't
-    # printing temperatures yet without flooding the logs every cycle
-    IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=true
-
+  elif (( WAITING_FOR_CPU_TEMPERATURE_SENSORS_CYCLES % TABLE_HEADER_PRINT_INTERVAL == 0 )); then
+    # The server answers but exposes nothing readable. Repeated on the same rhythm the monitoring loop
+    # reprints its table header, rather than once and never again : a container that says one thing at
+    # startup and then stays silent for days is indistinguishable from a hung one, and this is the
+    # state a user aiming IDRAC_HOST at a chassis controller sits in permanently
     if $NETWORK_MODE; then
       WAITING_REASON="is the target server still starting up ?"
     else
@@ -198,6 +205,8 @@ while true; do
       printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
     fi
   fi
+
+  ((WAITING_FOR_CPU_TEMPERATURE_SENSORS_CYCLES++))
 
   wait $SLEEP_PROCESS_PID
 
@@ -341,22 +350,10 @@ while true; do
     fi
   fi
 
-  # If server model is not Gen 14 (*40) or newer
-  if ! $DELL_POWEREDGE_GEN_14_OR_NEWER; then
-    # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
-    # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
-    if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
-      disable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
-    else
-      enable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
-    fi
-
-    if $MONITORING_ONLY_MODE; then
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
-    fi
-  fi
+  # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling
+  # response. Gen 14 and newer dropped the command, so nothing is sent there
+  apply_third_party_PCIe_card_cooling_response_setting \
+    "$DELL_POWEREDGE_GEN_14_OR_NEWER" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
 
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
   if [ $TABLE_HEADER_PRINT_COUNTER -eq $TABLE_HEADER_PRINT_INTERVAL ]; then

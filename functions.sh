@@ -604,6 +604,45 @@ function enable_third_party_PCIe_card_Dell_default_cooling_response() {
   ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null 2>&1
 }
 
+# Apply the user's third-party PCIe card Dell default cooling response setting, on the generations that
+# expose it.
+# Usage : apply_third_party_PCIe_card_cooling_response_setting $DELL_POWEREDGE_GEN_14_OR_NEWER \
+#           $DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE $MONITORING_ONLY_MODE
+# Returns : THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS, the string the table's own
+#           column shows
+#
+# Extracted so that the monitoring loop and the loop waiting for readable CPU sensors apply it the same
+# way. It is a setting the user asked for, not a reaction to a temperature, so it must not depend on
+# whether a CPU can be read : Gen 14 and newer simply dropped the command, which is the only case where
+# nothing is sent
+function apply_third_party_PCIe_card_cooling_response_setting() {
+  if (( $# != 3 )); then
+    print_error "Illegal number of parameters. Usage: apply_third_party_PCIe_card_cooling_response_setting \$DELL_POWEREDGE_GEN_14_OR_NEWER \$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE \$MONITORING_ONLY_MODE"
+    return 1
+  fi
+  local -r IS_GEN_14_OR_NEWER="$1"
+  local -r IS_DISABLE_REQUESTED="$2"
+  local -r IS_MONITORING_ONLY_MODE="$3"
+
+  if $IS_GEN_14_OR_NEWER; then
+    return 0
+  fi
+
+  # No comment is displayed when this changes : it is not related to the temperature of any device, only
+  # to the settings the user made when launching the container
+  if $IS_DISABLE_REQUESTED; then
+    disable_third_party_PCIe_card_Dell_default_cooling_response
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
+  else
+    enable_third_party_PCIe_card_Dell_default_cooling_response
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
+  fi
+
+  if $IS_MONITORING_ONLY_MODE; then
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+  fi
+}
+
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 # In monitoring only mode, this is a no-op
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
