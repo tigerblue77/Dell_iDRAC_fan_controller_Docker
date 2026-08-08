@@ -255,3 +255,33 @@ function test_the_healthcheck_fails_when_the_sensors_cannot_be_read() {
 
   assert_not_equals 0 "$EXIT_CODE" "the healthcheck should fail when ipmitool fails, so Docker restarts the container"
 }
+
+function test_no_boolean_parameter_is_dispatched_unquoted() {
+  # The boolean parameters are dispatched by running their value as a command
+  # ("if $MONITORING_ONLY_MODE"). validate_boolean_parameter() is what makes that
+  # idiom safe, and the call sites deliberately keep it rather than being
+  # rewritten -- so the invariant it rests on has to hold at every one of them.
+  #
+  # Quoting is the part that stops a value carrying arguments from running with
+  # them, should any dispatch ever be reached before the validation: a new
+  # parameter, the validation block moving, or a value reassigned mid-run. #166
+  # measured what that costs (MONITORING_ONLY_MODE=yes runs /usr/bin/yes, fills
+  # the log at hundreds of MB/s and defers the graceful_exit trap so that
+  # docker stop cannot end the container).
+  #
+  # It drifted once already: #166 asked for the quoting, #217 delivered the
+  # validation and 8 of the 9 quotes, and the 9th was only caught later (#245).
+  local -r BOOLEAN_PARAMETERS='MONITORING_ONLY_MODE|DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE|KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT'
+  local SCRIPT UNQUOTED
+  for SCRIPT in "$REPO_ROOT"/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+
+    # Comments quote the idiom while explaining it, so they are skipped
+    UNQUOTED=$(grep -nE "^[^#]*\bif !? ?\\\$($BOOLEAN_PARAMETERS)\b" "$SCRIPT" || true)
+    if [ -z "$UNQUOTED" ]; then
+      pass
+    else
+      fail "${SCRIPT#$REPO_ROOT/} dispatches a boolean parameter unquoted" "$UNQUOTED"
+    fi
+  done
+}
