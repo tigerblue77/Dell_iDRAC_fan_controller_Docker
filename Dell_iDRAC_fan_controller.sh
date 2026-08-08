@@ -23,26 +23,9 @@ else
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
-set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
-
-get_Dell_server_model
-
-if [[ ! $SERVER_MANUFACTURER == "DELL" ]]; then
-  print_error_and_exit "Your server isn't a Dell product"
-fi
-
-# CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
-# instead of counting values, which no longer depends on the server generation
-
-# If server model is Gen 14 (*40) or newer
-if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
-else
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
-fi
-
-# In local mode, the container runs on the target server itself, so it can never observe it powered off
-# while the container is running. This check is therefore only meaningful in network mode.
+# In local mode, the container runs on the target server itself. Two things depend on that : lm-sensors
+# can only describe the controlled server's CPUs in that mode, and the server can never be observed
+# powered off while the container is running, so that check is only meaningful in network mode
 if [[ "$IDRAC_HOST" == "local" ]]; then
   readonly NETWORK_MODE=false
 else
@@ -53,6 +36,10 @@ fi
 # for the "high" temperature defined by their manufacturer : that value describes the actual hardware being
 # cooled, unlike a single fixed threshold shared by every CPU model
 # (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/26)
+#
+# /!\ This resolution must stay ahead of everything that reads CPU_TEMPERATURE_THRESHOLD as a number /!\
+# It is deliberately placed here, right after the FAN_SPEED conversion, so that any later validation sees
+# an already-resolved integer rather than the literal string "auto"
 CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD:-auto}"
 CPU_TEMPERATURE_THRESHOLD_SOURCE=""
 if [[ "${CPU_TEMPERATURE_THRESHOLD,,}" == "auto" ]]; then
@@ -80,6 +67,24 @@ else
   print_error_and_exit "CPU_TEMPERATURE_THRESHOLD must be a positive integer number of degrees Celsius or \"auto\", but is \"$CPU_TEMPERATURE_THRESHOLD\""
 fi
 readonly CPU_TEMPERATURE_THRESHOLD
+
+set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
+
+get_Dell_server_model
+
+if [[ ! $SERVER_MANUFACTURER == "DELL" ]]; then
+  print_error_and_exit "Your server isn't a Dell product"
+fi
+
+# CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
+# instead of counting values, which no longer depends on the server generation
+
+# If server model is Gen 14 (*40) or newer
+if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
+else
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
+fi
 
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"

@@ -94,21 +94,27 @@ function set_iDRAC_login_string() {
 #
 # /!\ lm-sensors reads the CPUs of the machine this script runs on, so this is only meaningful in local
 # mode, where that machine is the very server whose fans are being controlled /!\
+#
+# Only Intel's "coretemp" chips are read. The other chips lm-sensors exposes (chipset, NVMe drives...)
+# publish their own unrelated "high" values, which would silently become the CPU threshold, and AMD's
+# drivers publish nothing usable : k10temp hides both "high" and "crit" on every Zen part (so on every
+# EPYC PowerEdge), its "high" on older parts is a hardcoded 70°C driver constant on the non-physical
+# Tctl scale rather than a manufacturer value, and k8temp exposes no limit at all. An AMD server
+# therefore falls back to FALLBACK_CPU_TEMPERATURE_THRESHOLD, which the startup log states explicitly,
+# instead of silently adopting a number that means nothing
 function retrieve_CPU_high_temperature_from_lm_sensors() {
   if ! command -v sensors > /dev/null 2>&1; then
     return
   fi
 
   # "sensors -u" prints raw sub-feature values ("temp1_max: 62.000") instead of the decorated, localized
-  # human-readable format ("high = +62.0°C"), which keeps the parsing independent from locale and layout.
-  # Only CPU chips are considered: the other chips exposed by lm-sensors (chipset, NVMe drives, etc.) have
-  # their own unrelated "high" values, which would otherwise silently become the CPU threshold
+  # human-readable format ("high = +62.0°C"), which keeps the parsing independent from locale and layout
   local -r HIGH_TEMPERATURE=$(sensors -u 2>/dev/null | awk '
     # Chip names are the only unindented lines that are neither "Adapter: ..." nor a feature label such as
     # "Package id 0:", which always ends with a colon
     /^[^[:space:]]/ {
       if ($0 !~ /^Adapter:/ && $0 !~ /:[[:space:]]*$/) {
-        is_CPU_chip = ($0 ~ /^(coretemp|k10temp|k8temp)-/)
+        is_CPU_chip = ($0 ~ /^coretemp-/)
       }
       next
     }
