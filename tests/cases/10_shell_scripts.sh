@@ -174,6 +174,34 @@ function test_the_env_example_offers_every_parameter_the_image_declares() {
   done < <(grep -E '^ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed 's/^ENV //' | cut -d= -f1)
 }
 
+function test_the_env_example_offers_every_parameter_the_readme_documents() {
+  # The test above can only see what the Dockerfile declares, and the Dockerfile
+  # declares no ENV for IDRAC_USERNAME and IDRAC_PASSWORD : they are credentials,
+  # they have no default to ship. So the two parameters .env.example exists for
+  # in the first place are precisely the two its guard does not cover. Dropping
+  # either of them from the file leaves the whole suite green.
+  # The README's own parameter bullets are the list that does include them
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  # Space padded on both ends so a key can be matched whole, as above
+  local ENV_EXAMPLE_KEYS=" "
+  local LINE
+  while IFS= read -r LINE; do
+    ENV_EXAMPLE_KEYS+="${LINE%%=*} "
+  done < <(grep -E '^[A-Z_]+=' "$REPO_ROOT/.env.example")
+
+  local KEY
+  while IFS= read -r KEY; do
+    assert_contains "$ENV_EXAMPLE_KEYS" " $KEY " \
+      "$KEY is documented in the README, .env.example should show users how to set it"
+  done < <(grep -oE '^- `[A-Z_]+`' "$REPO_ROOT/README.md" | tr -d '`' | sed 's/^- //')
+}
+
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
   local OUTPUT
   OUTPUT=$(bash "$REPO_ROOT/healthcheck.sh" 2>&1)

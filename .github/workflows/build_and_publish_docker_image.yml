@@ -82,6 +82,37 @@ jobs:
             echo "value=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Recorded as a label below. The "Base image refresh" workflow reads it
+      # back off the published image to tell whether the base moved since, so
+      # an image published here has to carry it too : without it that workflow
+      # would rebuild once for nothing after every release.
+      # Sits between the logins and "Docker meta" on purpose : it consumes the
+      # former because the base lives on Docker Hub, where anonymous requests are
+      # rate limited per IP on shared runner addresses, and the latter consumes
+      # its outputs. A step that can fail stands between a published release and
+      # a pushed image, so it had better not be one that fails for lack of
+      # credentials
+      - name: Resolve the digest of the base image
+        id: base
+        run: |
+          set -euo pipefail
+          BASE_IMAGE="$(awk 'toupper($1) == "FROM" { print $2; exit }' Dockerfile)"
+          echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')" >> "$GITHUB_OUTPUT"
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -102,19 +133,9 @@ jobs:
           # type=semver or type=ref entry ever be added here
           flavor: |
             latest=false
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          labels: |
+            org.opencontainers.image.base.name=${{ steps.base.outputs.image }}
+            org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4

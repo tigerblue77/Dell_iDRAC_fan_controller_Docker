@@ -9,12 +9,16 @@ updates:
   - package-ecosystem: "devcontainers"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    # Daily rather than weekly : minor and patch updates are grouped and
+    # auto-merged, so checking every day shortens the delay before a fix lands
+    # without adding review work. Major updates are opened sooner too, they
+    # still wait for a manual review
     schedule:
-      interval: "weekly"
+      interval: "daily"
     # Opening a pull request is the only way Dependabot reports anything, and it
     # stops opening them once this many are waiting - silently, naming nothing.
     # The default is 5, and the first scan here hit it exactly : five majors
