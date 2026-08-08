@@ -10,6 +10,7 @@
   <li><a href="#download-docker-image">Download Docker image</a></li>
   <li><a href="#usage">Usage</a></li>
   <li><a href="#parameters">Parameters</a></li>
+  <li><a href="#stopping-the-container">Stopping the container</a></li>
   <li><a href="#troubleshooting">Troubleshooting</a></li>
   <li><a href="#contributing">Contributing</a></li>
   <li><a href="#license">License</a></li>
@@ -231,6 +232,42 @@ All parameters are optional as they have default values (including default iDRAC
 - `MONITORING_ONLY_MODE` parameter is a boolean that allows to run the container in a read-only, monitoring-only mode: temperatures are still read and logged at each `CHECK_INTERVAL`, but no fan control profile (neither the user-defined one nor Dell's default) and no third-party PCIe card cooling response change is ever sent to the server. Useful to observe temperatures and validate your `FAN_SPEED`/`CPU_TEMPERATURE_THRESHOLD` values before letting the container actually take control of the fans. **Default** value is false.
 
 The three boolean parameters above accept **only the lowercase literals `true` and `false`**, and the container refuses to start on anything else — `True`, `TRUE`, `1`, `on` and `yes` included. This is not pickiness: these parameters are dispatched by running their value, so those spellings used to be taken as `false` without a word. `MONITORING_ONLY_MODE=True` would take control of the fans on a server you had explicitly asked the container to leave alone, while logging "Monitoring only mode: Disabled".
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- STOPPING THE CONTAINER -->
+## Stopping the container
+
+While the container runs, the fans are held at your `FAN_SPEED` and the server's own thermal regulation is switched off. **Stopping the container is what gives it back**, so that is not a detail of the shutdown — it is the moment the server stops depending on this container to stay cool.
+
+On `docker stop`, `docker restart`, a host shutdown or a `docker compose down`, the container:
+
+1. applies Dell's default dynamic fan control profile, handing the fans back to the iDRAC;
+2. resets the third-party PCIe card cooling response to Dell's default, unless you set `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=true`;
+3. exits.
+
+It says so in the log, and that line is the one to look for when you stop it:
+
+```
+/!\ Warning /!\ Container stopped, Dell default dynamic fan control profile applied for safety. Exiting.
+```
+
+In `MONITORING_ONLY_MODE` nothing was ever applied, so nothing is restored and no command is sent.
+
+### Give it time to do it
+
+The container's PID 1 is a small supervisor whose only job is to make sure step 1 happens even if the monitoring process cannot do it itself. It forwards the stop signal, gives the monitoring process **3 seconds** to bow out cleanly, kills it if it has not, and then applies Dell's profile on its behalf.
+
+That needs Docker's stop timeout to be **longer than those 3 seconds**. The default is 10 seconds, so nothing has to be configured — but if you shorten it, you can cut the container off before it has handed the fans back:
+
+| Where | Keep it above 3 seconds |
+| --- | --- |
+| `docker stop -t <seconds>` | the default is 10 |
+| `docker run --stop-timeout <seconds>` | the default is 10 |
+| `stop_grace_period:` in `docker-compose.yml` | the default is 10s |
+| `terminationGracePeriodSeconds:` on Kubernetes | the default is 30 |
+
+Past that timeout the container is `SIGKILL`ed, which no program can catch or delay, and **the fans stay at your `FAN_SPEED` with nothing left to raise them**. The safety net is defeated precisely in the case it exists for, so if you have a reason to stop containers quickly, exclude this one.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 

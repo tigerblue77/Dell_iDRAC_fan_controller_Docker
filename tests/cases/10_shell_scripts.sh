@@ -315,6 +315,30 @@ function test_the_env_example_offers_every_parameter_the_readme_documents() {
   done < <(grep -oE '^- `[A-Z_]+`' "$REPO_ROOT/README.md" | tr -d '`' | sed 's/^- //')
 }
 
+function test_the_readme_states_the_deadline_the_supervisor_actually_waits() {
+  # The README tells users to keep Docker's stop timeout above the supervisor's
+  # grace period, and states that period as a number. Nothing else in the project
+  # would notice the two disagreeing, and the consequence of the README being
+  # short is the one the supervisor exists to prevent : a container SIGKILLed
+  # while it was still about to hand the fans back
+  if [ ! -f "$REPO_ROOT/README.md" ]; then
+    # The suite is running inside the built image, which does not carry the
+    # README (excluded by .dockerignore)
+    skip_test "no README next to the scripts"
+    return 0
+  fi
+
+  assert_not_empty "$SUPERVISOR_GRACE_PERIOD_IN_SECONDS" \
+    "constants.sh should define the supervisor's grace period" || return 1
+
+  assert_matches "$(cat "$REPO_ROOT/README.md")" \
+    "\*\*$SUPERVISOR_GRACE_PERIOD_IN_SECONDS seconds\*\*" \
+    "the README should state the ${SUPERVISOR_GRACE_PERIOD_IN_SECONDS}s the supervisor really waits"
+  assert_matches "$(cat "$REPO_ROOT/README.md")" \
+    "above $SUPERVISOR_GRACE_PERIOD_IN_SECONDS seconds" \
+    "and ask for a stop timeout above that same value"
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a
