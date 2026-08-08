@@ -19,8 +19,7 @@ readonly MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER=4
 # source, while the only cost of waiting is running the Dell default fan control profile a bit longer
 readonly CPU_TEMPERATURE_SENSOR_EXPIRY=600
 
-# A temperature renders as "NNN°C", i.e. 5 display columns. A CPU column only gets wider than that when
-# a label is wider, which does not take ten CPUs : a label carries the IPMI entity instance the CPU is
-# read from, a 7-bit field (0-127) that has nothing to do with the socket count. A BMC using
-# device-relative instances (0x60 and up) labels a two-CPU server "CPU 96" and "CPU 97"
+# A temperature renders as "NNN°C", i.e. 5 display columns, which every label up to "CPU 9" fits into.
+# A CPU column only gets wider than that from a tenth CPU on ("CPU 10"), which no Dell server can have
+# and therefore only a mis-parse can produce
 readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5

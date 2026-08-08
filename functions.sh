@@ -162,20 +162,19 @@ function detect_CPU_temperature_sensors() {
 function set_detected_CPU_temperature_sensors() {
   local -r -a CPU_ENTITY_INSTANCES=("$@")
 
-  # On Dell the entity instance is the socket number, so it is used as-is to label the column. IPMI
-  # allows instance 0 though, which would label the first processor "CPU 0", so a BMC numbering from
-  # zero gets its labels shifted back to the 1-based numbering users expect
-  local LABEL_OFFSET=0
-  if (( ${#CPU_ENTITY_INSTANCES[@]} > 0 )) && (( CPU_ENTITY_INSTANCES[0] == 0 )); then
-    LABEL_OFFSET=1
-  fi
-
+  # CPUs are numbered 1, 2, 3... in the order their entities come, rather than after the entity instance
+  # they are read from. The instance is an IPMI implementation detail : it is only required to be unique,
+  # so it is free to start at 0 or to be sparse, and labelling a two-CPU server "CPU 0"/"CPU 96" would be
+  # accurate yet useless. The entity each column maps to is logged at startup instead, which is what
+  # makes an unusual numbering diagnosable without putting it in the table
   DETECTED_CPU_ENTITY_IDS=()
   DETECTED_CPU_LABELS=()
   local CPU_ENTITY_INSTANCE
+  local CPU_NUMBER=1
   for CPU_ENTITY_INSTANCE in "${CPU_ENTITY_INSTANCES[@]}"; do
     DETECTED_CPU_ENTITY_IDS+=("3.$CPU_ENTITY_INSTANCE")
-    DETECTED_CPU_LABELS+=("CPU $((CPU_ENTITY_INSTANCE + LABEL_OFFSET))")
+    DETECTED_CPU_LABELS+=("CPU $CPU_NUMBER")
+    ((CPU_NUMBER++))
   done
 }
 
@@ -253,10 +252,10 @@ function format_detected_CPU_temperature_sensors() {
   fi
 }
 
-# The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), but a label can
-# be wider and would then push every column on its right by one. That doesn't take ten CPUs : a label
-# carries the IPMI entity instance, a 7-bit field unrelated to the socket count, so a BMC using
-# device-relative instances labels a two-CPU server "CPU 96" and "CPU 97"
+# The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), which every label
+# up to "CPU 9" fits into. A tenth column would be labelled "CPU 10" and push everything on its right by
+# one, so the width follows the labels. No Dell server has ten sockets, so this only ever triggers on a
+# mis-parse -- the same one the startup warning reports -- but a broken table is a poor way to find out
 # Usage : compute_CPU_column_content_width "CPU 1" "CPU 2" ...
 function compute_CPU_column_content_width() {
   local WIDTH=$MINIMUM_CPU_COLUMN_CONTENT_WIDTH
@@ -567,9 +566,8 @@ function is_any_CPU_overheating() {
 
   for INDEX in "${!CPU_TEMPERATURES[@]}"; do
     CPU_TEMPERATURE="${CPU_TEMPERATURES[INDEX]}"
-    # The label comes from the detected entity, not from the position in the array : with non-contiguous
-    # entities (3.1 and 3.3), position 1 is CPU 3, and naming it "CPU 2" would point at a socket that
-    # doesn't even have a column in the table
+    # The label is taken from the table's own labels rather than rebuilt here, so that the CPU named in
+    # the comment is always the one whose column shows the reading that triggered it
     CPU_LABEL="${DETECTED_CPU_LABELS[INDEX]}"
 
     if [[ ! "$CPU_TEMPERATURE" =~ ^[0-9]+$ ]]; then
