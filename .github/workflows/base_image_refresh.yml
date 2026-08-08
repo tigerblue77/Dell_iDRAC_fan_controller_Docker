@@ -104,7 +104,7 @@ jobs:
       # the base moved, so a read that only works while the package stays public
       # is a daily failure waiting for the day someone flips its visibility
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -231,20 +231,20 @@ jobs:
         run: cat test-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Upload the test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: Test Results (base image refresh)
           path: test-results/*.xml
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -252,11 +252,15 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
+          # The two entries below are docker.io/tigerblue77/dell_idrac_fan_controller
+          # and ghcr.io/tigerblue77/dell_idrac_fan_controller. Said here rather than
+          # at the end of each line : from v6 on the action only strips a "#" that
+          # starts a line, so a trailing note would be read as part of the image name
           images: |
-            ${{ needs.check.outputs.image-name }} # docker.io/tigerblue77/dell_idrac_fan_controller
-            ghcr.io/${{ needs.check.outputs.image-name }} # ghcr.io/tigerblue77/dell_idrac_fan_controller
+            ${{ needs.check.outputs.image-name }}
+            ghcr.io/${{ needs.check.outputs.image-name }}
           # Only "latest" moves : the version tags stay on the image that was
           # actually published for that release
           tags: |

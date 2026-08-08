@@ -187,6 +187,20 @@ function validate_check_interval_parameter() {
   fi
 }
 
+# Where the Linux IPMI driver exposes its character device, under the three names it has carried across
+# kernel versions and distributions. Local mode needs one of them to be visible inside the container.
+#
+# Kept in a variable rather than written into the check so that the test suite can point the lookup at a
+# file of its own : /dev is machine-global, and creating the real path there to exercise the "device is
+# present" branch is what used to make two runs on the same machine interfere with each other, one
+# silently skipping a case the other had made unreachable.
+#
+# It is out of reach of the container's environment all the same, being an array : bash cannot export
+# one, so "docker run -e IPMI_DEVICE_PATHS=..." cannot reach this. Declared here rather than in
+# constants.sh because healthcheck.sh sources this file alone, and it takes the local mode path too.
+# Not readonly, that being the whole point
+IPMI_DEVICE_PATHS=("/dev/ipmi0" "/dev/ipmi/0" "/dev/ipmidev/0")
+
 # Set the IDRAC_LOGIN_STRING variable based on connection type
 # Usage : set_iDRAC_login_string $IDRAC_HOST $IDRAC_USERNAME $IDRAC_PASSWORD
 # Returns : IDRAC_LOGIN_STRING
@@ -200,8 +214,20 @@ function set_iDRAC_login_string() {
   # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
   if [[ "$IDRAC_HOST" == "local" ]]; then
     # Check that the Docker host IPMI device (the iDRAC) has been exposed to the Docker container
-    if [ ! -e "/dev/ipmi0" ] && [ ! -e "/dev/ipmi/0" ] && [ ! -e "/dev/ipmidev/0" ]; then
-      print_error_and_exit "Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0, check that you added the device to your Docker container or stop using local mode"
+    local IPMI_DEVICE_PATH
+    local IS_IPMI_DEVICE_EXPOSED=false
+    for IPMI_DEVICE_PATH in "${IPMI_DEVICE_PATHS[@]}"; do
+      if [ -e "$IPMI_DEVICE_PATH" ]; then
+        IS_IPMI_DEVICE_EXPOSED=true
+        break
+      fi
+    done
+
+    if ! $IS_IPMI_DEVICE_EXPOSED; then
+      # A device path holds no space, so joining on the separator is enough to enumerate them the way
+      # the error always has : "/dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0"
+      local -r IPMI_DEVICE_PATHS_ENUMERATION="${IPMI_DEVICE_PATHS[*]}"
+      print_error_and_exit "Could not open device at ${IPMI_DEVICE_PATHS_ENUMERATION// / or }, check that you added the device to your Docker container or stop using local mode"
     fi
     IDRAC_LOGIN_STRING='open'
   else
@@ -571,21 +597,20 @@ function compute_CPU_column_content_width() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT ["$SDR_DATA"]
+# Usage : retrieve_temperatures ["$SDR_DATA"]
 #
 # The sensor data can be handed over by a caller that has just read it, so that detecting the CPUs and
 # taking their first readings cost a single IPMI round-trip and describe the very same instant
 function retrieve_temperatures() {
-  if (( $# < 1 || $# > 2 )); then
-    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT [\"\$SDR_DATA\"]"
+  if (( $# > 1 )); then
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures [\"\$SDR_DATA\"]"
     return 1
   fi
-  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
 
   # Kept in a global so that refresh_CPU_temperature_sensors() can look for a newly readable CPU in the
   # very same data, without spending another IPMI round-trip on it
-  if (( $# == 2 )); then
-    SDR_TEMPERATURE_DATA="$2"
+  if (( $# == 1 )); then
+    SDR_TEMPERATURE_DATA="$1"
   else
     SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
   fi
@@ -614,12 +639,15 @@ function retrieve_temperatures() {
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
-  # If exhaust temperature sensor is present, parse its temperature data
-  if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
-  else
-    EXHAUST_TEMPERATURE="-"
-  fi
+  # Parse exhaust temperature data, the sensor being located by its name like the inlet one.
+  # It is read on every cycle rather than once, an empty value meaning "nothing on this cycle" rather
+  # than "no such sensor" : the presence flag this used to consult was decided from a single pre-loop
+  # reading and only ever set to false, so one partial SDR response -- or chassis sensors not yet
+  # initialised while the CPU entities already were -- dropped the column for the container's lifetime
+  # even though the sensor answered a second later. The display layer already renders an unreadable
+  # value as the "-" placeholder, so a server that genuinely has no exhaust sensor still shows the
+  # same column it did before, on every line
+  EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
 }
 
 # Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
@@ -798,7 +826,10 @@ function print_temperature_array_line() {
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
 
-  printf "%19s  %s°C " "$(date +"%d-%m-%Y %T")" "$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")"
+  local TIMESTAMP FORMATTED_TEMPERATURE
+  set_log_timestamp TIMESTAMP
+  FORMATTED_TEMPERATURE=$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")
+  printf "%19s  %s°C " "$TIMESTAMP" "$FORMATTED_TEMPERATURE"
   # Itération sur les températures dans le tableau.
   # Only the number is padded, never the assembled "NNN°C" string : the container runs in the POSIX
   # locale (the Dockerfile sets no LANG), where "°" is two bytes, so printf-padding the whole cell would
@@ -810,6 +841,17 @@ function print_temperature_array_line() {
   # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
   # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
   printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+}
+
+# Stamp the current local time into the named variable, in the format every logged line starts with.
+# Usage : set_log_timestamp TIMESTAMP
+#
+# bash's own strftime rather than $(date ...). A command substitution expanded alongside another one in
+# the same statement is what lets a SIGTERM delivered at that instant leave bash's parser mid-expansion:
+# the trap command string is then parsed with that state still open, fails, and graceful_exit never runs,
+# leaving the fans on the user's static speed (issue #188). It also saves a fork per logged line
+function set_log_timestamp() {
+  printf -v "$1" '%(%d-%m-%Y %T)T' -1
 }
 
 # Formats a temperature reading as a right-aligned decimal number of the given width (3 by default).

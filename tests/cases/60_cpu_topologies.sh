@@ -12,10 +12,8 @@
 # come from, so a test drives the pair the way the controller does.
 
 function detect_then_retrieve_temperatures() {
-  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT="${1:-true}"
-
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
+  retrieve_temperatures
 }
 
 function test_a_single_cpu_server_reports_one_cpu() {
@@ -96,17 +94,38 @@ function test_a_gap_between_two_readable_sockets_does_not_truncate_the_list() {
   assert_equals "41;39;38" "$CPUS_TEMPERATURES"
 }
 
-function test_the_sensors_known_to_be_absent_are_replaced_by_placeholders() {
+function test_an_exhaust_sensor_missing_from_one_reading_comes_back_on_the_next() {
+  # The exhaust sensor used to be probed once before the loop, and a single reading
+  # without it settled the question for the container's whole life : one partial sdr
+  # response, or chassis sensors not yet initialised while the CPU entities already
+  # were, dropped the column until the container was restarted. It is read every
+  # cycle now, so a sensor that answers a second later is picked back up
   export MOCK_IPMITOOL_SDR_OUTPUT
-  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --exhaust 36)
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --no-exhaust)
 
-  # Once the controller has detected that the exhaust sensor is missing, it stops
-  # reading it and prints a placeholder in its place
-  detect_then_retrieve_temperatures false
+  detect_then_retrieve_temperatures
 
-  assert_equals "-" "$EXHAUST_TEMPERATURE"
+  assert_empty "$EXHAUST_TEMPERATURE" "a reading without the exhaust sensor yields no value"
   assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}" "a missing exhaust sensor must not change the CPU count"
   assert_equals "44;46" "$CPUS_TEMPERATURES"
+
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --exhaust 36)
+
+  retrieve_temperatures
+
+  assert_equals "36" "$EXHAUST_TEMPERATURE" "the exhaust sensor must be read again rather than written off"
+}
+
+function test_a_server_genuinely_without_an_exhaust_sensor_keeps_its_column() {
+  # Reading it every cycle must not cost the column on hardware that has none :
+  # the display layer renders an unreadable value as the "-" placeholder, so the
+  # line keeps the same shape it had when absence was a settled verdict
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --no-exhaust)
+
+  detect_then_retrieve_temperatures
+
+  assert_equals "  -" "$(format_temperature_for_display "$EXHAUST_TEMPERATURE")"
 }
 
 function test_a_server_without_an_inlet_or_exhaust_sensor_reports_no_reading() {
@@ -131,7 +150,7 @@ function test_an_unreadable_cpu1_temperature_keeps_its_column() {
   assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}"
 
   MOCK_IPMITOOL_SDR_OUTPUT=$(printf '%s\n' "$MOCK_IPMITOOL_SDR_OUTPUT" | grep -v ' 3\.2 ')
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_empty "${DETECTED_CPU_TEMPERATURES[1]}" "the raw reading stays empty for the overheating check"
   assert_equals "44;-" "$CPUS_TEMPERATURES" "the printed value falls back on a placeholder"
@@ -140,7 +159,7 @@ function test_an_unreadable_cpu1_temperature_keeps_its_column() {
 function test_the_internal_functions_reject_a_wrong_number_of_parameters() {
   local RETRIEVE_OUTPUT BUILD_HEADER_OUTPUT
 
-  RETRIEVE_OUTPUT=$(retrieve_temperatures true true true 2>&1)
+  RETRIEVE_OUTPUT=$(retrieve_temperatures extra1 extra2 2>&1)
   local -r RETRIEVE_EXIT_CODE=$?
   BUILD_HEADER_OUTPUT=$(build_header 5 2>&1)
   local -r BUILD_HEADER_EXIT_CODE=$?
@@ -215,7 +234,7 @@ function test_the_temperature_line_has_one_column_per_detected_cpu() {
   assert_equals "4" "$(grep -o '°C' <<< "$DUAL_CPU_LINE" | wc -l | tr -d ' ')" "inlet, CPU 1, CPU 2 and exhaust"
   assert_equals "6" "$(grep -o '°C' <<< "$QUAD_CPU_LINE" | wc -l | tr -d ' ')" "inlet, four CPUs and exhaust"
 
-  assert_contains "$DUAL_CPU_LINE" "01-01-2024 00:00:00" "every line starts with its timestamp"
+  assert_matches "$DUAL_CPU_LINE" "^$CONTROLLER_TIMESTAMP_PATTERN  " "every line starts with its timestamp"
   assert_contains "$DUAL_CPU_LINE" "User static fan control profile (5%)"
 }
 
@@ -263,7 +282,7 @@ function test_a_cpu_going_silent_on_a_running_server_keeps_its_column() {
   for ((READING = 1; READING <= CPU_REMOVAL_CONFIRMING_READINGS + 2; READING++)); do
     refresh_CPU_temperature_sensors "$SDR_DATA"
   done
-  retrieve_temperatures true "$SDR_DATA"
+  retrieve_temperatures "$SDR_DATA"
 
   assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "no power cycle, no removal"
   assert_equals "40;41;-;-" "$CPUS_TEMPERATURES" "the silent CPUs keep their column, reading as a placeholder"

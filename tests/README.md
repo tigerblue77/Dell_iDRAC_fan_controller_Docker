@@ -69,7 +69,7 @@ tests/
 │   ├── fixtures.sh                 builders for the ipmitool outputs (FRU, SDR)
 │   ├── harness.sh                  the environment a test case runs in, and its helpers
 │   └── reports.sh                  the JUnit XML and Markdown reports
-└── mocks/                          fake ipmitool, sensors, date and sleep, put first in the PATH
+└── mocks/                          fake ipmitool, sensors and sleep, put first in the PATH
 ```
 
 Each test case runs in its own subshell, starting from the environment
@@ -88,7 +88,7 @@ function test_a_single_cpu_server_reports_one_cpu() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 1 --cpu-temperatures "44")
 
-  retrieve_temperatures true true
+  retrieve_temperatures "$SDR_DATA"
 
   assert_equals "1" "$NUMBER_OF_DETECTED_CPUS"
 }

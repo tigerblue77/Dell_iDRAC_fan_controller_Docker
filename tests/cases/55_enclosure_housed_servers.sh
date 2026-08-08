@@ -78,7 +78,7 @@ function test_a_blade_reports_no_exhaust_temperature_sensor() {
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "43 45" --inlet 24 --no-exhaust)
 
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}"
   assert_equals "24" "$INLET_TEMPERATURE"
@@ -93,7 +93,7 @@ function test_a_sled_whose_enclosure_owns_the_airflow_reports_no_temperature_aro
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "47 48" --no-inlet --no-exhaust)
 
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_equals "47" "${DETECTED_CPU_TEMPERATURES[0]}"
   assert_equals "48" "${DETECTED_CPU_TEMPERATURES[1]}"
@@ -198,4 +198,60 @@ function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_sa
     "manual fan control must never be enabled on readings the controller never got"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")" \
     "no fan speed must be sent either"
+}
+
+function test_the_controller_refuses_to_run_on_a_server_reporting_no_cpu_sensor() {
+  # Every PowerEdge has at least one CPU, and an iDRAC that exposes no processor
+  # entity exposes none on every check : waiting it out would leave a container
+  # that looks alive and supervises nothing. It has to say so and stop, with what
+  # the user needs to report the problem
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local OUTPUT
+  OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "the container must stop rather than wait forever"
+  assert_contains "$OUTPUT" "No CPU temperature sensor could be read"
+  assert_contains "$OUTPUT" "every PowerEdge has at least one CPU"
+  assert_contains "$OUTPUT" "sdr type temperature" "the user is told what to run"
+  assert_contains "$OUTPUT" "github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues" \
+    "and where to report it"
+  # The likeliest cause by far, and the only one the user can fix themselves :
+  # lm-sensors cannot rescue this one either, the fallback being local mode only
+  # and the enclosure rejecting the fan control commands anyway
+  assert_contains "$OUTPUT" "chassis management controller" \
+    "the chassis mistake is named first, being the likeliest cause"
+  assert_contains "$OUTPUT" "point it at a node's own iDRAC instead" \
+    "the apostrophe must not come out escaped, the message being a double quoted string"
+  assert_not_contains "$OUTPUT" "exiting.. Exiting." \
+    "print_error_and_exit appends its own sentence, so the message must not end on a full stop"
+}
+
+function test_the_fans_are_handed_back_to_dell_before_refusing_to_run() {
+  # A previous run of this container may have left the BMC in manual mode, in
+  # which case exiting without a word would leave the fans pinned at the user's
+  # low speed with nobody watching the temperatures. graceful_exit is not reached
+  # on this path, the trap only covering the termination signals
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  run_controller "No CPU temperature sensor could be read" > /dev/null
+
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "Dell's own dynamic profile must be applied before exiting"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")" \
+    "and no fan speed must ever be sent on readings the controller never got"
+}
+
+function test_the_refusal_never_prints_the_idrac_password() {
+  # The message tells the user which ipmitool command to run, and the connection
+  # string the controller uses carries -P <password> : printing it would put the
+  # iDRAC password in the container logs
+  export IDRAC_PASSWORD="hunter2-should-never-be-logged"
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+
+  assert_not_contains "$OUTPUT" "$IDRAC_PASSWORD" "the password must never reach the logs"
+  assert_contains "$OUTPUT" "<iDRAC password>" "the command is shown with a placeholder instead"
 }
