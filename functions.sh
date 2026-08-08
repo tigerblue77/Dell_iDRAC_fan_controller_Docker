@@ -562,6 +562,47 @@ function format_detected_CPU_temperature_sensors() {
   fi
 }
 
+# Names the CPUs whose column label moved while the sensor behind it stayed the same, or nothing when
+# none did.
+# Usage : format_relabelled_CPUs "3.1=CPU 1" "3.3=CPU 2"...
+#
+# Labels are handed out 1, 2, 3... in entity order on every refresh, so adopting a CPU whose entity sorts
+# before an already-monitored one shifts every label above it. The entity list logged on the same cycle
+# does say what the new numbering is, but nothing says the old one is no longer valid : a reader
+# correlating a "CPU 3 temperature is too high" comment with an earlier "CPU 3" column would be looking
+# at two different sockets. This is the line that says so, on the cycle it happens
+#
+# The previous pairs are passed as "entity=label" because an entity ID holds no space and a label does,
+# which makes the split unambiguous whatever the label ends up being
+function format_relabelled_CPUs() {
+  local -r -a PREVIOUS_CPU_ENTITY_ID_LABEL_PAIRS=("$@")
+
+  local -a RELABELLINGS=()
+  local PAIR PREVIOUS_CPU_ENTITY_ID PREVIOUS_CPU_LABEL INDEX
+  for PAIR in "${PREVIOUS_CPU_ENTITY_ID_LABEL_PAIRS[@]}"; do
+    PREVIOUS_CPU_ENTITY_ID="${PAIR%%=*}"
+    PREVIOUS_CPU_LABEL="${PAIR#*=}"
+
+    for INDEX in "${!DETECTED_CPU_ENTITY_IDS[@]}"; do
+      [ "${DETECTED_CPU_ENTITY_IDS[INDEX]}" == "$PREVIOUS_CPU_ENTITY_ID" ] || continue
+      if [ "${DETECTED_CPU_LABELS[INDEX]}" != "$PREVIOUS_CPU_LABEL" ]; then
+        # Only the first fragment carries the verb, the rest reading as a list under it :
+        # "CPU 3 was previously reported as CPU 2, CPU 4 as CPU 3 and CPU 5 as CPU 4"
+        if (( ${#RELABELLINGS[@]} == 0 )); then
+          RELABELLINGS+=("${DETECTED_CPU_LABELS[INDEX]} was previously reported as $PREVIOUS_CPU_LABEL")
+        else
+          RELABELLINGS+=("${DETECTED_CPU_LABELS[INDEX]} as $PREVIOUS_CPU_LABEL")
+        fi
+      fi
+      break
+    done
+  done
+
+  (( ${#RELABELLINGS[@]} > 0 )) || return 0
+
+  printf '%s' "$(join_with_and "${RELABELLINGS[@]}")"
+}
+
 # Warns when more CPU temperature sensors are detected than any Dell server has sockets.
 # Usage : warn_if_unexpected_number_of_CPUs
 #

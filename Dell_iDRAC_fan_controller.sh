@@ -311,6 +311,19 @@ while true; do
       printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
     fi
 
+    # A CPU joining the set can sort before the ones already there, which shifts the labels above it :
+    # the column a reader was calling "CPU 2" becomes "CPU 3", and the overheating comments printed from
+    # here on use the new name. Said explicitly, on the cycle it happens, so that an older line and a
+    # newer one can't be read as naming the same socket
+    PREVIOUS_CPU_ENTITY_ID_LABEL_PAIRS=()
+    for INDEX in "${!PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+      PREVIOUS_CPU_ENTITY_ID_LABEL_PAIRS+=("${PREVIOUS_CPU_ENTITY_IDS[INDEX]}=${PREVIOUS_CPU_LABELS[INDEX]}")
+    done
+    RELABELLED_CPUS=$(format_relabelled_CPUs "${PREVIOUS_CPU_ENTITY_ID_LABEL_PAIRS[@]}")
+    if [ -n "$RELABELLED_CPUS" ]; then
+      printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$RELABELLED_CPUS"
+    fi
+
     # Checked again here and not only at startup : a mis-parse can just as well show up mid-run
     warn_if_unexpected_number_of_CPUs
 

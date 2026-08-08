@@ -385,3 +385,104 @@ function test_every_cpu_going_silent_at_once_never_empties_the_table() {
       "reading $READING left the table intact"
   done
 }
+
+# Labels are handed out in entity order on every refresh, so a CPU joining the set
+# renumbers every column above it. Nothing said so, and the overheating comments
+# printed afterwards use the new numbering : an older "CPU 3" column and a newer
+# "CPU 3 temperature is too high" comment could name two different sockets.
+# format_relabelled_CPUs() is what makes the shift readable, on the cycle it happens.
+#
+# The previous labels are passed as "entity=label" pairs, which is what the entry
+# point builds from the arrays it saved before the refresh.
+function previous_CPU_entity_id_label_pairs() {
+  local INDEX
+  for INDEX in "${!DETECTED_CPU_ENTITY_IDS[@]}"; do
+    printf '%s\n' "${DETECTED_CPU_ENTITY_IDS[INDEX]}=${DETECTED_CPU_LABELS[INDEX]}"
+  done
+}
+
+function test_adopting_a_cpu_that_sorts_first_reports_the_columns_it_renumbered() {
+  # The reproduction from issue #222 : 3.2 becomes readable, so the socket the user
+  # was reading as "CPU 2" is now "CPU 3"
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "41 40 39 38")
+  MOCK_IPMITOOL_SDR_OUTPUT=$(printf '%s\n' "$MOCK_IPMITOOL_SDR_OUTPUT" | grep -v ' 3\.2 ')
+  detect_then_retrieve_temperatures
+  assert_equals "3.1 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}"
+  assert_equals "CPU 1 CPU 2 CPU 3" "${DETECTED_CPU_LABELS[*]}"
+
+  local -a PREVIOUS_PAIRS
+  mapfile -t PREVIOUS_PAIRS < <(previous_CPU_entity_id_label_pairs)
+
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "41 42 39 38")
+  refresh_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "the socket that woke up is adopted"
+
+  assert_equals "CPU 3 was previously reported as CPU 2 and CPU 4 as CPU 3" \
+    "$(format_relabelled_CPUs "${PREVIOUS_PAIRS[@]}")" \
+    "both columns above the adopted CPU are named, old label and new"
+}
+
+function test_a_cpu_appearing_after_the_known_ones_renumbers_nothing() {
+  # The common case : the adopted entity sorts last, so every existing column keeps
+  # its label and there is nothing to report
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
+  detect_then_retrieve_temperatures
+
+  local -a PREVIOUS_PAIRS
+  mapfile -t PREVIOUS_PAIRS < <(previous_CPU_entity_id_label_pairs)
+
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
+  refresh_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}"
+
+  assert_empty "$(format_relabelled_CPUs "${PREVIOUS_PAIRS[@]}")" \
+    "CPU 1 and CPU 2 still name the same sockets, so the line stays quiet"
+}
+
+function test_a_cpu_leaving_the_set_reports_the_columns_it_renumbered_too() {
+  # The symmetric case : a confirmed removal closes the gap it leaves behind, which
+  # shifts the labels above it just as much as an arrival does
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
+  detect_then_retrieve_temperatures
+
+  local -a PREVIOUS_PAIRS
+  mapfile -t PREVIOUS_PAIRS < <(previous_CPU_entity_id_label_pairs)
+
+  # The server has just been powered back on with its second CPU removed
+  IS_CPU_REMOVAL_ALLOWED=true
+  PENDING_CPU_REMOVAL_SIGNATURE=""
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
+  MOCK_IPMITOOL_SDR_OUTPUT=$(printf '%s\n' "$MOCK_IPMITOOL_SDR_OUTPUT" | grep -v ' 3\.2 ')
+  local -r SDR_DATA=$(retrieve_sdr_temperature_data)
+
+  local READING
+  for ((READING = 1; READING <= CPU_REMOVAL_CONFIRMING_READINGS; READING++)); do
+    refresh_CPU_temperature_sensors "$SDR_DATA"
+  done
+  assert_equals "3.1 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "the removal is confirmed"
+
+  assert_equals "CPU 2 was previously reported as CPU 3 and CPU 3 as CPU 4" \
+    "$(format_relabelled_CPUs "${PREVIOUS_PAIRS[@]}")" \
+    "the two columns that moved down are named"
+}
+
+function test_a_relabelling_is_reported_for_a_single_column_without_an_enumeration() {
+  # One moved column must read as a sentence, not as a list of one
+  DETECTED_CPU_ENTITY_IDS=("3.1" "3.2")
+  DETECTED_CPU_LABELS=("CPU 1" "CPU 2")
+
+  assert_equals "CPU 2 was previously reported as CPU 1" \
+    "$(format_relabelled_CPUs "3.2=CPU 1")"
+}
+
+function test_a_cpu_that_left_the_set_is_not_reported_as_relabelled() {
+  # A removed CPU has no current label to compare against : it is reported by the
+  # removal line, and must not turn up here as well
+  DETECTED_CPU_ENTITY_IDS=("3.1")
+  DETECTED_CPU_LABELS=("CPU 1")
+
+  assert_empty "$(format_relabelled_CPUs "3.1=CPU 1" "3.2=CPU 2")"
+}

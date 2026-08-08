@@ -426,3 +426,23 @@ function test_a_removed_cpu_is_reported_as_removed_and_not_merely_as_silent() {
     "and the entities, so the line can be matched against an ipmitool output"
   assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)."
 }
+
+function test_a_cpu_joining_the_set_says_which_columns_it_renumbered() {
+  # A socket slow to become readable after POST joins the set on a later cycle,
+  # and its entity sorts before two that are already monitored. Every label above
+  # it moves up by one, so the "CPU 3" the reader was looking at is now "CPU 4" --
+  # and the overheating comments printed from here on use the new numbering.
+  # The count line alone does not say that, hence the second line
+  simulate_server "PowerEdge R930" --cpus 4 --cpu-temperatures "41 40 39 38"
+  MOCK_IPMITOOL_SDR_OUTPUT=$(printf '%s\n' "$MOCK_IPMITOOL_SDR_OUTPUT" | grep -v ' 3\.2 ')
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "41 40 39 38")
+  MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=2
+
+  local -r OUTPUT=$(run_controller "was previously reported as")
+
+  assert_contains "$OUTPUT" "4 CPU temperature sensors detected (entities 3.1 3.2 3.3 3.4)." \
+    "the adopted socket is monitored"
+  assert_contains "$OUTPUT" "CPU 3 was previously reported as CPU 2 and CPU 4 as CPU 3." \
+    "and the columns it pushed up are named, old label and new"
+}
