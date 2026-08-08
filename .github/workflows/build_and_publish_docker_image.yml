@@ -66,8 +66,11 @@ jobs:
           tags: |
             type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=latest,enable=${{ steps.highest_version.outputs.value == 'true' }}
-          # latest=false, not auto : auto adds "latest" by itself on a git tag event,
-          # which would bypass the guard on the explicit entry above
+          # The explicit "latest" entry above is the only thing that may publish it,
+          # gated on the highest version check. latest=auto is already inert for
+          # type=raw entries - procRaw() hardcodes latest=false under auto - so this
+          # pins that behaviour rather than changing it, and keeps it pinned should a
+          # type=semver or type=ref entry ever be added here
           flavor: |
             latest=false
 
