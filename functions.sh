@@ -1370,14 +1370,27 @@ function is_temperature_reading_valid() {
 # Like the per-CPU checks it replaces, it deliberately returns true both when a CPU is genuinely too hot
 # and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile
 # instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric input) or
-# silently running the low user fan speed on unverified data
+# silently running the low user fan speed on unverified data. The same goes for an unusable threshold,
+# the comparison having two operands and only one of them having been guarded until now
 function is_any_CPU_overheating() {
   OVERHEATING_CPUS_AND_TEMPERATURES=()
+
+  # The threshold is the comparison's other operand, and "-gt" fails the same way on either side : on a
+  # value it cannot parse the test returns non-zero, which reads as "not overheating" -- the one answer
+  # that leaves a hot CPU running on the user's low static fan speed. It is therefore checked like the
+  # readings are, and normalized once here rather than per CPU, an empty result meaning "unusable".
+  # Dell_iDRAC_fan_controller.sh resolves and validates the threshold before the monitoring loop starts
+  # and then makes it readonly, so this is not reachable from the container : it is what keeps the answer
+  # safe on its own terms instead of by depending on a check living in another file (see issue #218)
+  local NORMALIZED_CPU_TEMPERATURE_THRESHOLD=""
+  if is_temperature_reading_valid "$CPU_TEMPERATURE_THRESHOLD"; then
+    NORMALIZED_CPU_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$CPU_TEMPERATURE_THRESHOLD")
+  fi
 
   local INDEX CPU_TEMPERATURE
   for INDEX in "${!DETECTED_CPU_TEMPERATURES[@]}"; do
     CPU_TEMPERATURE="${DETECTED_CPU_TEMPERATURES[INDEX]}"
-    if ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    if [ -z "$NORMALIZED_CPU_TEMPERATURE_THRESHOLD" ] || ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$NORMALIZED_CPU_TEMPERATURE_THRESHOLD" ]; then
       # The label is taken from the table's own labels rather than rebuilt here, so that the CPU named
       # in the comment is always the one whose column shows the reading that triggered it. It falls back
       # to the position rather than to an empty string, so that a comment naming no CPU at all can never
