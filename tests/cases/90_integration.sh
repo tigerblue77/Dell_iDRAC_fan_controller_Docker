@@ -177,6 +177,33 @@ function test_the_controller_reports_a_quad_cpu_server() {
   assert_contains "$OUTPUT" " 41°C   40°C   39°C   38°C" "the readings must not be shifted by the two-digit sensor IDs"
 }
 
+function test_the_controller_reports_a_single_cpu_server_without_an_exhaust_sensor() {
+  # Reported on an R530 (issue #91), and a combination the suite otherwise only tests apart : one CPU on
+  # a server that does have an exhaust sensor, a missing exhaust sensor on a server that does have two
+  # CPUs. The R530 is a dual socket board, so its lone CPU also has to survive the second socket being
+  # listed and disabled -- counting that one would take the singular wording away and add a column.
+  #
+  # It is on top of that the narrowest table the controller ever draws with a CPU in it, which is the one
+  # width where the banner comes out odd : 4 dashes on the left and 3 on the right, the extra one going
+  # left. Every wider table the other cases cover is either symmetrical or wide enough to hide a rounding
+  # that went the wrong way
+  simulate_server "PowerEdge R530" --cpus 2 --cpu2-disabled --cpu-temperatures "50" --inlet 26 --no-exhaust
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "1 CPU temperature sensor detected (entity 3.1)."
+  assert_contains "$OUTPUT" "No exhaust temperature sensor detected."
+  assert_contains "$OUTPUT" "                     ---- Temperatures ---"
+  assert_contains "$OUTPUT" "Inlet  CPU 1  Exhaust" "the empty second socket gets no column"
+  assert_not_contains "$OUTPUT" "CPU 2 "
+  assert_contains "$OUTPUT" " 26°C   50°C      -°C" \
+    "the exhaust column holds its placeholder instead of collapsing and shifting the row"
+  assert_contains "$OUTPUT" "CPU temperature is now OK" "a server down to one CPU is written in the singular"
+  assert_not_contains "$OUTPUT" "All CPU temperatures"
+  assert_contains "$OUTPUT" "User static fan control profile (5%)" \
+    "a missing exhaust sensor must not stop the fan control"
+}
+
 function test_the_controller_reports_a_server_without_an_exhaust_sensor() {
   simulate_server "PowerEdge R720" --cpus 2 --no-exhaust
 
