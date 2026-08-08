@@ -518,8 +518,11 @@ function build_header() {
 
   local header="                     ----" # Width ready for 1 CPU
 
-  # Calculate the number of dashes to add on each side of the title
-  number_of_dashes=$(((number_of_CPUs-1)*CPU_column_width/2))
+  # Calculate the number of dashes to add on each side of the title.
+  # Declared local like its neighbours: functions.sh is sourced into the entry point, so anything left
+  # undeclared here lands in the container's main shell
+  local -r number_of_dashes=$(((number_of_CPUs-1)*CPU_column_width/2))
+  local i
 
   # Loop to add dashes
   for ((i=1; i<=number_of_dashes; i++)); do
@@ -562,6 +565,9 @@ function print_temperature_array_line() {
 
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
+  # The loop variable below is the one that actually escapes: unlike build_header(), which the caller
+  # runs in a command substitution, this function is called directly on every cycle
+  local temperature
 
   printf "%19s  %s°C " "$(date +"%d-%m-%Y %T")" "$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")"
   # Itération sur les températures dans le tableau
