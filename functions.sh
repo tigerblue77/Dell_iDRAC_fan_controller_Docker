@@ -567,16 +567,26 @@ function is_temperature_reading_valid() {
 }
 
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
-# If a reading isn't valid, fail safe and report overheating so the Dell default fan control profile
-# kicks in, instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric
-# input) or silently running the low user fan speed on unverified data
+# Both operands are checked, and either one being unusable fails safe : the function reports overheating
+# so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt" throws "unary
+# operator expected" on empty/non-numeric input) or silently running the low user fan speed on
+# unverified data.
+#
+# The threshold is checked as well as the reading because "-gt" fails the same way on either side, and
+# a failing test returns non-zero, which reads as "not overheating" : the one answer that leaves a hot
+# CPU on the user's low fan speed. Dell_iDRAC_fan_controller.sh already resolves and validates the
+# threshold before the monitoring loop starts, then makes it readonly, so this guard is not reachable
+# today -- it is here so that the answer stays safe on its own terms rather than by depending on a
+# check living in another file (see issue #218)
 function CPU1_OVERHEATING() {
   is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
-  [ "$(normalize_decimal_value "$CPU1_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  is_temperature_reading_valid "$CPU_TEMPERATURE_THRESHOLD" || return 0
+  [ "$(normalize_decimal_value "$CPU1_TEMPERATURE")" -gt "$(normalize_decimal_value "$CPU_TEMPERATURE_THRESHOLD")" ]
 }
 function CPU2_OVERHEATING() {
   is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
-  [ "$(normalize_decimal_value "$CPU2_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  is_temperature_reading_valid "$CPU_TEMPERATURE_THRESHOLD" || return 0
+  [ "$(normalize_decimal_value "$CPU2_TEMPERATURE")" -gt "$(normalize_decimal_value "$CPU_TEMPERATURE_THRESHOLD")" ]
 }
 
 # Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...

@@ -254,3 +254,47 @@ function test_reasons_are_joined_the_way_a_sentence_is() {
   assert_equals "CPU 1, CPU 2 and CPU 3" "$(join_with_and "CPU 1" "CPU 2" "CPU 3")"
   assert_equals "CPU 1, CPU 2, CPU 3 and CPU 4" "$(join_with_and "CPU 1" "CPU 2" "CPU 3" "CPU 4")"
 }
+
+function test_an_unusable_threshold_fails_safe_like_an_unusable_reading() {
+  # The predicate compares two operands and "-gt" fails the same way on either
+  # side. A failing test returns non-zero, which every caller reads as "not
+  # overheating" -- the one answer that leaves a hot CPU on the user's low fan
+  # speed. The reading side has been guarded since #134; this is the other side.
+  #
+  # Dell_iDRAC_fan_controller.sh validates the threshold before the loop starts
+  # and makes it readonly, so the container cannot reach this state today. The
+  # guard is what keeps the answer safe without depending on that
+  export CPU1_TEMPERATURE=95
+  export CPU2_TEMPERATURE=95
+
+  local UNUSABLE_THRESHOLD
+  for UNUSABLE_THRESHOLD in "" "abc" "60°C" "60C" "50.5" "1e2"; do
+    export CPU_TEMPERATURE_THRESHOLD="$UNUSABLE_THRESHOLD"
+    assert_cpu_is_overheating 1 \
+      "a CPU at 95°C must fall back on Dell's profile when the threshold is \"$UNUSABLE_THRESHOLD\""
+    assert_cpu_is_overheating 2 \
+      "a CPU at 95°C must fall back on Dell's profile when the threshold is \"$UNUSABLE_THRESHOLD\""
+  done
+}
+
+function test_a_usable_threshold_still_decides_normally() {
+  # The added guard must not turn every comparison into an overheat
+  export CPU1_TEMPERATURE=45
+  export CPU2_TEMPERATURE=95
+  export CPU_TEMPERATURE_THRESHOLD=50
+
+  assert_cpu_is_not_overheating 1
+  assert_cpu_is_overheating 2
+}
+
+function test_a_padded_threshold_is_read_as_decimal_not_octal() {
+  # "070" would be an invalid octal number to bash's "-gt". The threshold reaches
+  # the loop already normalized, so this only matters if it ever stops being
+  export CPU1_TEMPERATURE=65
+  export CPU_TEMPERATURE_THRESHOLD="070"
+
+  assert_cpu_is_not_overheating 1 "070°C is 70°C, so a CPU at 65°C is not overheating"
+
+  export CPU1_TEMPERATURE=75
+  assert_cpu_is_overheating 1 "070°C is 70°C, so a CPU at 75°C is overheating"
+}
