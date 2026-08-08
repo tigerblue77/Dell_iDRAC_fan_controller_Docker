@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Fake sleep used by the integration tests, so that a CHECK_INTERVAL of 60
+# seconds does not make a test take a minute.
+#
+# The requested duration is ignored and replaced by MOCK_SLEEP_SECONDS, short
+# enough to keep the suite fast but long enough for the monitoring loop to
+# behave like it does in production (the timer really is started in background
+# and really is waited on).
+
+for REAL_SLEEP in /bin/sleep /usr/bin/sleep; do
+  if [ -x "$REAL_SLEEP" ]; then
+    exec "$REAL_SLEEP" "${MOCK_SLEEP_SECONDS:-0.05}"
+  fi
+done
+
+printf 'mock sleep: no real sleep binary found\n' >&2
+exit 127

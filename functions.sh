@@ -59,6 +59,48 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
+# Stop the container unless the given parameter is a duration sleep can actually wait for
+# Usage : validate_check_interval_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# CHECK_INTERVAL is the monitoring loop's only pacing mechanism and reaches sleep as unchecked text.
+# The loop starts the timer in background then waits on its PID without ever looking at what wait
+# hands back, so nothing notices a sleep that refused to run : the cycle returns at once and the loop
+# runs at full speed, sending the 5 IPMI commands a cycle costs over LAN (4 locally, one fewer on
+# Gen 14 and newer) as fast as ipmitool completes them, with nothing in the log but sleep's own
+# two-line complaint each time.
+#
+# The Dockerfile's ENV CHECK_INTERVAL is a default, not a guarantee : any entry the user supplies for
+# the same key replaces it. Measured on Docker 29 and Compose v5, "-e CHECK_INTERVAL=", an --env-file
+# or compose line with nothing after the "=", and a compose "${CHECK_INTERVAL}" resolving to nothing
+# all arrive as an empty string, while a bare "-e CHECK_INTERVAL" whose host variable is unset drops
+# the variable altogether, which expands to the empty string just the same since strict bash mode is
+# disabled. The likeliest case isn't empty at all : docker takes everything after the "=" verbatim, so
+# an unfilled .env placeholder arrives as the literal "<seconds between each check>" text.
+#
+# GNU sleep accepts a unit suffix, so "90s" and "5m" do wait and are working configurations today.
+# They stay accepted here : rejecting a value that has been pacing a container correctly all along
+# would break it for no benefit. The fractional values sleep also accepts ("0.5") are refused all the
+# same, a sub-second cycle being exactly the hammering this check exists to prevent.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+function validate_check_interval_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
+    print_error_and_exit "$PARAMETER_NAME must be a number of seconds, optionally suffixed with s, m, h or d, but is \"$VALUE\""
+  fi
+
+  # Zero is the third failing case, and the only one sleep itself accepts : it parses fine, returns
+  # immediately, and spins the loop just like an unparseable value. It is therefore rejected on its own
+  # terms rather than on its format. The suffix is stripped and 10# forces base 10 so that a padded
+  # value ("00", "08") is read as the decimal number the user meant instead of an invalid octal one
+  if [ "$((10#${VALUE%[smhd]}))" -eq 0 ]; then
+    print_error_and_exit "$PARAMETER_NAME must be greater than zero, but is \"$VALUE\""
+  fi
+}
+
 # Set the IDRAC_LOGIN_STRING variable based on connection type
 # Usage : set_iDRAC_login_string $IDRAC_HOST $IDRAC_USERNAME $IDRAC_PASSWORD
 # Returns : IDRAC_LOGIN_STRING
@@ -97,10 +139,37 @@ function set_iDRAC_login_string() {
 # The value is matched on its "degrees" suffix rather than on a fixed two-digit width, so that its
 # width stops mattering : "100 degrees C" used to be truncated to 10°C, and "9 degrees C" used to
 # match nothing at all, which callers cannot tell apart from a missing sensor
+#
+# The sign is part of the match : "\d+" alone silently returned sub-zero readings as their absolute
+# value, turning a -40°C CPU sensor (what a disconnected sensor reports on some iDRACs) into a 40°C
+# one hot enough to trip the overheating branch, and making the sub-zero inlet temperatures this
+# container is expected to react to indistinguishable from mild ones
 function extract_temperature_from_sdr_line() {
   local -r SDR_LINE="$1"
 
-  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '\d+(?=[[:space:]]*degrees)'
+  # The sign is written as a character class rather than as a bare "-?" so the pattern doesn't start
+  # with a dash, which grep would otherwise try to parse as one of its own options
+  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '[-]?\d+(?=[[:space:]]*degrees)'
+}
+
+# Convert a temperature reading into a plain base 10 integer, usable in arithmetic and comparisons
+# Usage : normalize_decimal_value "$VALUE"
+# Returns : the value as a base 10 integer
+#
+# Readings reach us as text and carry two traps that have to be defused together. A leading zero makes
+# bash read the value as octal, where "09" is not a valid number, which is what the "10#" prefix is
+# for. But "10#" cannot itself accept a sign : "10#-5" is an "invalid integer constant" and aborts the
+# arithmetic. The sign is therefore split off, the digits forced to base 10, and the sign re-applied
+function normalize_decimal_value() {
+  local VALUE="$1"
+  local SIGN=1
+
+  if [[ "$VALUE" == -* ]]; then
+    SIGN=-1
+    VALUE="${VALUE#-}"
+  fi
+
+  echo $((SIGN * 10#$VALUE))
 }
 
 # Extract a single temperature reading from ipmitool sdr output, located by its IPMI entity ID
@@ -352,33 +421,100 @@ function print_temperature_array_line() {
     printf " %s°C " "$(format_temperature_for_display "$temperature")"
   done
 
-  printf " %5s°C  %40s  %51s  %s\n" "$LOCAL_EXHAUST_TEMPERATURE" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+  # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
+  # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
+  printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
 # Formats a temperature reading as a right-aligned, 3-character-wide decimal number for display.
 # Falls back to "  -" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
-# or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09")
+# or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09").
+# Sub-zero readings are values in their own right, not invalid ones, so they keep their sign
 function format_temperature_for_display() {
   local -r VALUE="$1"
-  if [[ "$VALUE" =~ ^[0-9]+$ ]]; then
-    printf '%3d' "$((10#$VALUE))"
+  if is_temperature_reading_valid "$VALUE"; then
+    printf '%3d' "$(normalize_decimal_value "$VALUE")"
   else
     printf '%3s' "-"
   fi
 }
 
+# Returns 0 (true) if the given temperature reading is usable, i.e. an integer.
+# A missing sensor, a transient IPMI parsing glitch or an "ns"/"Disabled" sensor all yield something
+# that isn't.
+#
+# A sub-zero reading is a value in its own right rather than an unusable one : Dell rates the PowerEdge
+# line down to -5°C, so an unheated room produces one in normal operation
+function is_temperature_reading_valid() {
+  [[ "$1" =~ ^-?[0-9]+$ ]]
+}
+
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
-# If a reading isn't a valid number (missing sensor, transient IPMI parsing glitch, etc.), fail safe and
-# report overheating so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt"
-# throws "unary operator expected" on empty/non-numeric input) or silently running the low user fan speed
-# on unverified data
+# If a reading isn't valid, fail safe and report overheating so the Dell default fan control profile
+# kicks in, instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric
+# input) or silently running the low user fan speed on unverified data
 function CPU1_OVERHEATING() {
-  [[ "$CPU1_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
-  [ "$((10#$CPU1_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
+  [ "$(normalize_decimal_value "$CPU1_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
 function CPU2_OVERHEATING() {
-  [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
-  [ "$((10#$CPU2_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
+  [ "$(normalize_decimal_value "$CPU2_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+}
+
+# Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
+# Usage : join_with_and $ITEM...
+function join_with_and() {
+  local result=""
+  local i
+
+  for (( i = 1; i <= $#; i++ )); do
+    if (( i == 1 )); then
+      result="${!i}"
+    elif (( i == $# )); then
+      result+=" and ${!i}"
+    else
+      result+=", ${!i}"
+    fi
+  done
+
+  echo "$result"
+}
+
+# Build the comment explaining why the Dell default fan control profile was applied.
+# Usage : build_fan_control_fallback_comment $CPU_NAME $CPU_TEMPERATURE [$CPU_NAME $CPU_TEMPERATURE]...
+#
+# CPU1_OVERHEATING()/CPU2_OVERHEATING() deliberately return true both when a CPU is genuinely too hot
+# and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile.
+# The comment has to tell the two apart : reporting "temperature is too high" on a reading that was
+# never obtained sends the user chasing a cooling problem instead of the sensor problem they have
+function build_fan_control_fallback_comment() {
+  local -a too_hot=()
+  local -a unreadable=()
+  local -a reasons=()
+
+  while (( $# >= 2 )); do
+    if is_temperature_reading_valid "$2"; then
+      too_hot+=("$1")
+    else
+      unreadable+=("$1")
+    fi
+    shift 2
+  done
+
+  if (( ${#too_hot[@]} == 1 )); then
+    reasons+=("${too_hot[0]} temperature is too high")
+  elif (( ${#too_hot[@]} > 1 )); then
+    reasons+=("$(join_with_and "${too_hot[@]}") temperatures are too high")
+  fi
+
+  if (( ${#unreadable[@]} == 1 )); then
+    reasons+=("${unreadable[0]} temperature could not be read")
+  elif (( ${#unreadable[@]} > 1 )); then
+    reasons+=("$(join_with_and "${unreadable[@]}") temperatures could not be read")
+  fi
+
+  echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
 }
 
 function print_error() {
