@@ -9,6 +9,15 @@ on:
   # already exists, instead of having to delete and re-push it
   workflow_dispatch:
 
+# Without this block the whole workflow runs on the repository-wide default
+# token. This one grants only what its two publishing steps need : "contents"
+# for the GitHub release "Generate release note" creates, "packages" for the
+# image pushed to ghcr.io. Everything else the default token may carry
+# (issues, pull requests, deployments...) is dropped
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   # The Tests workflow runs on push and pull_request, neither of which fires on
   # a version tag : without this job a release would be built and published
@@ -40,6 +49,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Whether this tag gets "latest" is decided by comparing it against every
+          # other tag, which the default single-commit fetch does not bring along
+          fetch-depth: 0
 
       - name: Generate release note
         uses: softprops/action-gh-release@v1
@@ -53,6 +66,22 @@ jobs:
           FINAL_NAME="${IMAGE_NAME/_Docker/}"
           echo "value=$FINAL_NAME" >> $GITHUB_OUTPUT
 
+      # Builds can run concurrently and old tags can be rebuilt on demand, so the
+      # order in which images reach the registry says nothing about their version.
+      # Only the highest version tag may claim "latest"
+      - name: Check whether this tag is the highest version
+        id: highest_version
+        run: |
+          # sort -V, not sort : lexicographically "v1.9" sorts above "v1.19"
+          HIGHEST_TAG="$(git tag --list 'v[0-9]*.[0-9]*' | sort -V | tail -1)"
+          if [ "$HIGHEST_TAG" = "$GITHUB_REF_NAME" ]; then
+            echo "$GITHUB_REF_NAME is the highest version tag, it will be published as 'latest'"
+            echo "value=true" >> $GITHUB_OUTPUT
+          else
+            echo "$GITHUB_REF_NAME is behind $HIGHEST_TAG, 'latest' will be left untouched"
+            echo "value=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -65,9 +94,14 @@ jobs:
           # would leave a dispatched run with no tag at all
           tags: |
             type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ steps.highest_version.outputs.value == 'true' }}
+          # The explicit "latest" entry above is the only thing that may publish it,
+          # gated on the highest version check. latest=auto is already inert for
+          # type=raw entries - procRaw() hardcodes latest=false under auto - so this
+          # pins that behaviour rather than changing it, and keeps it pinned should a
+          # type=semver or type=ref entry ever be added here
           flavor: |
-            latest=auto
+            latest=false
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3

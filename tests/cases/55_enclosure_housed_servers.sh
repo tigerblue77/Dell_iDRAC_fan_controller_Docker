@@ -78,9 +78,10 @@ function test_a_blade_reports_no_exhaust_temperature_sensor() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "43 45" --inlet 24 --no-exhaust)
 
-  retrieve_temperatures true true
+  detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  retrieve_temperatures true
 
-  assert_equals "2" "$NUMBER_OF_DETECTED_CPUS"
+  assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}"
   assert_equals "24" "$INLET_TEMPERATURE"
   assert_empty "$EXHAUST_TEMPERATURE" "a blade has no exhaust sensor of its own"
 }
@@ -92,10 +93,11 @@ function test_a_sled_whose_enclosure_owns_the_airflow_reports_no_temperature_aro
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "47 48" --no-inlet --no-exhaust)
 
-  retrieve_temperatures true true
+  detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  retrieve_temperatures true
 
-  assert_equals "47" "$CPU1_TEMPERATURE"
-  assert_equals "48" "$CPU2_TEMPERATURE"
+  assert_equals "47" "${DETECTED_CPU_TEMPERATURES[0]}"
+  assert_equals "48" "${DETECTED_CPU_TEMPERATURES[1]}"
   assert_empty "$INLET_TEMPERATURE" "this sled has no inlet sensor"
   assert_empty "$EXHAUST_TEMPERATURE" "this sled has no exhaust sensor"
 }
@@ -188,10 +190,11 @@ function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_sa
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge M1000e"
   assert_contains "$OUTPUT" "Dell default dynamic fan control profile" \
     "an unreadable CPU must fall back on Dell's own profile"
-  # The enclosure does measure its own inlet, so that column is filled : the
-  # empty one is the CPU column right after it, no processor entity being reported
-  assert_matches "$OUTPUT" '01-01-2024 00:00:00[[:space:]]+22°C[[:space:]]+-°C' \
-    "the enclosure reports no processor entity, the CPU column stays empty"
+  # No processor entity at all means there is nothing to build a temperatures
+  # table around, so the controller says so and keeps waiting for one instead of
+  # printing a table whose only CPU column would never hold a reading
+  assert_contains "$OUTPUT" "No CPU temperature sensor could be read" \
+    "the enclosure reports no processor entity, and the controller says so"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
     "manual fan control must never be enabled on readings the controller never got"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")" \
