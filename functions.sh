@@ -78,6 +78,33 @@ function convert_check_interval_to_seconds() {
   esac
 }
 
+# Stop the container unless the given parameter is a usable fan speed, in either accepted notation
+# Usage : validate_fan_speed_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# bash's printf applies base detection, so an unchecked value never fails visibly : "09" is an invalid
+# octal number, "abc" an invalid number, an empty value produces no diagnostic at all, and all three
+# convert to 0x00 -- the documented Dell command for 0% fan duty. Only one stderr line at startup says
+# so, and every temperature table row printed afterwards keeps naming the speed the user asked for
+# while the fans sit at zero, the profile being re-sent unchanged every cycle. The machine recovers
+# only once a CPU crosses CPU_TEMPERATURE_THRESHOLD, i.e. after it has already heated up
+function validate_fan_speed_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local DECIMAL_VALUE
+
+  if [[ "$VALUE" =~ ^0[xX][0-9A-Fa-f]{1,2}$ ]]; then
+    DECIMAL_VALUE=$(convert_hexadecimal_value_to_decimal "$VALUE")
+  elif [[ "$VALUE" =~ ^[0-9]+$ ]]; then
+    DECIMAL_VALUE=$(normalize_decimal_value "$VALUE")
+  else
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64"
+  fi
+
+  if [ "$DECIMAL_VALUE" -gt 100 ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64 (this is ${DECIMAL_VALUE}%)"
+  fi
+}
+
 # Stop the container unless the given parameter is one of the two literals the shell can safely run
 # Usage : validate_boolean_parameter "$PARAMETER_NAME" "$VALUE"
 #
@@ -120,25 +147,9 @@ function validate_boolean_parameter() {
 # that duration is short enough for the controller to still be reacting to temperature changes
 # Usage : validate_check_interval_parameter "$PARAMETER_NAME" "$VALUE" ["$MONITORING_ONLY_MODE"]
 #
-# CHECK_INTERVAL is the monitoring loop's only pacing mechanism and reaches sleep as unchecked text.
-# The loop starts the timer in background then waits on its PID without ever looking at what wait
-# hands back, so nothing notices a sleep that refused to run : the cycle returns at once and the loop
-# runs at full speed, sending the 5 IPMI commands a cycle costs over LAN (4 locally, one fewer on
-# Gen 14 and newer) as fast as ipmitool completes them, with nothing in the log but sleep's own
-# two-line complaint each time.
-#
-# The Dockerfile's ENV CHECK_INTERVAL is a default, not a guarantee : any entry the user supplies for
-# the same key replaces it. Measured on Docker 29 and Compose v5, "-e CHECK_INTERVAL=", an --env-file
-# or compose line with nothing after the "=", and a compose "${CHECK_INTERVAL}" resolving to nothing
-# all arrive as an empty string, while a bare "-e CHECK_INTERVAL" whose host variable is unset drops
-# the variable altogether, which expands to the empty string just the same since strict bash mode is
-# disabled. The likeliest case isn't empty at all : docker takes everything after the "=" verbatim, so
-# an unfilled .env placeholder arrives as the literal "<seconds between each check>" text.
-#
-# GNU sleep accepts a unit suffix, so "90s" and "5m" do wait and are working configurations today.
-# They stay accepted here : rejecting a value that has been pacing a container correctly all along
-# would break it for no benefit. The fractional values sleep also accepts ("0.5") are refused all the
-# same, a sub-second cycle being exactly the hammering this check exists to prevent.
+# The value is passed straight to sleep, whose exit status the loop discards, so an unusable one
+# doesn't stop anything : sleep returns in a few milliseconds and the monitoring loop starts spinning
+# at full speed, opening an IPMI session per iteration and flooding the logs.
 #
 # The interval is bounded from above too, because it is the controller's reaction time. Once
 # apply_user_fan_control_profile has run, Dell's own dynamic fan control is disabled (raw 0x30 0x30
@@ -184,6 +195,23 @@ function validate_check_interval_parameter() {
   if [ "$VALUE_IN_SECONDS" -gt "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" ]; then
     print_warning "$PARAMETER_NAME is \"$VALUE\", over $CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS seconds. Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the controller will take up to that long to react to a temperature spike"
     printf "\n"
+  fi
+}
+
+# Express an already validated fan speed parameter in both notations at once
+# Usage : convert_fan_speed_parameter "$VALUE"
+# Returns : DECIMAL_SPEED, HEXADECIMAL_SPEED
+function convert_fan_speed_parameter() {
+  local -r VALUE="$1"
+
+  if [[ "$VALUE" == 0[xX]* ]]; then
+    DECIMAL_SPEED=$(convert_hexadecimal_value_to_decimal "$VALUE")
+    HEXADECIMAL_SPEED="$VALUE"
+  else
+    # Leading zeros are stripped before the conversion, printf would otherwise read "09" as an invalid
+    # octal number and hand back 0x00
+    DECIMAL_SPEED=$(normalize_decimal_value "$VALUE")
+    HEXADECIMAL_SPEED=$(convert_decimal_value_to_hexadecimal "$DECIMAL_SPEED")
   fi
 }
 
@@ -698,7 +726,7 @@ function get_Dell_server_model() {
   local -r ipmitool_exit_code=$?
 
   if [ $ipmitool_exit_code -ne 0 ]; then
-    print_error_and_exit "Could not establish IPMI connection to iDRAC/IPMI host \"$IDRAC_HOST\". Check that IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD are correct. ipmitool said: $IPMI_FRU_content"
+    print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. ipmitool said: $IPMI_FRU_content"
   fi
 
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
@@ -900,6 +928,29 @@ function build_fan_control_fallback_comment() {
   fi
 
   echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
+}
+
+# Stop the container on an invalid configuration parameter, with everything needed to fix it
+# Usage : print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$EXPECTED"
+#
+# Refusing to start is the point : a malformed parameter fails silently once the container is running,
+# so the only outcome that can't be mistaken for normal operation is not running at all. But refusing
+# to start is only useful if the reason survives a "docker logs" scroll, hence the block form rather
+# than one line among the startup output -- the user has to be able to see, without reading the source,
+# which parameter is wrong, what it currently is, what is accepted, and where to change it
+function print_configuration_error_and_exit() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local -r EXPECTED="$3"
+
+  printf "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n" >&2
+  printf "  Parameter : %s\n" "$PARAMETER_NAME" >&2
+  printf "  Value     : \"%s\"\n" "$VALUE" >&2
+  printf "  Expected  : %s\n\n" "$EXPECTED" >&2
+  printf "  Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"\n" >&2
+  printf "  section of your docker-compose.yml, then start the container again.\n\n" >&2
+
+  exit 1
 }
 
 function print_error() {

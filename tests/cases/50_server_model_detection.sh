@@ -136,7 +136,8 @@ function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_
   local -r EXIT_CODE=$?
 
   assert_equals 1 "$EXIT_CODE" "an unreachable iDRAC should stop the controller instead of silently continuing"
-  assert_contains "$OUTPUT" "Could not establish IPMI connection"
+  assert_contains "$OUTPUT" "the container will not start" "the error should say the container is refusing to start"
+  assert_contains "$OUTPUT" "credentials that can open an IPMI session" "the error should say what is expected instead"
   assert_contains "$OUTPUT" "IDRAC_HOST" "the error should name the variables to check"
   assert_contains "$OUTPUT" "Unable to establish IPMI v2 / RMCP+ session" "the error should quote what ipmitool said"
 }

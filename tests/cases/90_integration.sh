@@ -253,7 +253,7 @@ function test_the_controller_stops_when_the_ipmi_connection_cannot_be_establishe
   local -r EXIT_CODE=$?
 
   assert_equals 1 "$EXIT_CODE"
-  assert_contains "$OUTPUT" "Could not establish IPMI connection"
+  assert_contains "$OUTPUT" "the container will not start" "the error should say the container is refusing to start"
   assert_contains "$OUTPUT" "192.168.1.100" "the error should name the host that could not be reached"
 }
 
