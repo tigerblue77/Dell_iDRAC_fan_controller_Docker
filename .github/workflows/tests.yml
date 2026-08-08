@@ -7,11 +7,7 @@ on:
     # twice, and leaves a skipped "event file" check behind. Keeping master is
     # what gives the published results a baseline to compare against
     branches: [master]
-    paths-ignore:
-      - "**/README.md"
   pull_request:
-    paths-ignore:
-      - "**/README.md"
   workflow_dispatch:
 
 permissions:
