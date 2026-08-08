@@ -1,0 +1,292 @@
+name: Base image refresh
+
+# Ubuntu keeps publishing security fixes into ubuntu:latest, but nothing
+# rebuilds the published image between two releases : "Docker image CI" only
+# runs on a version tag. This workflow watches the base image and, when it
+# moved, rebuilds and republishes "latest" from the last release tag, so users
+# pulling "latest" get the base fixes without waiting for the next release.
+#
+# It builds from the last v* tag and not from master on purpose : building from
+# master would quietly move "latest" onto unreleased code. The source published
+# here is exactly the source of the last release, only the base underneath it
+# is newer.
+#
+# /!\ Like every scheduled workflow, this one only runs once it is on the
+# default branch. GitHub also disables scheduled workflows in a public
+# repository after 60 days without activity, they then have to be re-enabled by
+# hand from the Actions tab
+
+on:
+  schedule:
+    # 00:00 UTC, so 01:00 in Paris in winter and 02:00 in summer : cron is UTC
+    # here and does not follow daylight saving. The small hours locally either
+    # way, and a failure lands in the morning's notifications.
+    # GitHub runs the queue late when it is loaded, and the load peaks on the
+    # hour ; a nightly refresh does not care whether it starts at 00:00 or 00:30
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two overlapping runs would race to push the same "latest" tag
+concurrency:
+  group: base-image-refresh
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check whether the base image changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Reading the published image back, see the login step below
+      packages: read
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      base-image: ${{ steps.base.outputs.image }}
+      base-digest: ${{ steps.base.outputs.digest }}
+      release-tag: ${{ steps.release.outputs.tag }}
+      release-sha: ${{ steps.release.outputs.sha }}
+      image-name: ${{ steps.image-name.outputs.value }}
+    steps:
+      # The whole history, tags included : the last release tag is read from it
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Find the last release tag
+        id: release
+        run: |
+          set -euo pipefail
+          # Same pattern as the tags "Docker image CI" builds on. Version sort,
+          # so v1.10 comes out above v1.9
+          TAG="$(git tag --list 'v[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+          if [ -z "$TAG" ]; then
+            echo "::error::No v* tag found, nothing has ever been released"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-list -n 1 "$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the digest the base image currently points to
+        id: base
+        run: |
+          set -euo pipefail
+          # Read from the release tag, not from the working tree : the image
+          # being refreshed is built from that tag, so its base is the one that
+          # matters. A base already pinned by digest simply never moves, and
+          # this workflow then never has anything to do
+          BASE_IMAGE="$(git show "${{ steps.release.outputs.tag }}:Dockerfile" \
+            | awk 'toupper($1) == "FROM" { print $2; exit }')"
+          if [ -z "$BASE_IMAGE" ]; then
+            echo "::error::No FROM instruction found in the Dockerfile of ${{ steps.release.outputs.tag }}"
+            exit 1
+          fi
+          DIGEST="$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"
+          echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate final Docker image name
+        id: image-name
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ github.repository }}"
+          FINAL_NAME="${IMAGE_NAME/_Docker/}"
+          # docker/metadata-action lowercases it on the publishing side, this
+          # one is read back from a registry so it has to be lowercased here
+          echo "value=${FINAL_NAME,,}" >> "$GITHUB_OUTPUT"
+
+      # The package is public, so the read below would work unauthenticated.
+      # Logging in anyway : the comparison now fails the run rather than assume
+      # the base moved, so a read that only works while the package stays public
+      # is a daily failure waiting for the day someone flips its visibility
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare it with the base of the published image
+        id: compare
+        run: |
+          set -euo pipefail
+          # Read from GHCR rather than Docker Hub : anonymous Docker Hub
+          # requests are rate limited per IP, and the runners share theirs.
+          # The publishing step below records the base digest as a label, which
+          # is what makes this comparison possible without keeping state
+          # anywhere else
+          IMAGE="ghcr.io/${{ steps.image-name.outputs.value }}:latest"
+          ERRORS="$RUNNER_TEMP/imagetools-error.txt"
+
+          if CONFIG="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Image}}' 2>"$ERRORS")"; then
+            PUBLISHED="$(printf '%s' "$CONFIG" \
+              | jq -r 'if has("config") then [.] else [.[]] end
+                       | map(.config.Labels["org.opencontainers.image.base.digest"] // empty)
+                       | first // ""')"
+          elif grep -qiE 'not found|manifest unknown|name unknown' "$ERRORS"; then
+            # Nothing published under that tag yet, so there is nothing to
+            # compare against and everything to build
+            PUBLISHED=""
+          else
+            # Credentials, rate limit, registry outage : none of these are an
+            # answer to "did the base move ?". Failing here is deliberate.
+            # Treating an unreadable image as "changed" is what would turn this
+            # workflow into an unconditional daily republication of "latest",
+            # green run after green run, with nobody noticing
+            echo "::error::Could not read $IMAGE, giving up rather than assuming the base moved"
+            cat "$ERRORS"
+            exit 1
+          fi
+
+          CURRENT="${{ steps.base.outputs.digest }}"
+          if [ "$PUBLISHED" = "$CURRENT" ]; then
+            CHANGED=false
+          else
+            CHANGED=true
+            if [ -z "$PUBLISHED" ]; then
+              # Expected exactly once, the first time this runs against an image
+              # published before the label existed. Twice in a row means the
+              # publishing step is not recording it and every run rebuilds
+              echo "::warning::No base digest recorded on $IMAGE, rebuilding to record it"
+            fi
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "| | Digest of \`${{ steps.base.outputs.image }}\` |"
+            echo "|---|---|"
+            echo "| Published image was built on | \`${PUBLISHED:-none recorded}\` |"
+            echo "| Base image now points to | \`$CURRENT\` |"
+            echo
+            if [ "$CHANGED" = true ]; then
+              echo "Rebuilding and republishing \`latest\` from \`${{ steps.release.outputs.tag }}\`."
+            else
+              echo "Unchanged, nothing to do."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rebuild:
+    name: Rebuild, test and republish the image
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout the last release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.check.outputs.release-tag }}
+
+      # Set up before the test build and not just before the publishing one, so
+      # that both builds go through the same Buildx builder. The publishing
+      # build then resolves its amd64 half from that builder's cache instead of
+      # rebuilding it, which is what makes the bytes the suite ran on and the
+      # bytes that get pushed the same ones. A cache miss falls back to an
+      # identical rebuild from the same source and base, so this is an
+      # improvement on the guarantee, never a regression
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Nothing is published before the suite has run on the image the new base
+      # produced. Only amd64 is loaded and exercised : "load" cannot take a
+      # multi-platform build, and the suite mocks ipmitool so it exercises no
+      # architecture-specific code anyway. What arm64 gets out of this run is
+      # the guarantee that the same source still builds on the new base
+      - name: Build the image the test suite runs on
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          # Resolve the base from the registry rather than reuse whatever the
+          # runner already had : that resolution is the whole point of the run
+          pull: true
+          tags: dell_idrac_fan_controller:test
+
+      - name: Run the test suite inside the image
+        run: |
+          mkdir -p test-results
+          docker run --rm \
+            --entrypoint /bin/bash \
+            --volume "$PWD/tests:/app/tests:ro" \
+            --volume "$PWD/test-results:/app/test-results" \
+            dell_idrac_fan_controller:test \
+            /app/tests/run_tests.sh \
+            --junit /app/test-results/in-the-docker-image.xml \
+            --summary /app/test-results/summary.md
+
+      - name: Add the test suite summary to this job's page
+        if: ${{ !cancelled() }}
+        run: cat test-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload the test results
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: Test Results (base image refresh)
+          path: test-results/*.xml
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ needs.check.outputs.image-name }} # docker.io/tigerblue77/dell_idrac_fan_controller
+            ghcr.io/${{ needs.check.outputs.image-name }} # ghcr.io/tigerblue77/dell_idrac_fan_controller
+          # Only "latest" moves : the version tags stay on the image that was
+          # actually published for that release
+          tags: |
+            type=raw,value=latest
+          flavor: |
+            latest=false
+          # version and revision would otherwise describe the default branch,
+          # which is not what is being built here. base.digest is what the next
+          # run compares against
+          labels: |
+            org.opencontainers.image.base.name=${{ needs.check.outputs.base-image }}
+            org.opencontainers.image.base.digest=${{ needs.check.outputs.base-digest }}
+            org.opencontainers.image.version=${{ needs.check.outputs.release-tag }}
+            org.opencontainers.image.revision=${{ needs.check.outputs.release-sha }}
+
+      # Deliberately kept on the same major as "Docker image CI" : majors of
+      # this action change what ends up in the manifest (provenance
+      # attestations), and the "latest" republished here is meant to stay
+      # structurally identical to the one the release build produces
+      - name: Build and publish the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          file: ./Dockerfile
+          push: true
+          # Deliberately no "pull" here, unlike the test build above : the base
+          # was resolved there, and re-resolving it would miss the builder cache
+          # and rebuild amd64 into something the suite never ran on. Should the
+          # base move between the two, the label records the digest the check
+          # job saw, one behind, and the next run picks the difference up
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
