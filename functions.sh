@@ -2,7 +2,7 @@
 # This function applies Dell's default dynamic fan control profile
 # In monitoring only mode, the profile is only logged, not actually applied
 function apply_Dell_default_fan_control_profile() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (monitoring only, not applied)"
     return
   fi
@@ -35,7 +35,7 @@ function apply_static_fan_control_profile() {
   local -r HEXADECIMAL_SPEED="$2"
   local -r PROFILE_NAME="$3"
 
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%) (monitoring only, not applied)"
     return
   fi
@@ -164,6 +164,27 @@ function validate_check_interval_parameter() {
   # take a fractional value at all
   if [[ "$DURATION" =~ ^0*\.?0*$ ]]; then
     print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a duration greater than zero, otherwise the monitoring loop would never pause between two readings"
+  fi
+}
+
+# Stop the container unless the given parameter is one of the two documented boolean values
+# Usage : validate_boolean_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# Booleans are dispatched by running their value as a command, "true" and "false" being real programs.
+# Anything else is a command that doesn't exist : it exits 127 and the branch is silently taken as
+# false, so "True", "TRUE", "1", "on" and "Yes" all give the user the opposite of what they asked for.
+# MONITORING_ONLY_MODE=True is the dangerous one, the container reporting the mode as disabled and then
+# taking real control of the fans on a server the operator asked it not to touch.
+#
+# "yes" is worse still, being a command that DOES exist and never returns : the container blocks on the
+# first test, floods stdout at hundreds of MB per second, and cannot be stopped by "docker stop", the
+# graceful_exit trap being deferred while yes holds the foreground
+function validate_boolean_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  if [ "$VALUE" != "true" ] && [ "$VALUE" != "false" ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "exactly \"true\" or \"false\", in lower case ; \"True\", \"1\", \"yes\" and \"on\" are not accepted because they would silently be taken as false"
   fi
 }
 
@@ -359,7 +380,7 @@ function is_server_powered_on() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 # In monitoring only mode, this is a no-op
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
@@ -374,7 +395,7 @@ function enable_third_party_PCIe_card_Dell_default_cooling_response() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 # In monitoring only mode, this is a no-op
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
@@ -405,7 +426,7 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 
 # Prepare traps in case of container exit
 function graceful_exit() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     print_warning_and_exit "Container stopped (monitoring only mode, no fan control profile was ever applied)"
   fi
 
