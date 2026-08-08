@@ -114,21 +114,43 @@ function retrieve_CPU_high_temperature_from_lm_sensors() {
     # "Package id 0:", which always ends with a colon
     /^[^[:space:]]/ {
       if ($0 !~ /^Adapter:/ && $0 !~ /:[[:space:]]*$/) {
-        is_CPU_chip = ($0 ~ /^coretemp-/)
+        chip = $0
+        is_CPU_chip = (chip ~ /^coretemp-/)
       }
       next
     }
-    # "high" is exposed as the "_max" sub-feature. Keep the lowest one so the most constrained CPU/core of
-    # a multi-socket server is the one being protected
-    is_CPU_chip && $1 ~ /^temp[0-9]+_max:$/ && $2 ~ /^[0-9]+(\.[0-9]+)?$/ {
-      if (lowest == "" || $2 + 0 < lowest) lowest = $2 + 0
+    !is_CPU_chip { next }
+    # "high" is the "_max" sub-feature and "crit" the "_crit" one. Both are collected per sensor, so that
+    # they can be compared below ("_crit_alarm" and "_crit_hyst" do not match, the colon must follow)
+    $1 ~ /^temp[0-9]+_(max|crit):$/ && $2 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      split($1, subfeature, "_")
+      sub(/:$/, "", subfeature[2])
+      if (subfeature[2] == "max") {
+        high[chip, subfeature[1]] = $2 + 0
+      } else {
+        critical[chip, subfeature[1]] = $2 + 0
+      }
     }
-    # Truncate rather than round, so the threshold is never set above what the CPU manufacturer defined
-    END { if (lowest != "") printf "%d", lowest }')
+    END {
+      for (sensor in high) {
+        # "high" must sit strictly below "crit". coretemp derives "high" by subtracting an offset from
+        # TjMax that Intel documents as reserved : when a CPU leaves it at zero, "high" comes back equal
+        # to "crit", i.e. to the temperature at which the CPU already throttles itself. Adopting that as
+        # the threshold would keep the fans low until the hardware has acted, so such a sensor is skipped
+        # and the caller falls back instead
+        if ((sensor in critical) && high[sensor] >= critical[sensor]) continue
+        # Keep the lowest, so the most constrained CPU of a multi-socket server is the one being protected
+        if (lowest == "" || high[sensor] < lowest) lowest = high[sensor]
+      }
+      # Truncate rather than round, so the threshold is never set above what the CPU manufacturer defined
+      if (lowest != "") printf "%d", lowest
+    }')
 
   # Ignore implausible readings (unsupported or misreporting sensor) instead of letting them become the
   # threshold that protects the hardware
-  if [[ "$HIGH_TEMPERATURE" =~ ^[0-9]+$ ]] && [ "$HIGH_TEMPERATURE" -ge 20 ] && [ "$HIGH_TEMPERATURE" -le 125 ]; then
+  if [[ "$HIGH_TEMPERATURE" =~ ^[0-9]+$ ]] \
+    && [ "$HIGH_TEMPERATURE" -ge "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] \
+    && [ "$HIGH_TEMPERATURE" -le "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
     echo "$HIGH_TEMPERATURE"
   fi
 }

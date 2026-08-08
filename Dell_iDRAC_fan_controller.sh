@@ -40,6 +40,15 @@ fi
 # /!\ This resolution must stay ahead of everything that reads CPU_TEMPERATURE_THRESHOLD as a number /!\
 # It is deliberately placed here, right after the FAN_SPEED conversion, so that any later validation sees
 # an already-resolved integer rather than the literal string "auto"
+
+# Normalize the raw value first. Docker's --env-file parser keeps the trailing space of a
+# "CPU_TEMPERATURE_THRESHOLD=50 " line, and copying the documented placeholder can carry quotes along.
+# Bash's own "-gt" used to tolerate both, so rejecting them here would turn a previously working
+# configuration into a startup failure, which a restart policy then turns into a crash loop
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD//[[:space:]]/}"
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD#[\"\']}"
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD%[\"\']}"
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD#+}"
 CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD:-auto}"
 CPU_TEMPERATURE_THRESHOLD_SOURCE=""
 if [[ "${CPU_TEMPERATURE_THRESHOLD,,}" == "auto" ]]; then
@@ -58,9 +67,16 @@ if [[ "${CPU_TEMPERATURE_THRESHOLD,,}" == "auto" ]]; then
       CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, no CPU \"high\" temperature could be read from lm-sensors)"
     fi
   fi
-elif [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]+$ ]]; then
-  # Drop any leading zero so the value isn't later interpreted as an octal number (e.g. "050" as 40°C)
+elif [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]{1,3}$ ]]; then
+  # Drop any leading zero so the value isn't later interpreted as an octal number (e.g. "050" as 40°C).
+  # The digit count is bounded above so that a very long number can't silently wrap around 64 bits here
   CPU_TEMPERATURE_THRESHOLD=$((10#$CPU_TEMPERATURE_THRESHOLD))
+  # Hold a user-supplied value to the same plausibility window as an automatically detected one. A typo
+  # such as "500" (or a Fahrenheit value) is otherwise accepted silently and no CPU ever reaches it, so
+  # the Dell default profile is never restored and the fans stay low for the life of the container
+  if [ "$CPU_TEMPERATURE_THRESHOLD" -lt "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -gt "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
+    print_error_and_exit "CPU_TEMPERATURE_THRESHOLD must be between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C, but is ${CPU_TEMPERATURE_THRESHOLD}°C"
+  fi
 else
   # Reject an unusable threshold right away : every temperature comparison would fail against it, which
   # silently keeps the user's (low) fan speed applied instead of ever triggering the Dell default profile
