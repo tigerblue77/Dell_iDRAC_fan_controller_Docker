@@ -116,12 +116,12 @@ function test_a_fractional_value_is_refused_although_sleep_accepts_it() {
 function test_the_suffix_decides_how_long_the_interval_really_is() {
   # The bounds are compared against seconds, so the suffix has to be applied
   # rather than stripped : "2h" is 7200 seconds, not 2
-  assert_equals 90 "$(convert_check_interval_to_seconds 90)" "a bare number is already seconds"
-  assert_equals 90 "$(convert_check_interval_to_seconds 90s)" "an s suffix is seconds"
-  assert_equals 120 "$(convert_check_interval_to_seconds 2m)" "an m suffix is minutes"
-  assert_equals 7200 "$(convert_check_interval_to_seconds 2h)" "an h suffix is hours"
-  assert_equals 86400 "$(convert_check_interval_to_seconds 1d)" "a d suffix is days"
-  assert_equals 8 "$(convert_check_interval_to_seconds 08)" "a padded value is decimal, not octal"
+  assert_equals 90 "$(convert_duration_to_seconds 90)" "a bare number is already seconds"
+  assert_equals 90 "$(convert_duration_to_seconds 90s)" "an s suffix is seconds"
+  assert_equals 120 "$(convert_duration_to_seconds 2m)" "an m suffix is minutes"
+  assert_equals 7200 "$(convert_duration_to_seconds 2h)" "an h suffix is hours"
+  assert_equals 86400 "$(convert_duration_to_seconds 1d)" "a d suffix is days"
+  assert_equals 8 "$(convert_duration_to_seconds 08)" "a padded value is decimal, not octal"
 }
 
 function test_an_interval_longer_than_a_minute_is_accepted_with_a_warning() {

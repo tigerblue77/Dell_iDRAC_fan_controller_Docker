@@ -59,14 +59,17 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
-# Convert a check interval into a number of seconds, so it can be compared against a threshold
-# Usage : convert_check_interval_to_seconds "5m"
+# Convert a duration into a number of seconds, so it can be compared against a threshold
+# Usage : convert_duration_to_seconds "5m"
+#
+# Shared by every parameter written in that grammar -- CHECK_INTERVAL and
+# MAXIMUM_IPMI_UNREACHABLE_DURATION -- so they accept the exact same spellings
 # Returns : the equivalent number of seconds
 #
 # The value must already have passed validate_check_interval_parameter's format check : this only
 # reads the shapes that regex allows. The suffix is stripped and 10# forces base 10 so that a padded
 # value ("00", "08") is read as the decimal number the user meant instead of an invalid octal one
-function convert_check_interval_to_seconds() {
+function convert_duration_to_seconds() {
   local -r VALUE="$1"
   local -r NUMBER="$((10#${VALUE%[smhd]}))"
 
@@ -144,6 +147,109 @@ function validate_boolean_parameter() {
   fi
 }
 
+# Express the unreachable-iDRAC escalation as a number of cycles, whichever way it was configured
+# Usage : resolve_IPMI_failures_before_exit "$COUNT" "$DURATION" $CHECK_INTERVAL_IN_SECONDS
+# Returns : IPMI_FAILURES_BEFORE_EXIT, empty when the escalation is disabled
+#
+# The duration is the one users configure : it is what they actually care about ("give up after a
+# minute"), and it keeps meaning the same thing when CHECK_INTERVAL changes, where a raw cycle count
+# silently would not. The count remains for anyone who wants the threshold in cycles exactly, and
+# takes precedence when set, being the more specific of the two.
+#
+# Rounded up, and never below 1 : a duration shorter than one cycle still has to allow one failure to
+# be observed before anything can be concluded from it
+function resolve_IPMI_failures_before_exit() {
+  local -r COUNT="$1"
+  local -r DURATION="$2"
+  local -r CYCLE_IN_SECONDS="$3"
+
+  if [ -n "$COUNT" ]; then
+    IPMI_FAILURES_BEFORE_EXIT="$((10#$COUNT))"
+    return 0
+  fi
+
+  if [ -z "$DURATION" ]; then
+    IPMI_FAILURES_BEFORE_EXIT=""
+    return 0
+  fi
+
+  local -r DURATION_IN_SECONDS=$(convert_duration_to_seconds "$DURATION")
+  IPMI_FAILURES_BEFORE_EXIT=$(( (DURATION_IN_SECONDS + CYCLE_IN_SECONDS - 1) / CYCLE_IN_SECONDS ))
+  if [ "$IPMI_FAILURES_BEFORE_EXIT" -lt 1 ]; then
+    IPMI_FAILURES_BEFORE_EXIT=1
+  fi
+}
+
+# Stop the container when the iDRAC has been unreachable for the configured number of cycles
+# Usage : exit_if_iDRAC_unreachable_for_too_long
+#
+# Reads CONSECUTIVE_IPMI_FAILURES, IPMI_FAILURES_BEFORE_EXIT and CHECK_INTERVAL_IN_SECONDS.
+# Does nothing when the escalation is disabled, which is the default.
+#
+# Called from both waiting points -- the startup sensor detection and the monitoring loop -- because
+# the failure that matters most, a wrong host or wrong credentials, happens before the loop is ever
+# entered : without it there, the container would sit printing the same line forever having never
+# supervised anything.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+function exit_if_iDRAC_unreachable_for_too_long() {
+  [ -n "$IPMI_FAILURES_BEFORE_EXIT" ] || return 0
+  [ "$CONSECUTIVE_IPMI_FAILURES" -ge "$IPMI_FAILURES_BEFORE_EXIT" ] || return 0
+
+  # The duration is computed into a local first : this is a runtime condition, not a refused
+  # configuration, and it must not read like one -- nor name a parameter in its message
+  local -r UNREACHABLE_FOR_SECONDS=$(( CONSECUTIVE_IPMI_FAILURES * CHECK_INTERVAL_IN_SECONDS ))
+
+  print_error_and_exit "The iDRAC could not be reached $CONSECUTIVE_IPMI_FAILURES times in a row, i.e. for about $UNREACHABLE_FOR_SECONDS seconds. Exiting so that a restart policy can retry with a fresh IPMI session. An unreachable iDRAC accepts no command, so this cannot and does not try to move the fans : they keep the speed they were last set to until something reaches the iDRAC again"
+}
+
+# Stop the container unless the given parameter is a usable unreachable-iDRAC duration
+# Usage : validate_IPMI_unreachable_duration_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# Same grammar as CHECK_INTERVAL, deliberately : both are durations, and a user who has learnt that
+# "5m" works in one should not discover it does not in the other. Empty disables the escalation
+function validate_IPMI_unreachable_duration_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  [ -n "$VALUE" ] || return 0
+
+  if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a number of seconds, optionally suffixed with s, m, h or d, or empty to disable the escalation"
+  fi
+
+  # Zero would exit on the very first unreachable cycle, i.e. on any transient glitch, which is the
+  # opposite of riding one out
+  if [ "$(convert_duration_to_seconds "$VALUE")" -eq 0 ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "greater than zero : a zero duration would exit on the very first unreachable cycle, i.e. on any transient glitch"
+  fi
+}
+
+# Stop the container unless the given parameter is a usable consecutive-failure threshold
+# Usage : validate_maximum_consecutive_IPMI_failures_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# Empty means the escalation is off, which is the default : exiting only helps a container something
+# restarts, and Docker's default restart policy is "no". Left enabled by default it would turn a blind
+# supervisor into an absent one -- graceful_exit's attempt to restore Dell's profile goes through the
+# same unreachable iDRAC and fails too, so the fans would stay pinned with nothing watching them
+function validate_maximum_consecutive_IPMI_failures_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  [ -n "$VALUE" ] || return 0
+
+  if [[ ! "$VALUE" =~ ^[0-9]+$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a whole number of consecutive failed cycles (1 or more), or empty to disable the escalation"
+  fi
+
+  # Zero would exit on the very first unreachable cycle, i.e. on any transient glitch, which is the
+  # opposite of riding one out
+  if [ "$((10#$VALUE))" -lt 1 ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at least 1 : zero would exit on the very first unreachable cycle, i.e. on any transient glitch"
+  fi
+}
+
 # Stop the container unless the given parameter is a duration sleep can actually wait for, and unless
 # that duration is short enough for the controller to still be reacting to temperature changes
 # Usage : validate_check_interval_parameter "$PARAMETER_NAME" "$VALUE" ["$MONITORING_ONLY_MODE"]
@@ -177,7 +283,7 @@ function validate_check_interval_parameter() {
     print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a number of seconds, optionally suffixed with s, m, h or d (for example 60, 90s, 5m or 1h)"
   fi
 
-  local -r VALUE_IN_SECONDS=$(convert_check_interval_to_seconds "$VALUE")
+  local -r VALUE_IN_SECONDS=$(convert_duration_to_seconds "$VALUE")
 
   # Zero is the third failing case, and the only one sleep itself accepts : it parses fine, returns
   # immediately, and spins the loop just like an unparseable value. It is therefore rejected on its own

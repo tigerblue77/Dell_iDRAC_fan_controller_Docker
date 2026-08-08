@@ -283,7 +283,13 @@ for TEST_CASE in "${SELECTED_TEST_CASES[@]}"; do
     cd "$REPO_ROOT" || exit 1
     "$TEST_CASE_NAME"
   ) > "$TEST_TEMPORARY_DIRECTORY/output" 2>&1 || TEST_CASE_EXIT_CODE=$?
+  # Clamped here as well as in format_duration : this value is also summed per
+  # suite and for the whole run, and one negative member drags those totals below
+  # what the test cases actually took
   TEST_CASE_DURATION=$(($(current_time_in_milliseconds) - TEST_CASE_STARTED_AT))
+  if [ "$TEST_CASE_DURATION" -lt 0 ]; then
+    TEST_CASE_DURATION=0
+  fi
 
   TEST_CASE_ASSERTIONS=$(wc -c < "$TEST_ASSERTIONS_FILE" | tr -d ' ')
   TOTAL_ASSERTIONS=$((TOTAL_ASSERTIONS + TEST_CASE_ASSERTIONS))

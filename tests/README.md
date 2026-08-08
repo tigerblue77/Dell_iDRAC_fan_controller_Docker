@@ -23,6 +23,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, drift between the code and what documents it, healthcheck |
 | `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh |
 | `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified |
+| `cases/17_reports.sh` | The JUnit XML and Markdown reports, whose consumer is a parser rather than a reader |
 | `cases/20_fan_speed_conversions.sh` | `FAN_SPEED` given as a percentage or as a hexadecimal byte |
 | `cases/21_fan_speed_validation.sh` | `FAN_SPEED` values that would reach `ipmitool` as an unintended duty cycle, refused before the first command |
 | `cases/22_cpu_temperature_threshold.sh` | `CPU_TEMPERATURE_THRESHOLD`, and reading "auto" off the CPUs with `lm-sensors` |

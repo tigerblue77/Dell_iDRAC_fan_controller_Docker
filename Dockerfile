@@ -28,6 +28,11 @@ ENV FAN_SPEED=5
 ENV CPU_TEMPERATURE_THRESHOLD=auto
 ENV CPU_TEMPERATURE_SOURCE=auto
 ENV CHECK_INTERVAL=5
+# Give up on an iDRAC that has been unreachable for this long, so a restart policy can retry with a
+# fresh IPMI session. Empty disables it. See the README on what this does and does not protect
+ENV MAXIMUM_IPMI_UNREACHABLE_DURATION=60s
+# Same threshold expressed in cycles instead. Empty unless you want it exact ; it wins when set
+ENV MAXIMUM_CONSECUTIVE_IPMI_FAILURES=
 ENV DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
 ENV KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
 ENV MONITORING_ONLY_MODE=false

@@ -39,6 +39,19 @@ validate_fan_speed_parameter "FAN_SPEED" "$FAN_SPEED"
 # because it decides whether that reaction time exists at all
 validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL" "$MONITORING_ONLY_MODE"
 
+# Escalation for an iDRAC that stops answering, expressed either as a duration (the default) or as a
+# raw number of cycles
+validate_IPMI_unreachable_duration_parameter "MAXIMUM_IPMI_UNREACHABLE_DURATION" "$MAXIMUM_IPMI_UNREACHABLE_DURATION"
+validate_maximum_consecutive_IPMI_failures_parameter "MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "$MAXIMUM_CONSECUTIVE_IPMI_FAILURES"
+readonly MAXIMUM_IPMI_UNREACHABLE_DURATION
+readonly MAXIMUM_CONSECUTIVE_IPMI_FAILURES
+
+# CHECK_INTERVAL is allowed a unit suffix, so it is turned into seconds once : the escalation counts
+# cycles, and the duration the user configured has to be expressed in those same cycles
+readonly CHECK_INTERVAL_IN_SECONDS=$(convert_duration_to_seconds "$CHECK_INTERVAL")
+resolve_IPMI_failures_before_exit "$MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "$MAXIMUM_IPMI_UNREACHABLE_DURATION" "$CHECK_INTERVAL_IN_SECONDS"
+readonly IPMI_FAILURES_BEFORE_EXIT
+
 # Express FAN_SPEED in both notations, whichever one the user gave it in
 convert_fan_speed_parameter "$FAN_SPEED"
 readonly DECIMAL_FAN_SPEED="$DECIMAL_SPEED"
@@ -160,6 +173,9 @@ IS_FIRST_MONITORING_CYCLE=true
 # server comes back instead of reusing data read before/during the outage. Set by both reasons a
 # cycle is skipped, the readings being equally stale either way
 IS_TARGET_SERVER_UNAVAILABLE=false
+# Counts only the cycles that failed to REACH the iDRAC. A powered-off chassis is a state we observed
+# correctly, so it never counts towards the escalation
+CONSECUTIVE_IPMI_FAILURES=0
 # Tracks whether that outage was the server actually being powered off, as opposed to an iDRAC we
 # could not reach. Only the first can have changed the CPUs, and only it may open the removal window
 IS_TARGET_SERVER_POWERED_OFF=false
@@ -183,7 +199,24 @@ while true; do
   # worth telling apart once the monitoring loop is running and a profile is actually being held
   IS_TARGET_SERVER_ANSWERING=true
   if $NETWORK_MODE; then
-    get_server_power_state || IS_TARGET_SERVER_ANSWERING=false
+    get_server_power_state
+    TARGET_SERVER_POWER_STATE=$?
+
+    if [ $TARGET_SERVER_POWER_STATE -ne 0 ]; then
+      IS_TARGET_SERVER_ANSWERING=false
+
+      # This loop treats both non-zero outcomes alike for what it waits on, but not for the escalation :
+      # a server left switched off must be waited out however long it takes, while an iDRAC that never
+      # answers is usually a wrong host or wrong credentials, which waiting cannot fix
+      if [ $TARGET_SERVER_POWER_STATE -eq 2 ]; then
+        (( CONSECUTIVE_IPMI_FAILURES++ ))
+        exit_if_iDRAC_unreachable_for_too_long
+      else
+        CONSECUTIVE_IPMI_FAILURES=0
+      fi
+    else
+      CONSECUTIVE_IPMI_FAILURES=0
+    fi
   fi
 
   if $IS_TARGET_SERVER_ANSWERING; then
@@ -318,9 +351,13 @@ while true; do
       if [ $TARGET_SERVER_POWER_STATE -eq 2 ]; then
         # Deliberately not flagged as powered off : we did not observe the server, we failed to ask.
         # A dropped session or a LAN flap leaves it running, and its CPUs cannot have changed
+        (( CONSECUTIVE_IPMI_FAILURES++ ))
         printf "%19s  Cannot reach the iDRAC, target server state unknown and fan control profile left as-is. ipmitool said: %s\n" "$TIMESTAMP" "$IPMI_UNREACHABLE_REASON" >&2
+        exit_if_iDRAC_unreachable_for_too_long
       else
         IS_TARGET_SERVER_POWERED_OFF=true
+        # Observed correctly : the chassis really is off, so this is not a failure to reach anything
+        CONSECUTIVE_IPMI_FAILURES=0
         printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
       fi
 
@@ -331,6 +368,10 @@ while true; do
       SLEEP_PROCESS_PID=$!
       continue
     fi
+
+    # Reached only when the iDRAC answered, so any streak of failures is over. Reset rather than
+    # decrement : the threshold is about losing the server, not about how often it hiccups
+    CONSECUTIVE_IPMI_FAILURES=0
   fi
 
   # The server just powered back on: refresh temperatures now instead of evaluating stale data read
