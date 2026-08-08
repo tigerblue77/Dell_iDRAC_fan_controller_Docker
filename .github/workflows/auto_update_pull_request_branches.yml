@@ -32,14 +32,16 @@ name: Auto-update pull request branches
 # workflows to run" banner that somebody with write access has to click before
 # the required checks even start. No repository setting turns that off, and
 # swapping one click per pull request for another is not worth a workflow, so
-# the update is made by an identity GitHub already trusts. It uses the
-# PULL_REQUESTS_UPDATE_TOKEN secret
-# instead : a fine-grained personal access token, whose resource owner is this
-# account and whose repository access covers this repository, granting the
-# "Contents : read and write" and "Pull requests : read and write" repository
-# permissions. Create it in Settings > Developer settings > Personal access
-# tokens > Fine-grained tokens, then store it in Settings > Secrets and
-# variables > Actions > New repository secret
+# the update has to come from an identity GitHub already trusts.
+#
+# That identity is the PULL_REQUESTS_UPDATE_TOKEN secret : a fine-grained
+# personal access token, whose resource owner is this account and whose
+# repository access covers this repository, granting the "Contents : read and
+# write" and "Pull requests : read and write" repository permissions. Create it
+# in Settings > Developer settings > Personal access tokens > Fine-grained
+# tokens, then store it in Settings > Secrets and variables > Actions > New
+# repository secret. A GitHub App installation token works here too and never
+# expires, at the cost of creating and installing the App
 
 on:
   push:
