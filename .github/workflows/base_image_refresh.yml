@@ -36,6 +36,10 @@ jobs:
     name: Check whether the base image changed
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # Reading the published image back, see the login step below
+      packages: read
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
       base-image: ${{ steps.base.outputs.image }}
@@ -91,6 +95,17 @@ jobs:
           # docker/metadata-action lowercases it on the publishing side, this
           # one is read back from a registry so it has to be lowercased here
           echo "value=${FINAL_NAME,,}" >> "$GITHUB_OUTPUT"
+
+      # The package is public, so the read below would work unauthenticated.
+      # Logging in anyway : the comparison now fails the run rather than assume
+      # the base moved, so a read that only works while the package stays public
+      # is a daily failure waiting for the day someone flips its visibility
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compare it with the base of the published image
         id: compare
@@ -167,9 +182,12 @@ jobs:
           ref: ${{ needs.check.outputs.release-tag }}
 
       # Set up before the test build and not just before the publishing one, so
-      # that both builds go through the same Buildx builder : the amd64 layers
-      # the suite runs on are then the very layers that get pushed, taken from
-      # that builder's cache, rather than an independently rebuilt lookalike
+      # that both builds go through the same Buildx builder. The publishing
+      # build then resolves its amd64 half from that builder's cache instead of
+      # rebuilding it, which is what makes the bytes the suite ran on and the
+      # bytes that get pushed the same ones. A cache miss falls back to an
+      # identical rebuild from the same source and base, so this is an
+      # improvement on the guarantee, never a regression
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
