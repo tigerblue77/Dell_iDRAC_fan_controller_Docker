@@ -26,6 +26,8 @@ function setup_test_context() {
   DECIMAL_FAN_SPEED=5
   HEXADECIMAL_FAN_SPEED="0x05"
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -E"
+  # Set before the trap by the controller, so graceful_exit can read it whenever a signal lands
+  IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
 
   # Mock defaults : a healthy, powered-on dual CPU Gen 13 server
   export MOCK_IPMITOOL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/ipmitool_calls.log"
@@ -94,9 +96,13 @@ readonly CONTROLLER_TEMPERATURE_LINE_PATTERN='°C .*fan control profile'
 #
 # Its output (stdout and stderr merged, like "docker logs" shows it) is printed,
 # and its exit code is returned
-# Usage : CONTROLLER_OUTPUT=$(run_controller ["extended regex to wait for"])
+# A second argument asks for several matching lines rather than one, which is how
+# a test observes what the controller does on its later cycles and not only on
+# its first
+# Usage : CONTROLLER_OUTPUT=$(run_controller ["extended regex to wait for" [how many lines]])
 function run_controller() {
   local -r AWAITED_PATTERN="${1:-$CONTROLLER_TEMPERATURE_LINE_PATTERN}"
+  local -r AWAITED_MATCHES="${2:-1}"
   local -r OUTPUT_FILE="$TEST_TEMPORARY_DIRECTORY/controller_output"
   # 400 polls of 20ms : 8 seconds, only ever reached when the controller does not
   # print what the test is waiting for, which the assertions then report
@@ -115,7 +121,8 @@ function run_controller() {
     while [ "$POLLS" -lt "$MAXIMUM_POLLS" ]; do
       # The controller stopped on its own (it refused to run, or it crashed)
       kill -0 "$CONTROLLER_PID" 2> /dev/null || break
-      grep -qE "$AWAITED_PATTERN" "$OUTPUT_FILE" && break
+      MATCHING_LINES=$(grep -cE "$AWAITED_PATTERN" "$OUTPUT_FILE")
+      [ "$MATCHING_LINES" -ge "$AWAITED_MATCHES" ] && break
       # "command -p" looks the real sleep up in the system's default PATH, the
       # mocked one being first in this shell's own PATH
       command -p sleep 0.02
