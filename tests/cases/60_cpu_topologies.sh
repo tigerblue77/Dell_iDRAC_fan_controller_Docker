@@ -544,3 +544,21 @@ function test_the_header_is_refused_when_the_profile_column_width_is_unresolved(
   assert_equals 1 "$EXIT_CODE" "a header that cannot be sized must not be printed"
   assert_contains "$OUTPUT" "resolve_fan_control_profile_column_width" "the refusal names what has not run"
 }
+
+function test_printing_a_row_leaks_no_variable_into_the_calling_shell() {
+  # functions.sh is sourced by the entry point, so anything a function leaves undeclared lands in the
+  # container's main shell -- and this one runs on every cycle of the monitoring loop. Nothing reads a
+  # variable by these names today, which is exactly why the leak could sit there unnoticed (#171)
+  local LEAKED_NAME
+  for LEAKED_NAME in temperature i number_of_dashes; do
+    unset "$LEAKED_NAME"
+  done
+
+  print_temperature_array_line 5 "21" "45;46" "34" "Dell default dynamic fan control profile" "Enabled" "-" > /dev/null
+  build_header 5 "CPU 1" "CPU 2" > /dev/null
+
+  for LEAKED_NAME in temperature i number_of_dashes; do
+    assert_equals "unset" "${!LEAKED_NAME+set}${!LEAKED_NAME-unset}" \
+      "\"$LEAKED_NAME\" must not escape into the shell that sourced functions.sh"
+  done
+}

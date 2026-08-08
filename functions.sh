@@ -1360,6 +1360,9 @@ function print_temperature_array_line() {
 
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
+  # Declared like its neighbours : functions.sh is sourced into the entry point, so a loop counter left
+  # undeclared here lands in the container's main shell, and this function runs on every cycle
+  local temperature
 
   local TIMESTAMP FORMATTED_TEMPERATURE
   set_log_timestamp TIMESTAMP
