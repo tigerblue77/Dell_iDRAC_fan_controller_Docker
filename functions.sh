@@ -328,18 +328,15 @@ function retrieve_temperature_by_sensor_name() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+# Usage : retrieve_temperatures
 # Returns : CPU_TEMPERATURES (indexed array), NUMBER_OF_DETECTED_CPUS, CPUS_TEMPERATURES,
 #           INLET_TEMPERATURE, EXHAUST_TEMPERATURE
 #
-# The CPU 2 presence flag is gone: the CPUs are discovered on every reading, so their count is an
-# output of this function rather than something the caller has to tell it
+# Every sensor is read on every call and presence is an output, not an input. It used to be decided
+# once from a single pre-loop reading and never revisited, so one empty first reading -- a transient
+# IPMI failure, or a target server that happened to be powered off when the container started --
+# disabled that sensor permanently, for the whole life of the container, on a fully populated machine
 function retrieve_temperatures() {
-  if (( $# != 1 )); then
-    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
-    return 1
-  fi
-  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
 
   # stderr is discarded here: this is a read-only diagnostic call (it never changes fan behavior) and some
   # iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
@@ -383,12 +380,10 @@ function retrieve_temperatures() {
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
-  # If exhaust temperature sensor is present, parse its temperature data
-  if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
-  else
-    EXHAUST_TEMPERATURE="-"
-  fi
+  # Parse exhaust temperature data. An empty value means "nothing on this cycle", which the display
+  # formatter renders as the "-" placeholder: it is deliberately not turned into a permanent verdict
+  # about the sensor's existence, a later cycle being free to read it successfully
+  EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
 }
 
 # Report the target server's power state
