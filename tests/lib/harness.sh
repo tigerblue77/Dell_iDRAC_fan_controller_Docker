@@ -16,8 +16,11 @@ function setup_test_context() {
   export IDRAC_USERNAME="root"
   export IDRAC_PASSWORD="calvin"
   export FAN_SPEED=5
-  export CPU_TEMPERATURE_THRESHOLD=50
+  export CPU_TEMPERATURE_THRESHOLD=auto
+  export CPU_TEMPERATURE_SOURCE=auto
   export CHECK_INTERVAL=5
+  export MAXIMUM_IPMI_UNREACHABLE_DURATION="60s"
+  export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=""
   export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
   export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
   export MONITORING_ONLY_MODE=false
@@ -26,6 +29,14 @@ function setup_test_context() {
   DECIMAL_FAN_SPEED=5
   HEXADECIMAL_FAN_SPEED="0x05"
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -E"
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  # The repository itself : only provide_local_ipmi_device() moves it
+  CONTROLLER_WORKING_DIRECTORY="$REPO_ROOT"
+  # Set before the trap by the controller, so graceful_exit can read it whenever a signal lands
+  IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+  # Settled once at startup by the controller, and read by build_header() and by every row it prints
+  resolve_fan_control_profile_column_width
 
   # Mock defaults : a healthy, powered-on dual CPU Gen 13 server
   export MOCK_IPMITOOL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/ipmitool_calls.log"
@@ -35,11 +46,17 @@ function setup_test_context() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output)"
   export MOCK_IPMITOOL_POWER_STATUS="Chassis Power is on"
-  export MOCK_DATE_OUTPUT="01-01-2024 00:00:00"
+  export MOCK_SENSORS_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/sensors_calls.log"
+  : > "$MOCK_SENSORS_CALL_LOG"
   # Short enough to keep the suite fast, long enough for run_controller to stop
   # the controller while it is idle between two cycles rather than mid-cycle
   export MOCK_SLEEP_SECONDS="0.25"
 }
+
+# The timestamp the controller stamps every printed line with. It is formatted by
+# bash itself rather than read from `date`, so it cannot be frozen from the
+# outside : a test asserts its shape rather than a particular instant
+readonly CONTROLLER_TIMESTAMP_PATTERN='[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}'
 
 # Every ipmitool invocation recorded so far by the mock
 function recorded_ipmitool_calls() {
@@ -71,6 +88,48 @@ function capture_output() {
   return "$EXIT_CODE"
 }
 
+# Make run_controller() start the whole controller in "local" mode, on a machine
+# that has no IPMI device of its own.
+#
+# The controller refuses to start without one, and the lookup it walks lives in
+# the IPMI_DEVICE_PATHS array so that it can be pointed elsewhere (issue #190) --
+# but a bash array cannot cross a process boundary, and run_controller() starts
+# the controller as its own process. That seam is deliberately out of reach of the
+# environment, precisely so that "docker run -e IPMI_DEVICE_PATHS=..." cannot
+# redirect it, and this must not weaken that.
+#
+# The controller sources "functions.sh" by a relative path, so the directory it
+# runs from is the seam that is left. A throwaway one is built here, holding
+# symbolic links to the real scripts and, in place of functions.sh, two lines
+# that source the real one and then point the lookup at a file of this run's own
+# temporary directory. Nothing is written outside it, and no root is needed, so
+# these cases run on the CI runner as well as in the Docker image rather than
+# skipping on whichever machine has no /dev to write to.
+#
+# Usage : provide_local_ipmi_device; OUTPUT=$(run_controller)
+function provide_local_ipmi_device() {
+  local -r LOCAL_MODE_DIRECTORY="$TEST_TEMPORARY_DIRECTORY/local_mode_repository"
+  local -r FAKE_IPMI_DEVICE="$LOCAL_MODE_DIRECTORY/ipmi0"
+
+  rm -rf "$LOCAL_MODE_DIRECTORY"
+  mkdir -p "$LOCAL_MODE_DIRECTORY"
+
+  local REPOSITORY_FILE
+  for REPOSITORY_FILE in "$REPO_ROOT"/*.sh; do
+    [ "$(basename "$REPOSITORY_FILE")" == "functions.sh" ] && continue
+    ln -s "$REPOSITORY_FILE" "$LOCAL_MODE_DIRECTORY/"
+  done
+
+  {
+    printf 'source "%s/functions.sh"\n' "$REPO_ROOT"
+    printf 'IPMI_DEVICE_PATHS=("%s")\n' "$FAKE_IPMI_DEVICE"
+  } > "$LOCAL_MODE_DIRECTORY/functions.sh"
+
+  touch "$FAKE_IPMI_DEVICE"
+
+  CONTROLLER_WORKING_DIRECTORY="$LOCAL_MODE_DIRECTORY"
+}
+
 # A COMPLETE line of the temperature table. The controller prints a line with
 # several printf calls (one per column group), so matching on the readings alone
 # would match a line still being written, and the controller would be signaled in
@@ -90,9 +149,13 @@ readonly CONTROLLER_TEMPERATURE_LINE_PATTERN='°C .*fan control profile'
 #
 # Its output (stdout and stderr merged, like "docker logs" shows it) is printed,
 # and its exit code is returned
-# Usage : CONTROLLER_OUTPUT=$(run_controller ["extended regex to wait for"])
+# A second argument asks for several matching lines rather than one, which is how
+# a test observes what the controller does on its later cycles and not only on
+# its first
+# Usage : CONTROLLER_OUTPUT=$(run_controller ["extended regex to wait for" [how many lines]])
 function run_controller() {
   local -r AWAITED_PATTERN="${1:-$CONTROLLER_TEMPERATURE_LINE_PATTERN}"
+  local -r AWAITED_MATCHES="${2:-1}"
   local -r OUTPUT_FILE="$TEST_TEMPORARY_DIRECTORY/controller_output"
   # 400 polls of 20ms : 8 seconds, only ever reached when the controller does not
   # print what the test is waiting for, which the assertions then report
@@ -102,7 +165,9 @@ function run_controller() {
 
   local EXIT_CODE=0
   (
-    cd "$REPO_ROOT" || exit 1
+    # The repository itself, unless provide_local_ipmi_device() has pointed this at
+    # the throwaway one it builds to make local mode runnable
+    cd "${CONTROLLER_WORKING_DIRECTORY:-$REPO_ROOT}" || exit 1
 
     bash ./Dell_iDRAC_fan_controller.sh > "$OUTPUT_FILE" 2>&1 &
     CONTROLLER_PID=$!
@@ -111,7 +176,8 @@ function run_controller() {
     while [ "$POLLS" -lt "$MAXIMUM_POLLS" ]; do
       # The controller stopped on its own (it refused to run, or it crashed)
       kill -0 "$CONTROLLER_PID" 2> /dev/null || break
-      grep -qE "$AWAITED_PATTERN" "$OUTPUT_FILE" && break
+      MATCHING_LINES=$(grep -cE "$AWAITED_PATTERN" "$OUTPUT_FILE")
+      [ "$MATCHING_LINES" -ge "$AWAITED_MATCHES" ] && break
       # "command -p" looks the real sleep up in the system's default PATH, the
       # mocked one being first in this shell's own PATH
       command -p sleep 0.02

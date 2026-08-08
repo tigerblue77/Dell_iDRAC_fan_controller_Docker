@@ -9,20 +9,53 @@ on:
   # already exists, instead of having to delete and re-push it
   workflow_dispatch:
 
+# Without this block the whole workflow runs on the repository-wide default
+# token. This one grants only what its two publishing steps need : "contents"
+# for the GitHub release "Generate release note" creates, "packages" for the
+# image pushed to ghcr.io. Everything else the default token may carry
+# (issues, pull requests, deployments...) is dropped
+permissions:
+  contents: write
+  packages: write
+
 jobs:
+  # The Tests workflow runs on push and pull_request, neither of which fires on
+  # a version tag : without this job a release would be built and published
+  # without a single test having run on the commit being released
+  test:
+    name: Run the test suite before publishing
+    runs-on: ubuntu-latest
+    # Reading the repository is all this job does ; publishing keeps the
+    # workflow's default token
+    permissions:
+      contents: read
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run the test suite
+        run: ./tests/run_tests.sh --summary "$GITHUB_STEP_SUMMARY"
+
   build:
     name: Build and publish Docker image to Docker Hub and GitHub Containers Repository
     runs-on: ubuntu-latest
+    # Nothing is published unless the suite passed on the tagged commit
+    needs: [test]
     # The workflow_dispatch ref dropdown offers branches too. Publishing an image
     # built from a branch would move "latest" onto unreleased code, so only run
     # when the ref is a version tag
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          # Whether this tag gets "latest" is decided by comparing it against every
+          # other tag, which the default single-commit fetch does not bring along
+          fetch-depth: 0
 
       - name: Generate release note
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
 
@@ -33,43 +66,89 @@ jobs:
           FINAL_NAME="${IMAGE_NAME/_Docker/}"
           echo "value=$FINAL_NAME" >> $GITHUB_OUTPUT
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ steps.docker_image_name.outputs.value }} # docker.io/tigerblue77/dell_idrac_fan_controller
-            ghcr.io/${{ steps.docker_image_name.outputs.value }} # ghcr.io/tigerblue77/dell_idrac_fan_controller
-          # github.ref_name is the tag name on both the push and the workflow_dispatch
-          # paths, whereas "type=ref,event=tag" only resolves on a push tag event and
-          # would leave a dispatched run with no tag at all
-          tags: |
-            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-          flavor: |
-            latest=auto
+      # Builds can run concurrently and old tags can be rebuilt on demand, so the
+      # order in which images reach the registry says nothing about their version.
+      # Only the highest version tag may claim "latest"
+      - name: Check whether this tag is the highest version
+        id: highest_version
+        run: |
+          # sort -V, not sort : lexicographically "v1.9" sorts above "v1.19"
+          HIGHEST_TAG="$(git tag --list 'v[0-9]*.[0-9]*' | sort -V | tail -1)"
+          if [ "$HIGHEST_TAG" = "$GITHUB_REF_NAME" ]; then
+            echo "$GITHUB_REF_NAME is the highest version tag, it will be published as 'latest'"
+            echo "value=true" >> $GITHUB_OUTPUT
+          else
+            echo "$GITHUB_REF_NAME is behind $HIGHEST_TAG, 'latest' will be left untouched"
+            echo "value=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Recorded as a label below. The "Base image refresh" workflow reads it
+      # back off the published image to tell whether the base moved since, so
+      # an image published here has to carry it too : without it that workflow
+      # would rebuild once for nothing after every release.
+      # Sits between the logins and "Docker meta" on purpose : it consumes the
+      # former because the base lives on Docker Hub, where anonymous requests are
+      # rate limited per IP on shared runner addresses, and the latter consumes
+      # its outputs. A step that can fail stands between a published release and
+      # a pushed image, so it had better not be one that fails for lack of
+      # credentials
+      - name: Resolve the digest of the base image
+        id: base
+        run: |
+          set -euo pipefail
+          BASE_IMAGE="$(awk 'toupper($1) == "FROM" { print $2; exit }' Dockerfile)"
+          echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')" >> "$GITHUB_OUTPUT"
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          # The two entries below are docker.io/tigerblue77/dell_idrac_fan_controller
+          # and ghcr.io/tigerblue77/dell_idrac_fan_controller. Said here rather than
+          # at the end of each line : from v6 on the action only strips a "#" that
+          # starts a line, so a trailing note would be read as part of the image name
+          images: |
+            ${{ steps.docker_image_name.outputs.value }}
+            ghcr.io/${{ steps.docker_image_name.outputs.value }}
+          # github.ref_name is the tag name on both the push and the workflow_dispatch
+          # paths, whereas "type=ref,event=tag" only resolves on a push tag event and
+          # would leave a dispatched run with no tag at all
+          tags: |
+            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ steps.highest_version.outputs.value == 'true' }}
+          # The explicit "latest" entry above is the only thing that may publish it,
+          # gated on the highest version check. latest=auto is already inert for
+          # type=raw entries - procRaw() hardcodes latest=false under auto - so this
+          # pins that behaviour rather than changing it, and keeps it pinned should a
+          # type=semver or type=ref entry ever be added here
+          flavor: |
+            latest=false
+          labels: |
+            org.opencontainers.image.base.name=${{ steps.base.outputs.image }}
+            org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
+
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build and publish Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64

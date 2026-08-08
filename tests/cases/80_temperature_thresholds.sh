@@ -4,28 +4,36 @@
 # cannot be trusted must send the server back to Dell's own dynamic profile, not
 # leave it running on the low static speed the user asked for.
 
-# CPU1_OVERHEATING and CPU2_OVERHEATING answer through their exit code and read
-# the temperature from a global, so these two wrappers keep the test cases
-# readable and give the failure diagnostic the numbers that produced it
-function assert_cpu_is_overheating() {
-  local -r CPU_NUMBER="$1"
-  local -r MESSAGE="${2:-CPU $CPU_NUMBER should be reported as overheating}"
+# is_any_CPU_overheating() answers through its exit code and reads the detected
+# CPUs from globals, so these helpers keep the test cases readable and give the
+# failure diagnostic the numbers that produced it
+function given_the_detected_cpu_temperatures() {
+  DETECTED_CPU_TEMPERATURES=("$@")
+  DETECTED_CPU_ENTITY_IDS=()
+  DETECTED_CPU_LABELS=()
 
-  if "CPU${CPU_NUMBER}_OVERHEATING"; then
+  local INDEX
+  for INDEX in "${!DETECTED_CPU_TEMPERATURES[@]}"; do
+    DETECTED_CPU_ENTITY_IDS+=("3.$((INDEX + 1))")
+    DETECTED_CPU_LABELS+=("CPU $((INDEX + 1))")
+  done
+}
+
+function assert_a_cpu_is_overheating() {
+  local -r MESSAGE="${1:-a CPU should be reported as overheating}"
+
+  if is_any_CPU_overheating; then
     pass
   else
-    local -r TEMPERATURE_VARIABLE="CPU${CPU_NUMBER}_TEMPERATURE"
-    fail "$MESSAGE" "reading:   [${!TEMPERATURE_VARIABLE}]" "threshold: [$CPU_TEMPERATURE_THRESHOLD]"
+    fail "$MESSAGE" "readings:  [${DETECTED_CPU_TEMPERATURES[*]}]" "threshold: [$CPU_TEMPERATURE_THRESHOLD]"
   fi
 }
 
-function assert_cpu_is_not_overheating() {
-  local -r CPU_NUMBER="$1"
-  local -r MESSAGE="${2:-CPU $CPU_NUMBER should not be reported as overheating}"
+function assert_no_cpu_is_overheating() {
+  local -r MESSAGE="${1:-no CPU should be reported as overheating}"
 
-  if "CPU${CPU_NUMBER}_OVERHEATING"; then
-    local -r TEMPERATURE_VARIABLE="CPU${CPU_NUMBER}_TEMPERATURE"
-    fail "$MESSAGE" "reading:   [${!TEMPERATURE_VARIABLE}]" "threshold: [$CPU_TEMPERATURE_THRESHOLD]"
+  if is_any_CPU_overheating; then
+    fail "$MESSAGE" "readings:  [${DETECTED_CPU_TEMPERATURES[*]}]" "threshold: [$CPU_TEMPERATURE_THRESHOLD]"
   else
     pass
   fi
@@ -33,47 +41,54 @@ function assert_cpu_is_not_overheating() {
 
 function test_a_cpu_temperature_below_the_threshold_is_not_overheating() {
   export CPU_TEMPERATURE_THRESHOLD=50
-  CPU1_TEMPERATURE=45
-  CPU2_TEMPERATURE=30
+  given_the_detected_cpu_temperatures 45 30
 
-  assert_cpu_is_not_overheating 1
-  assert_cpu_is_not_overheating 2
+  assert_no_cpu_is_overheating
 }
 
 function test_a_cpu_temperature_equal_to_the_threshold_is_not_overheating() {
   # The README describes the threshold as the value "beyond which" Dell's profile
   # takes over : reaching it exactly is still fine
   export CPU_TEMPERATURE_THRESHOLD=50
-  CPU1_TEMPERATURE=50
-  CPU2_TEMPERATURE=50
+  given_the_detected_cpu_temperatures 50 50
 
-  assert_cpu_is_not_overheating 1
-  assert_cpu_is_not_overheating 2
+  assert_no_cpu_is_overheating
 }
 
 function test_a_cpu_temperature_above_the_threshold_is_overheating() {
   export CPU_TEMPERATURE_THRESHOLD=50
-  CPU1_TEMPERATURE=51
-  CPU2_TEMPERATURE=51
+  given_the_detected_cpu_temperatures 51 51
 
-  assert_cpu_is_overheating 1
-  assert_cpu_is_overheating 2
+  assert_a_cpu_is_overheating
 
   # A three-digit reading must be compared as a number, not as text
-  CPU1_TEMPERATURE=100
-  CPU2_TEMPERATURE=100
+  given_the_detected_cpu_temperatures 100 100
 
-  assert_cpu_is_overheating 1 "100 degrees is above 50, not below it"
-  assert_cpu_is_overheating 2 "100 degrees is above 50, not below it"
+  assert_a_cpu_is_overheating "100 degrees is above 50, not below it"
+}
+
+function test_any_of_the_detected_cpus_can_trigger_the_fallback() {
+  # The whole point of issue #91 : a quad socket server whose CPU 3 or CPU 4 is
+  # the only hot one must still fall back on Dell's profile
+  export CPU_TEMPERATURE_THRESHOLD=50
+
+  local HOT_CPU_INDEX
+  for HOT_CPU_INDEX in 0 1 2 3; do
+    local -a READINGS=(40 40 40 40)
+    READINGS[HOT_CPU_INDEX]=75
+    given_the_detected_cpu_temperatures "${READINGS[@]}"
+
+    assert_a_cpu_is_overheating "CPU $((HOT_CPU_INDEX + 1)) alone above the threshold must trigger the fallback"
+    assert_equals "CPU $((HOT_CPU_INDEX + 1))" "${OVERHEATING_CPUS_AND_TEMPERATURES[0]}" \
+      "the comment must name the CPU that actually triggered the fallback"
+  done
 }
 
 function test_a_missing_reading_fails_safe_and_reports_overheating() {
   export CPU_TEMPERATURE_THRESHOLD=50
-  CPU1_TEMPERATURE=""
-  CPU2_TEMPERATURE=""
+  given_the_detected_cpu_temperatures "" ""
 
-  assert_cpu_is_overheating 1 "an unreadable CPU 1 must fall back on Dell's dynamic profile"
-  assert_cpu_is_overheating 2 "an unreadable CPU 2 must fall back on Dell's dynamic profile"
+  assert_a_cpu_is_overheating "an unreadable CPU must fall back on Dell's dynamic profile"
 }
 
 function test_a_non_numeric_reading_fails_safe_and_reports_overheating() {
@@ -83,11 +98,9 @@ function test_a_non_numeric_reading_fails_safe_and_reports_overheating() {
 
   local UNUSABLE_READING
   for UNUSABLE_READING in "n/a" "-" "Disabled" "4 5" "45.5" "no reading"; do
-    CPU1_TEMPERATURE="$UNUSABLE_READING"
-    CPU2_TEMPERATURE="$UNUSABLE_READING"
+    given_the_detected_cpu_temperatures "$UNUSABLE_READING" 40
 
-    assert_cpu_is_overheating 1 "an unusable CPU 1 reading must fail safe"
-    assert_cpu_is_overheating 2 "an unusable CPU 2 reading must fail safe"
+    assert_a_cpu_is_overheating "an unusable reading (\"$UNUSABLE_READING\") must fail safe"
   done
 }
 
@@ -101,28 +114,26 @@ function test_a_sub_zero_reading_is_a_reading_not_a_parsing_accident() {
 
   local SUB_ZERO_READING
   for SUB_ZERO_READING in "-1" "-10" "-40"; do
-    CPU1_TEMPERATURE="$SUB_ZERO_READING"
-    CPU2_TEMPERATURE="$SUB_ZERO_READING"
+    given_the_detected_cpu_temperatures "$SUB_ZERO_READING" "$SUB_ZERO_READING"
 
-    assert_cpu_is_not_overheating 1 "$SUB_ZERO_READING°C is below the threshold, CPU 1 is not overheating"
-    assert_cpu_is_not_overheating 2 "$SUB_ZERO_READING°C is below the threshold, CPU 2 is not overheating"
+    assert_no_cpu_is_overheating "$SUB_ZERO_READING°C is below the threshold, no CPU is overheating"
   done
 
   # And it stays a comparison, not a string match : a threshold below the
   # reading still trips, whichever side of zero they are on
   export CPU_TEMPERATURE_THRESHOLD=-20
-  CPU1_TEMPERATURE="-10"
-  assert_cpu_is_overheating 1 "-10°C is above a -20°C threshold"
+  given_the_detected_cpu_temperatures "-10"
+  assert_a_cpu_is_overheating "-10°C is above a -20°C threshold"
+
+  assert_equals " -10" "$(format_temperature_for_display "-10" 4)" "the sign is kept when printing"
 }
 
 function test_a_reading_with_a_leading_zero_is_not_read_as_octal() {
   # "09" is not a valid octal number : bash used to abort on it
   export CPU_TEMPERATURE_THRESHOLD=50
-  CPU1_TEMPERATURE="09"
-  CPU2_TEMPERATURE="08"
+  given_the_detected_cpu_temperatures "09" "08"
 
-  assert_cpu_is_not_overheating 1 "09 degrees is 9 degrees, not an invalid octal number"
-  assert_cpu_is_not_overheating 2 "08 degrees is 8 degrees, not an invalid octal number"
+  assert_no_cpu_is_overheating "09 and 08 degrees are 9 and 8 degrees, not invalid octal numbers"
 }
 
 function test_the_threshold_is_honored_whatever_its_value() {
@@ -132,12 +143,26 @@ function test_the_threshold_is_honored_whatever_its_value() {
   for THRESHOLD in 0 40 60 63 85 100; do
     export CPU_TEMPERATURE_THRESHOLD="$THRESHOLD"
 
-    CPU1_TEMPERATURE=$((THRESHOLD + 1))
-    assert_cpu_is_overheating 1 "one degree above the threshold is overheating"
+    given_the_detected_cpu_temperatures $((THRESHOLD + 1))
+    assert_a_cpu_is_overheating "one degree above the threshold is overheating"
 
-    CPU1_TEMPERATURE="$THRESHOLD"
-    assert_cpu_is_not_overheating 1 "reaching the threshold exactly is not overheating"
+    given_the_detected_cpu_temperatures "$THRESHOLD"
+    assert_no_cpu_is_overheating "reaching the threshold exactly is not overheating"
   done
+}
+
+function test_an_unreadable_reading_is_reported_as_such_and_not_as_too_hot() {
+  # Reporting "temperature is too high" on a reading that was never obtained
+  # sends the user chasing a cooling problem instead of the sensor problem they
+  # have, and contradicts the "-" printed in that CPU's own column
+  export CPU_TEMPERATURE_THRESHOLD=50
+  given_the_detected_cpu_temperatures 75 ""
+
+  assert_a_cpu_is_overheating
+  local -r COMMENT=$(build_fan_control_fallback_comment "${OVERHEATING_CPUS_AND_TEMPERATURES[@]}")
+
+  assert_contains "$COMMENT" "CPU 1 temperature is too high"
+  assert_contains "$COMMENT" "CPU 2 temperature could not be read"
 }
 
 function test_temperatures_are_printed_right_aligned_on_three_characters() {
@@ -145,6 +170,12 @@ function test_temperatures_are_printed_right_aligned_on_three_characters() {
   assert_equals " 45" "$(format_temperature_for_display 45)"
   assert_equals "100" "$(format_temperature_for_display 100)"
   assert_equals "  9" "$(format_temperature_for_display 09)" "a leading zero must not be read as octal"
+}
+
+function test_temperatures_are_printed_on_the_width_the_table_asks_for() {
+  # The CPU columns widen with their labels, so the reading has to follow
+  assert_equals "   45" "$(format_temperature_for_display 45 5)"
+  assert_equals "    -" "$(format_temperature_for_display "" 5)"
 }
 
 function test_an_unreadable_temperature_is_printed_as_a_placeholder() {
@@ -160,4 +191,151 @@ function test_an_unreadable_temperature_is_printed_as_a_placeholder() {
   assert_equals " -1" "$(format_temperature_for_display "-1")"
   assert_equals "-10" "$(format_temperature_for_display "-10")"
   assert_equals "-40" "$(format_temperature_for_display "-40")"
+}
+
+# The comment the controller prints when it hands the fans back to Dell. It is
+# the only thing telling the user WHY : a server that is genuinely hot, or a
+# sensor that stopped answering. Getting that wrong sends someone looking for a
+# cooling problem they do not have, or ignoring one they do.
+#
+# The "too high" half of it is already exercised end to end in 90_integration.sh;
+# what follows covers the "could not be read" half, which is what #163 added, and
+# the mixed case where both reasons hold at once.
+#
+# The function is only ever called with CPUs the controller has already decided
+# are overheating, so a valid reading here means "genuinely too hot" and an
+# invalid one means "unreadable, failed safe".
+
+readonly FAN_CONTROL_FALLBACK_ACTION="Dell default dynamic fan control profile applied for safety"
+
+function test_the_fallback_comment_names_the_cpu_that_is_too_hot() {
+  assert_equals "CPU 1 temperature is too high, $FAN_CONTROL_FALLBACK_ACTION" \
+    "$(build_fan_control_fallback_comment "CPU 1" "70")"
+
+  assert_equals "CPU 2 temperature is too high, $FAN_CONTROL_FALLBACK_ACTION" \
+    "$(build_fan_control_fallback_comment "CPU 2" "70")"
+}
+
+function test_the_fallback_comment_puts_two_hot_cpus_in_the_plural() {
+  assert_equals "CPU 1 and CPU 2 temperatures are too high, $FAN_CONTROL_FALLBACK_ACTION" \
+    "$(build_fan_control_fallback_comment "CPU 1" "70" "CPU 2" "80")"
+}
+
+function test_the_fallback_comment_says_when_a_reading_could_not_be_read() {
+  # The reason #163 exists : the fans ramping up because a sensor dropped out is
+  # not the same event as the server being hot, and the log must not conflate them
+  local -r COMMENT="$(build_fan_control_fallback_comment "CPU 1" "")"
+
+  assert_equals "CPU 1 temperature could not be read, $FAN_CONTROL_FALLBACK_ACTION" "$COMMENT"
+  assert_not_contains "$COMMENT" "too high" \
+    "an unreadable sensor must not be reported as an overheating CPU"
+}
+
+function test_the_fallback_comment_puts_two_unreadable_cpus_in_the_plural() {
+  assert_equals "CPU 1 and CPU 2 temperatures could not be read, $FAN_CONTROL_FALLBACK_ACTION" \
+    "$(build_fan_control_fallback_comment "CPU 1" "" "CPU 2" "")"
+}
+
+function test_the_fallback_comment_tells_a_hot_cpu_from_an_unreadable_one() {
+  # Both reasons hold at once : one CPU is genuinely too hot, the other's sensor
+  # stopped answering. The comment must carry both, and attribute each to the
+  # right CPU rather than collapsing them
+  assert_equals "CPU 1 temperature is too high and CPU 2 temperature could not be read, $FAN_CONTROL_FALLBACK_ACTION" \
+    "$(build_fan_control_fallback_comment "CPU 1" "70" "CPU 2" "")"
+
+  # The reasons are grouped by kind, not by CPU order : whichever CPU is hot is
+  # named first, so swapping the roles swaps the order of the two halves
+  assert_equals "CPU 2 temperature is too high and CPU 1 temperature could not be read, $FAN_CONTROL_FALLBACK_ACTION" \
+    "$(build_fan_control_fallback_comment "CPU 1" "" "CPU 2" "80")"
+}
+
+function test_every_shape_of_unusable_reading_is_reported_as_unreadable() {
+  # Whatever the sensor answered, if it is not a number it is not a temperature
+  local UNUSABLE_READING
+  for UNUSABLE_READING in "" "-" "n/a" "Disabled" "45.5" "no reading"; do
+    assert_equals "CPU 1 temperature could not be read, $FAN_CONTROL_FALLBACK_ACTION" \
+      "$(build_fan_control_fallback_comment "CPU 1" "$UNUSABLE_READING")" \
+      "\"$UNUSABLE_READING\" is not a reading"
+  done
+}
+
+function test_the_fallback_comment_always_says_what_was_done_about_it() {
+  # Whichever branch produced the reason, the user must be told the fans were
+  # handed back to Dell's own profile
+  local -r COMMENTS=(
+    "$(build_fan_control_fallback_comment "CPU 1" "70")"
+    "$(build_fan_control_fallback_comment "CPU 1" "")"
+    "$(build_fan_control_fallback_comment "CPU 1" "70" "CPU 2" "80")"
+    "$(build_fan_control_fallback_comment "CPU 1" "" "CPU 2" "")"
+    "$(build_fan_control_fallback_comment "CPU 1" "70" "CPU 2" "")"
+  )
+
+  local COMMENT
+  for COMMENT in "${COMMENTS[@]}"; do
+    assert_contains "$COMMENT" "$FAN_CONTROL_FALLBACK_ACTION"
+  done
+}
+
+function test_reasons_are_joined_the_way_a_sentence_is() {
+  # join_with_and builds every list above. Its three-and-more branch is not
+  # reachable with two CPUs, but it is written, and it is what a controller
+  # monitoring every socket would use
+  assert_equals "CPU 1" "$(join_with_and "CPU 1")"
+  assert_equals "CPU 1 and CPU 2" "$(join_with_and "CPU 1" "CPU 2")"
+  assert_equals "CPU 1, CPU 2 and CPU 3" "$(join_with_and "CPU 1" "CPU 2" "CPU 3")"
+  assert_equals "CPU 1, CPU 2, CPU 3 and CPU 4" "$(join_with_and "CPU 1" "CPU 2" "CPU 3" "CPU 4")"
+}
+
+function test_an_unusable_threshold_fails_safe_like_an_unusable_reading() {
+  # The decision compares two operands and "-gt" fails the same way on either
+  # side. A failing test returns non-zero, which the caller reads as "not
+  # overheating" -- the one answer that leaves a hot CPU on the user's low fan
+  # speed. The reading side has been guarded since #134; this is the other side.
+  #
+  # Dell_iDRAC_fan_controller.sh validates the threshold before the loop starts
+  # and makes it readonly, so the container cannot reach this state today. The
+  # guard is what keeps the answer safe without depending on that
+  given_the_detected_cpu_temperatures 95 95
+
+  local UNUSABLE_THRESHOLD
+  for UNUSABLE_THRESHOLD in "" "abc" "60°C" "60C" "50.5" "1e2"; do
+    export CPU_TEMPERATURE_THRESHOLD="$UNUSABLE_THRESHOLD"
+    assert_a_cpu_is_overheating \
+      "CPUs at 95°C must fall back on Dell's profile when the threshold is \"$UNUSABLE_THRESHOLD\""
+  done
+}
+
+function test_an_unusable_threshold_names_every_cpu_in_the_fallback_comment() {
+  # The comment is what the user has to diagnose the fallback with, so it must
+  # still name the CPUs rather than come out empty
+  export CPU_TEMPERATURE_THRESHOLD="abc"
+  given_the_detected_cpu_temperatures 45 46
+
+  is_any_CPU_overheating
+
+  assert_equals "CPU 1 45 CPU 2 46" "${OVERHEATING_CPUS_AND_TEMPERATURES[*]}" \
+    "every CPU should be reported when the threshold itself cannot be compared against"
+}
+
+function test_a_usable_threshold_still_decides_normally() {
+  # The added guard must not turn every comparison into an overheat
+  export CPU_TEMPERATURE_THRESHOLD=50
+
+  given_the_detected_cpu_temperatures 45 30
+  assert_no_cpu_is_overheating
+
+  given_the_detected_cpu_temperatures 45 95
+  assert_a_cpu_is_overheating
+}
+
+function test_a_threshold_with_a_leading_zero_is_not_read_as_octal() {
+  # "070" would be an invalid octal number to bash's "-gt". The threshold reaches
+  # the loop already normalized, so this only matters if it ever stops being
+  export CPU_TEMPERATURE_THRESHOLD="070"
+
+  given_the_detected_cpu_temperatures 65
+  assert_no_cpu_is_overheating "070°C is 70°C, so a CPU at 65°C is not overheating"
+
+  given_the_detected_cpu_temperatures 75
+  assert_a_cpu_is_overheating "070°C is 70°C, so a CPU at 75°C is overheating"
 }

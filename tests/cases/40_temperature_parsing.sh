@@ -58,10 +58,11 @@ function test_the_sign_survives_the_whole_read_not_just_the_extraction() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "-40 -5" --inlet -3 --exhaust 12)
 
-  retrieve_temperatures true true
+  detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  retrieve_temperatures
 
-  assert_equals "-40" "$CPU1_TEMPERATURE"
-  assert_equals "-5" "$CPU2_TEMPERATURE"
+  assert_equals "-40" "${DETECTED_CPU_TEMPERATURES[0]}"
+  assert_equals "-5" "${DETECTED_CPU_TEMPERATURES[1]}"
   assert_equals "-3" "$INLET_TEMPERATURE"
   assert_equals "-40;-5" "$CPUS_TEMPERATURES"
 }
@@ -129,10 +130,21 @@ function test_inlet_and_exhaust_are_told_apart_by_their_name() {
   assert_equals "36" "$(retrieve_temperature_by_sensor_name "$SDR_DATA" "Exhaust")"
 }
 
-function test_the_last_matching_sensor_wins_when_several_share_a_name() {
-  # Big chassis report one inlet sensor per power supply on top of the main one
+function test_a_power_supplys_own_intake_does_not_answer_for_the_chassis_one() {
+  # Most servers with redundant power supplies report "PSU1 Inlet Temp" and
+  # "PSU2 Inlet Temp" alongside the chassis "Inlet Temp". All three contain
+  # "Inlet", so a match anywhere on the line let a power supply's own intake --
+  # several degrees hotter, sitting downstream of its own losses -- be displayed
+  # as the server's air intake (issue #231).
+  #
+  # This test used to assert the opposite. It was written while building the
+  # suite, took the behaviour for intentional because the comment above it said
+  # "on the unexpected event of several sensors matching", and pinned a defect
+  # instead of reporting it
   local -r SDR_DATA=$(make_sdr_output --inlet 21 --exhaust 36 --with-extra-sensors)
 
-  assert_equals "30" "$(retrieve_temperature_by_sensor_name "$SDR_DATA" "Inlet")" \
-    "PSU2 Inlet Temp is the last line matching \"Inlet\""
+  assert_equals "21" "$(retrieve_temperature_by_sensor_name "$SDR_DATA" "Inlet")" \
+    "the chassis air intake is what the Inlet column is about"
+  assert_equals "36" "$(retrieve_temperature_by_sensor_name "$SDR_DATA" "Exhaust")" \
+    "the exhaust sensor is unaffected, but goes through the same matching rule"
 }

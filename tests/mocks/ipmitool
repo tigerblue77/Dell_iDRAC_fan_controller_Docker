@@ -32,9 +32,27 @@
 #                                            temperatures change between two cycles
 #   MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS     when to switch (default 1)
 #   MOCK_IPMITOOL_POWER_STATUS     stdout of "ipmitool chassis power status"
+#   MOCK_IPMITOOL_POWER_STATUS_SEQUENCE      power states returned one per call,
+#                                            the last one repeating, so that a
+#                                            running controller can be made to
+#                                            see its target server switched off
+#                                            and back on ("on on off on on")
 #   MOCK_IPMITOOL_POWER_EXIT_CODE  its exit code (default 0)
+#   MOCK_IPMITOOL_POWER_EXIT_CODE_SEQUENCE   exit codes returned one per call, the
+#                                            last one repeating, so that a running
+#                                            controller can be made to see its
+#                                            iDRAC become unreachable and then
+#                                            answer again ("0 1 1 0"). A non-zero
+#                                            entry is an unreachable iDRAC, which
+#                                            is not the same event as a chassis
+#                                            reporting itself powered off
 #   MOCK_IPMITOOL_RAW_STDERR       stderr printed by every "ipmitool raw" call
 #   MOCK_IPMITOOL_RAW_EXIT_CODE    exit code of every "ipmitool raw" call
+#   MOCK_IPMITOOL_RAW_FAIL_ONLY_ONCE  when "true", only the FIRST command matching
+#                                  MOCK_IPMITOOL_RAW_FAIL_PATTERN fails and the
+#                                  following ones succeed, reproducing a transient
+#                                  failure (an iDRAC being reset, a network glitch)
+#                                  rather than a command the BMC does not implement
 #   MOCK_IPMITOOL_RAW_FAIL_PATTERN extended regex matched against the raw
 #                                  command's arguments. When it matches, that
 #                                  single command fails with
@@ -108,6 +126,35 @@ case "$SUB_COMMAND" in
     ;;
 
   chassis)
+    # An unreachable iDRAC answers on stderr and exits non-zero, so the sequence drives both together
+    if [ -n "${MOCK_IPMITOOL_POWER_EXIT_CODE_SEQUENCE:-}" ] && [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
+      POWER_CALL_NUMBER=$(grep -c ' chassis ' "$MOCK_IPMITOOL_CALL_LOG")
+      read -r -a POWER_EXIT_CODES <<< "$MOCK_IPMITOOL_POWER_EXIT_CODE_SEQUENCE"
+      if [ "$POWER_CALL_NUMBER" -gt "${#POWER_EXIT_CODES[@]}" ]; then
+        POWER_CALL_NUMBER=${#POWER_EXIT_CODES[@]}
+      fi
+      POWER_EXIT_CODE="${POWER_EXIT_CODES[POWER_CALL_NUMBER - 1]}"
+
+      if [ "$POWER_EXIT_CODE" -ne 0 ]; then
+        printf 'Error: Unable to establish IPMI v2 / RMCP+ session\n' >&2
+      else
+        printf '%s\n' "${MOCK_IPMITOOL_POWER_STATUS-Chassis Power is on}"
+      fi
+      exit "$POWER_EXIT_CODE"
+    fi
+
+    if [ -n "${MOCK_IPMITOOL_POWER_STATUS_SEQUENCE:-}" ] && [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
+      # The current call is already in the log, so this counts it too
+      POWER_CALL_NUMBER=$(grep -c ' chassis ' "$MOCK_IPMITOOL_CALL_LOG")
+      read -r -a POWER_STATES <<< "$MOCK_IPMITOOL_POWER_STATUS_SEQUENCE"
+      # The last state repeats, so a sequence describes a transition then a steady state
+      if [ "$POWER_CALL_NUMBER" -gt "${#POWER_STATES[@]}" ]; then
+        POWER_CALL_NUMBER=${#POWER_STATES[@]}
+      fi
+      printf 'Chassis Power is %s\n' "${POWER_STATES[POWER_CALL_NUMBER - 1]}"
+      exit "${MOCK_IPMITOOL_POWER_EXIT_CODE:-0}"
+    fi
+
     # Set but empty means "the iDRAC answered nothing", which is not the same as
     # unset, so the fallback deliberately does not use the ":-" form here
     printf '%s\n' "${MOCK_IPMITOOL_POWER_STATUS-Chassis Power is on}"
@@ -118,8 +165,22 @@ case "$SUB_COMMAND" in
     RAW_ARGUMENTS="${ARGUMENTS[*]:1}"
     if [ -n "${MOCK_IPMITOOL_RAW_FAIL_PATTERN:-}" ] &&
       [[ "$RAW_ARGUMENTS" =~ $MOCK_IPMITOOL_RAW_FAIL_PATTERN ]]; then
-      printf '%s\n' "${MOCK_IPMITOOL_RAW_FAIL_STDERR:-Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state}" >&2
-      exit "${MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE:-1}"
+      SHOULD_FAIL=true
+
+      # A transient failure : only the first matching command is refused. The
+      # current call is already in the log, so a count above one means this is not
+      # the first one any more
+      if [ "${MOCK_IPMITOOL_RAW_FAIL_ONLY_ONCE:-false}" == "true" ] && [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
+        MATCHING_CALLS=$(grep -cE -- "$MOCK_IPMITOOL_RAW_FAIL_PATTERN" "$MOCK_IPMITOOL_CALL_LOG")
+        if [ "$MATCHING_CALLS" -gt 1 ]; then
+          SHOULD_FAIL=false
+        fi
+      fi
+
+      if $SHOULD_FAIL; then
+        printf '%s\n' "${MOCK_IPMITOOL_RAW_FAIL_STDERR:-Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state}" >&2
+        exit "${MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE:-1}"
+      fi
     fi
     if [ -n "${MOCK_IPMITOOL_RAW_STDERR:-}" ]; then
       printf '%s\n' "$MOCK_IPMITOOL_RAW_STDERR" >&2
