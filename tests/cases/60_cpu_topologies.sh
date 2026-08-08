@@ -403,3 +403,26 @@ function test_adopting_a_lower_entity_shifts_the_labels_above_it() {
   assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}"
   assert_equals "CPU 1 CPU 2 CPU 3 CPU 4" "${DETECTED_CPU_LABELS[*]}" "entity 3.3 is now CPU 3"
 }
+
+function test_removing_a_lower_entity_shifts_the_labels_above_it_too() {
+  # The direction that needs no CPU added at all : a socket other than the last
+  # one loses its CPU, and every surviving socket above it moves down a number.
+  # Entity 3.3 was CPU 3 and becomes CPU 2, which is exactly the case the removal
+  # rule already supports -- across a power cycle, once enough readings agree
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
+  detect_then_retrieve_temperatures
+  assert_equals "CPU 1 CPU 2 CPU 3 CPU 4" "${DETECTED_CPU_LABELS[*]}"
+
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 42 43" --cpu2-disabled)
+  IS_CPU_REMOVAL_ALLOWED=true
+  PENDING_CPU_REMOVAL_SIGNATURE=""
+
+  local READING
+  for ((READING = 1; READING <= CPU_REMOVAL_CONFIRMING_READINGS; READING++)); do
+    refresh_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  done
+
+  assert_equals "3.1 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "the socket 2 CPU is gone"
+  assert_equals "CPU 1 CPU 2 CPU 3" "${DETECTED_CPU_LABELS[*]}" "entity 3.3 was CPU 3 and is now CPU 2"
+}
