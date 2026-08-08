@@ -66,7 +66,7 @@ tests/
 │   ├── fixtures.sh                 builders for the ipmitool outputs (FRU, SDR)
 │   ├── harness.sh                  the environment a test case runs in, and its helpers
 │   └── reports.sh                  the JUnit XML and Markdown reports
-└── mocks/                          fake ipmitool, date and sleep, put first in the PATH
+└── mocks/                          fake ipmitool and sleep, put first in the PATH
 ```
 
 Each test case runs in its own subshell, starting from the environment

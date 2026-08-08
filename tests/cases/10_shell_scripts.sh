@@ -23,6 +23,29 @@ function test_every_shell_script_has_a_valid_syntax() {
   done
 }
 
+function test_no_quoted_command_substitution_opens_a_quoted_argument() {
+  # A `"$( ... " ... " ... )"` -- a command substitution carrying double quotes,
+  # opening an argument that is itself double-quoted -- is what lets a SIGTERM
+  # delivered at that exact instant leave bash's parser mid-substitution. The
+  # trap command string is then parsed with that state still open, fails to
+  # parse, and graceful_exit never runs : the container dies leaving the fans on
+  # the user's static speed (issue #188). Measured at 9 stops out of 200 while
+  # the shipped scripts still carried the construct.
+  #
+  # This only recognizes the shape every observed failure had, so it is a guard
+  # against reintroducing it rather than a proof that bash cannot be tripped some
+  # other way. Compute the value into a variable and print the variable instead
+  local SCRIPT
+  for SCRIPT in "$REPO_ROOT"/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+
+    local OFFENDING_LINES
+    OFFENDING_LINES=$(grep -nE '"\$\([^)]*"' "$SCRIPT" || true)
+    assert_empty "$OFFENDING_LINES" \
+      "${SCRIPT#$REPO_ROOT/} opens a quoted argument with a command substitution that carries quotes"
+  done
+}
+
 function test_sourcing_functions_only_declares_functions() {
   # functions.sh is sourced by the controller, by the healthcheck and by this
   # suite : it must not run anything nor print anything on its own

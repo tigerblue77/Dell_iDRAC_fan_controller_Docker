@@ -415,15 +415,26 @@ function print_temperature_array_line() {
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
 
-  printf "%19s  %s°C " "$(date +"%d-%m-%Y %T")" "$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")"
+  # Every value is computed into a variable before being printed rather than substituted inside the
+  # printf arguments : a command substitution carrying double quotes, nested inside an argument that is
+  # itself double-quoted, is what lets a signal delivered at that instant take the graceful exit down
+  # with it (issue #188). The timestamp uses bash's own strftime for the same reason, which also saves
+  # a fork per printed line
+  local TIMESTAMP FORMATTED_TEMPERATURE
+  printf -v TIMESTAMP '%(%d-%m-%Y %T)T' -1
+
+  FORMATTED_TEMPERATURE=$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")
+  printf "%19s  %s°C " "$TIMESTAMP" "$FORMATTED_TEMPERATURE"
   # Itération sur les températures dans le tableau
   for temperature in "${CPUs_temperatures_array[@]}"; do
-    printf " %s°C " "$(format_temperature_for_display "$temperature")"
+    FORMATTED_TEMPERATURE=$(format_temperature_for_display "$temperature")
+    printf " %s°C " "$FORMATTED_TEMPERATURE"
   done
 
   # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
   # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
-  printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+  FORMATTED_TEMPERATURE=$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")
+  printf " %5s°C  %40s  %51s  %s\n" "$FORMATTED_TEMPERATURE" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
 # Formats a temperature reading as a right-aligned, 3-character-wide decimal number for display.
@@ -433,7 +444,9 @@ function print_temperature_array_line() {
 function format_temperature_for_display() {
   local -r VALUE="$1"
   if is_temperature_reading_valid "$VALUE"; then
-    printf '%3d' "$(normalize_decimal_value "$VALUE")"
+    local NORMALIZED_VALUE
+    NORMALIZED_VALUE=$(normalize_decimal_value "$VALUE")
+    printf '%3d' "$NORMALIZED_VALUE"
   else
     printf '%3s' "-"
   fi
@@ -455,11 +468,15 @@ function is_temperature_reading_valid() {
 # input) or silently running the low user fan speed on unverified data
 function CPU1_OVERHEATING() {
   is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
-  [ "$(normalize_decimal_value "$CPU1_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  local NORMALIZED_TEMPERATURE
+  NORMALIZED_TEMPERATURE=$(normalize_decimal_value "$CPU1_TEMPERATURE")
+  [ "$NORMALIZED_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
 function CPU2_OVERHEATING() {
   is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
-  [ "$(normalize_decimal_value "$CPU2_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+  local NORMALIZED_TEMPERATURE
+  NORMALIZED_TEMPERATURE=$(normalize_decimal_value "$CPU2_TEMPERATURE")
+  [ "$NORMALIZED_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
 
 # Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
@@ -502,19 +519,24 @@ function build_fan_control_fallback_comment() {
     shift 2
   done
 
+  local enumeration
+
   if (( ${#too_hot[@]} == 1 )); then
     reasons+=("${too_hot[0]} temperature is too high")
   elif (( ${#too_hot[@]} > 1 )); then
-    reasons+=("$(join_with_and "${too_hot[@]}") temperatures are too high")
+    enumeration=$(join_with_and "${too_hot[@]}")
+    reasons+=("$enumeration temperatures are too high")
   fi
 
   if (( ${#unreadable[@]} == 1 )); then
     reasons+=("${unreadable[0]} temperature could not be read")
   elif (( ${#unreadable[@]} > 1 )); then
-    reasons+=("$(join_with_and "${unreadable[@]}") temperatures could not be read")
+    enumeration=$(join_with_and "${unreadable[@]}")
+    reasons+=("$enumeration temperatures could not be read")
   fi
 
-  echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
+  enumeration=$(join_with_and "${reasons[@]}")
+  echo "$enumeration, Dell default dynamic fan control profile applied for safety"
 }
 
 function print_error() {

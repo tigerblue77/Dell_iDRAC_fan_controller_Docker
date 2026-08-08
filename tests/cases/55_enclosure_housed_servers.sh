@@ -225,7 +225,7 @@ function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_sa
     "an unreadable CPU must fall back on Dell's own profile"
   # The enclosure does measure its own inlet, so that column is filled : the
   # empty one is the CPU column right after it, no processor entity being reported
-  assert_matches "$OUTPUT" '01-01-2024 00:00:00[[:space:]]+22°C[[:space:]]+-°C' \
+  assert_matches "$OUTPUT" "$CONTROLLER_TIMESTAMP_PATTERN[[:space:]]+22°C[[:space:]]+-°C" \
     "the enclosure reports no processor entity, the CPU column stays empty"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
     "manual fan control must never be enabled on readings the controller never got"

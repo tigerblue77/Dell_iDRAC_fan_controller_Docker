@@ -120,7 +120,11 @@ while true; do
   # temperatures (they would be meaningless) and don't apply any fan control profile
   if $NETWORK_MODE && ! is_server_powered_on; then
     IS_TARGET_SERVER_POWERED_OFF=true
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+    # Same reason as in print_temperature_array_line: bash's own strftime instead of a "$(date ...)"
+    # nested in a quoted argument, which a signal delivered right then can turn into a parse error
+    # that takes the graceful exit down with it (issue #188)
+    printf -v TIMESTAMP '%(%d-%m-%Y %T)T' -1
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
 
     wait $SLEEP_PROCESS_PID
 
