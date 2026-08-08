@@ -273,3 +273,116 @@ function test_an_applied_profile_still_reports_itself_as_applied() {
   assert_equals "0" "$EXIT_CODE"
   assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE"
 }
+
+function fan_commands_sent() {
+  printf '%s' "$(( $(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00") \
+    + $(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0xff") \
+    + $(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01") ))"
+}
+
+function test_an_unchanged_profile_is_not_re_sent_every_cycle() {
+  # The commands are idempotent and the value is identical on every cycle, so
+  # re-sending it is pure IPMI traffic -- the traffic that makes network mode
+  # sensitive to the iDRAC's session limit
+  DECIMAL_FAN_SPEED=5
+  HEXADECIMAL_FAN_SPEED="0x05"
+
+  apply_user_fan_control_profile
+  local -r AFTER_FIRST=$(fan_commands_sent)
+  assert_equals "2" "$AFTER_FIRST" "the first cycle has to send both commands"
+
+  apply_user_fan_control_profile
+  apply_user_fan_control_profile
+  apply_user_fan_control_profile
+
+  assert_equals "$AFTER_FIRST" "$(fan_commands_sent)" \
+    "an unchanged profile must cost no IPMI command at all"
+  assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE" \
+    "the table still names the profile every cycle, only the command is skipped"
+}
+
+function test_a_changed_profile_is_sent_at_once() {
+  # Waiting out a refresh interval before acting on a real change would leave the
+  # fans on the wrong profile for up to a minute, which is the opposite of the point
+  DECIMAL_FAN_SPEED=5
+  HEXADECIMAL_FAN_SPEED="0x05"
+
+  apply_user_fan_control_profile
+  local -r AFTER_USER=$(fan_commands_sent)
+
+  apply_Dell_default_fan_control_profile
+  assert_equals "$((AFTER_USER + 1))" "$(fan_commands_sent)" \
+    "switching to Dell's profile must go out immediately"
+
+  apply_user_fan_control_profile
+  assert_equals "$((AFTER_USER + 3))" "$(fan_commands_sent)" \
+    "and switching back must too"
+}
+
+function test_a_changed_speed_is_sent_at_once() {
+  # Same profile, different percentage : still a different command
+  DECIMAL_FAN_SPEED=5
+  HEXADECIMAL_FAN_SPEED="0x05"
+  apply_user_fan_control_profile
+  local -r AFTER_FIRST=$(fan_commands_sent)
+
+  DECIMAL_FAN_SPEED=30
+  HEXADECIMAL_FAN_SPEED="0x1e"
+  apply_user_fan_control_profile
+
+  assert_equals "$((AFTER_FIRST + 2))" "$(fan_commands_sent)" \
+    "a new speed is a new command, whatever the profile is called"
+}
+
+function test_the_profile_is_re_sent_once_the_refresh_interval_has_elapsed() {
+  # The safety net : some BMC firmwares take fan control back on their own, and
+  # nothing else in the container would notice
+  DECIMAL_FAN_SPEED=5
+  HEXADECIMAL_FAN_SPEED="0x05"
+
+  apply_user_fan_control_profile
+  local -r AFTER_FIRST=$(fan_commands_sent)
+
+  SECONDS_SINCE_FAN_CONTROL_PROFILE_SENT=$FAN_CONTROL_PROFILE_REFRESH_INTERVAL_IN_SECONDS
+  apply_user_fan_control_profile
+
+  assert_equals "$((AFTER_FIRST + 2))" "$(fan_commands_sent)" \
+    "an elapsed refresh interval must put the profile back on the wire"
+  assert_equals "0" "$SECONDS_SINCE_FAN_CONTROL_PROFILE_SENT" \
+    "and restart the delay"
+}
+
+function test_a_refused_profile_is_retried_on_the_very_next_cycle() {
+  # A command that was refused never reached the BMC, so it has not earned the
+  # refresh interval : deferring the retry would leave the fans unmanaged for it
+  DECIMAL_FAN_SPEED=5
+  HEXADECIMAL_FAN_SPEED="0x05"
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+
+  apply_user_fan_control_profile 2>/dev/null
+  local -r AFTER_FIRST=$(fan_commands_sent)
+
+  apply_user_fan_control_profile 2>/dev/null
+
+  assert_equals "$((AFTER_FIRST + 2))" "$(fan_commands_sent)" \
+    "a refused profile must be retried at once, not deferred to the next refresh"
+}
+
+function test_the_pcie_cooling_response_is_not_re_sent_every_cycle() {
+  # Its input is an environment variable, which cannot change while the container
+  # runs : this was the purest of the redundant commands, the same request re-sent
+  # for the life of the container
+  DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
+
+  should_send_PCIe_cooling_response "Enabled" && record_sent_PCIe_cooling_response "Enabled"
+  assert_command_fails "an unchanged request must not be re-sent" \
+    should_send_PCIe_cooling_response "Enabled"
+
+  assert_command_succeeds "a changed request goes out at once" \
+    should_send_PCIe_cooling_response "Disabled"
+
+  SECONDS_SINCE_PCIE_COOLING_RESPONSE_SENT=$FAN_CONTROL_PROFILE_REFRESH_INTERVAL_IN_SECONDS
+  assert_command_succeeds "and the refresh puts it back on the wire" \
+    should_send_PCIe_cooling_response "Enabled"
+}

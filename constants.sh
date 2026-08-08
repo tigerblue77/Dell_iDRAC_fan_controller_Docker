@@ -64,3 +64,15 @@ readonly COOLING_RESPONSE_COLUMN_WIDTH=51
 # before killing it outright. Docker's own grace period is 10 seconds by default, so this has to stay
 # comfortably inside it or the container is SIGKILLed as a whole before the supervisor gets to act
 readonly SUPERVISOR_GRACE_PERIOD_IN_SECONDS=3
+
+# How long a fan control profile may go without being re-sent to the BMC, in seconds.
+#
+# The profile only has to be sent when it changes : the commands are idempotent and the value is the
+# same on every cycle. Re-sending it is nonetheless kept, at a much lower rate, because some iDRAC and
+# BMC firmwares take fan control back on their own -- after an internal watchdog, a reset, or a firmware
+# update -- and nothing else would notice. Sending only on change would remove that safety net, and the
+# failure would be silent : fans louder than configured, no log line, nothing wrong on the surface.
+#
+# Bounded on its own terms rather than tied to CHECK_INTERVAL : the two answer different questions,
+# "how fast do I react to heat" and "how long may a BMC hold the fans before I correct it"
+readonly FAN_CONTROL_PROFILE_REFRESH_INTERVAL_IN_SECONDS=60

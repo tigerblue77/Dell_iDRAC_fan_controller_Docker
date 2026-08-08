@@ -568,15 +568,25 @@ while true; do
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
     if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
       REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Disabled"
-      disable_third_party_PCIe_card_Dell_default_cooling_response
     else
       REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Enabled"
+    fi
+
+    # Its input is an environment variable, so the request is identical on every cycle : send it when it
+    # changes and on the periodic refresh, and keep reporting the state the server was left in otherwise
+    if ! should_send_PCIe_cooling_response "$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"; then
+      : # nothing to send, the status column keeps the value the last send left it
+    else
+    if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
+      disable_third_party_PCIe_card_Dell_default_cooling_response
+    else
       enable_third_party_PCIe_card_Dell_default_cooling_response
     fi
     # The status of the command the branch above just ran
     THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE=$?
 
     if [ $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE -eq 0 ]; then
+      record_sent_PCIe_cooling_response "$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
 
       if "$MONITORING_ONLY_MODE"; then
@@ -592,6 +602,7 @@ while true; do
       # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
     fi
+    fi
   fi
 
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
@@ -604,6 +615,10 @@ while true; do
   ((TABLE_HEADER_PRINT_COUNTER++))
 
   wait $SLEEP_PROCESS_PID
+
+  # A cycle has gone by, so the profile is that much closer to its periodic refresh
+  (( SECONDS_SINCE_FAN_CONTROL_PROFILE_SENT += CHECK_INTERVAL_IN_SECONDS ))
+  (( SECONDS_SINCE_PCIE_COOLING_RESPONSE_SENT += CHECK_INTERVAL_IN_SECONDS ))
 
   # Start timer in background for next cycle
   sleep "$CHECK_INTERVAL" &

@@ -245,10 +245,14 @@ function test_a_transient_ipmi_failure_does_not_disable_the_cooling_response_for
     "the server recovered, so the setting must be applied and reported again"
   assert_not_contains "$OUTPUT" "Not supported by this server" \
     "one glitch is not a verdict"
-  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 4 ]; then
+  # The retry is what matters, not how many times the command is repeated afterwards.
+  # A request that did not go through is not recorded as sent, so it goes out again on
+  # the very next cycle ; once it lands, it is only repeated on the periodic refresh
+  # rather than on every cycle
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 2 ]; then
     pass
   else
-    fail "the controller must keep sending the command after a transient refusal" \
+    fail "the controller must send the command again after a transient refusal" \
       "calls: $(recorded_ipmitool_calls)"
   fi
 }

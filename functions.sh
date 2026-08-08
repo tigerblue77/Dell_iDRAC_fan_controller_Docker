@@ -11,16 +11,78 @@ function apply_Dell_default_fan_control_profile() {
   # message...") even when the command actually succeeds. Rather than discard stderr unconditionally (which
   # would also hide a genuine failure to apply this safety-critical profile), capture it and only surface it
   # if the command actually failed (non-zero exit code)
-  local ipmitool_stderr
-  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 2>&1 >/dev/null)
-  if [ $? -ne 0 ]; then
-    print_error "Failed to apply Dell default fan control profile. ipmitool said: $ipmitool_stderr"
-    # The table says what the server is actually doing, not what was attempted : this profile is the
-    # safety fallback, so claiming it while the command was refused is the one lie that matters here
-    CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (not applied)"
-    return 1
+  if should_send_fan_control_profile "Dell"; then
+    local ipmitool_stderr
+    ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 2>&1 >/dev/null)
+    if [ $? -ne 0 ]; then
+      print_error "Failed to apply Dell default fan control profile. ipmitool said: $ipmitool_stderr"
+      # The table says what the server is actually doing, not what was attempted : this profile is the
+      # safety fallback, so claiming it while the command was refused is the one lie that matters here
+      CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (not applied)"
+      return 1
+    fi
+    record_sent_fan_control_profile "Dell"
   fi
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
+}
+
+# What was last actually sent to the BMC, and how long ago. Empty means nothing has been sent yet
+LAST_SENT_FAN_CONTROL_COMMAND=""
+SECONDS_SINCE_FAN_CONTROL_PROFILE_SENT=0
+
+# Same gating for the third-party PCIe card cooling response, on its own clock
+LAST_SENT_PCIE_COOLING_RESPONSE=""
+SECONDS_SINCE_PCIE_COOLING_RESPONSE_SENT=0
+
+# Returns 0 (true) if the PCIe cooling response has to be sent on this cycle, 1 (false) otherwise
+# Usage : should_send_PCIe_cooling_response "$REQUESTED_STATE"
+#
+# Its input is an environment variable, which cannot change while the container runs, so this command
+# was the purest of the redundant ones : the same request re-sent every cycle for the life of the
+# container. It keeps the same periodic refresh as the fan profile, for the same reason -- a BMC that
+# was reset comes back with its own default rather than the state the user asked for
+function should_send_PCIe_cooling_response() {
+  local -r REQUESTED_STATE="$1"
+
+  [ "$REQUESTED_STATE" != "$LAST_SENT_PCIE_COOLING_RESPONSE" ] && return 0
+  [ "$SECONDS_SINCE_PCIE_COOLING_RESPONSE_SENT" -ge "$FAN_CONTROL_PROFILE_REFRESH_INTERVAL_IN_SECONDS" ]
+}
+
+# Record that the PCIe cooling response has just reached the BMC, restarting its refresh delay
+# Usage : record_sent_PCIe_cooling_response "$REQUESTED_STATE"
+#
+# Only called on success, like its fan profile counterpart : a request that did not go through has not
+# earned a refresh interval, and a transient failure must be retried on the very next cycle
+function record_sent_PCIe_cooling_response() {
+  LAST_SENT_PCIE_COOLING_RESPONSE="$1"
+  SECONDS_SINCE_PCIE_COOLING_RESPONSE_SENT=0
+}
+
+# Returns 0 (true) if the given profile has to be sent to the BMC on this cycle, 1 (false) otherwise
+# Usage : should_send_fan_control_profile "$COMMAND_IDENTITY"
+#
+# A steady-state cycle used to cost 5 IPMI commands, 3 of which re-applied a setting that had not
+# changed since the previous cycle. At the default 5 second interval that is 36 redundant commands a
+# minute, forever, and it is the traffic that makes network mode sensitive to the iDRAC's session limit
+function should_send_fan_control_profile() {
+  local -r COMMAND_IDENTITY="$1"
+
+  # A different profile, or a different speed for the same profile, always goes out at once
+  [ "$COMMAND_IDENTITY" != "$LAST_SENT_FAN_CONTROL_COMMAND" ] && return 0
+
+  # Otherwise only the periodic refresh, so a BMC that took fan control back is corrected within a
+  # bounded delay instead of never
+  [ "$SECONDS_SINCE_FAN_CONTROL_PROFILE_SENT" -ge "$FAN_CONTROL_PROFILE_REFRESH_INTERVAL_IN_SECONDS" ]
+}
+
+# Record that the given profile has just reached the BMC, restarting its refresh delay
+# Usage : record_sent_fan_control_profile "$COMMAND_IDENTITY"
+#
+# Only called on success : a refused command must be retried on the very next cycle rather than wait
+# out a refresh interval it never earned
+function record_sent_fan_control_profile() {
+  LAST_SENT_FAN_CONTROL_COMMAND="$1"
+  SECONDS_SINCE_FAN_CONTROL_PROFILE_SENT=0
 }
 
 # This function applies a static fan control profile at the given speed
@@ -49,23 +111,30 @@ function apply_static_fan_control_profile() {
   # fan control away from Dell's own dynamic profile, the second sets the speed. Failing the first and
   # succeeding the second is not a partial success but the worst case -- the fans are still Dell's to
   # drive -- so either failure means the profile was not applied
-  local ipmitool_stderr
-  local IS_PROFILE_APPLIED=true
+  # The speed is part of the identity : the same profile at a different percentage is a different
+  # command and has to go out at once rather than wait for the next refresh
+  local -r COMMAND_IDENTITY="static:$HEXADECIMAL_SPEED"
 
-  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
-  if [ $? -ne 0 ]; then
-    print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
-    IS_PROFILE_APPLIED=false
-  fi
-  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_SPEED 2>&1 >/dev/null)
-  if [ $? -ne 0 ]; then
-    print_error "Failed to set fan speed to $DECIMAL_SPEED%. ipmitool said: $ipmitool_stderr"
-    IS_PROFILE_APPLIED=false
-  fi
+  if should_send_fan_control_profile "$COMMAND_IDENTITY"; then
+    local ipmitool_stderr
+    local IS_PROFILE_APPLIED=true
 
-  if ! $IS_PROFILE_APPLIED; then
-    CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%) (not applied)"
-    return 1
+    ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
+    if [ $? -ne 0 ]; then
+      print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
+      IS_PROFILE_APPLIED=false
+    fi
+    ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_SPEED 2>&1 >/dev/null)
+    if [ $? -ne 0 ]; then
+      print_error "Failed to set fan speed to $DECIMAL_SPEED%. ipmitool said: $ipmitool_stderr"
+      IS_PROFILE_APPLIED=false
+    fi
+
+    if ! $IS_PROFILE_APPLIED; then
+      CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%) (not applied)"
+      return 1
+    fi
+    record_sent_fan_control_profile "$COMMAND_IDENTITY"
   fi
   CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%)"
 }
