@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034  # Every constant here is consumed by the scripts that source this file, not by this file itself
 
 # Define the interval for printing temperature table header
 readonly TABLE_HEADER_PRINT_INTERVAL=10

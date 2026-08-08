@@ -1,0 +1,36 @@
+name: Shellcheck
+
+# Scoped to the 5 scripts actually shipped in the Docker image, not the tests/ tree : those are the ones
+# a finding here can affect at runtime, on real hardware. -x resolves the "source functions.sh" /
+# "source constants.sh" lines so shared declarations are understood correctly instead of reported as
+# unknown or unused when the sourcing file is linted on its own.
+#
+# See .shellcheckrc for the two codes disabled project-wide, and the "shellcheck disable" comments at the
+# handful of call sites where a warning is intentional rather than fixed.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Lint the shipped scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run shellcheck
+        run: |
+          shellcheck -x \
+            Dell_iDRAC_fan_controller.sh \
+            functions.sh \
+            constants.sh \
+            healthcheck.sh \
+            supervisor.sh

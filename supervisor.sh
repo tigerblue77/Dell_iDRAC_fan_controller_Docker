@@ -65,6 +65,7 @@ function apply_Dell_default_fan_control_profile_on_behalf_of_the_monitoring_proc
 # case -- and no further signal it can catch will change that, so it is killed outright. Docker's own
 # grace period is ten seconds by default, so this deadline has to be comfortably inside it or the
 # container is SIGKILLed as a whole before this ever gets to act
+# shellcheck disable=SC2317  # Only invoked indirectly, via the trap below; shellcheck's reachability analysis can't see that
 function stop_the_monitored_process() {
   SIGNAL_WAS_FORWARDED=true
 

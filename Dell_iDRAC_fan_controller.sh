@@ -48,7 +48,8 @@ readonly MAXIMUM_CONSECUTIVE_IPMI_FAILURES
 
 # CHECK_INTERVAL is allowed a unit suffix, so it is turned into seconds once : the escalation counts
 # cycles, and the duration the user configured has to be expressed in those same cycles
-readonly CHECK_INTERVAL_IN_SECONDS=$(convert_duration_to_seconds "$CHECK_INTERVAL")
+CHECK_INTERVAL_IN_SECONDS=$(convert_duration_to_seconds "$CHECK_INTERVAL")
+readonly CHECK_INTERVAL_IN_SECONDS
 resolve_IPMI_failures_before_exit "$MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "$MAXIMUM_IPMI_UNREACHABLE_DURATION" "$CHECK_INTERVAL_IN_SECONDS"
 readonly IPMI_FAILURES_BEFORE_EXIT
 

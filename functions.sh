@@ -1,3 +1,6 @@
+#!/bin/bash
+# shellcheck disable=SC2034  # Every function/constant here is consumed by the scripts that source this file, not by this file itself
+
 # Define global functions
 # This function applies Dell's default dynamic fan control profile
 # In monitoring only mode, the profile is only logged, not actually applied
@@ -13,6 +16,7 @@ function apply_Dell_default_fan_control_profile() {
   # if the command actually failed (non-zero exit code)
   local ipmitool_stderr
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 2>&1 >/dev/null)
+  # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     print_error "Failed to apply Dell default fan control profile. ipmitool said: $ipmitool_stderr"
     # The table says what the server is actually doing, not what was attempted : this profile is the
@@ -41,11 +45,13 @@ function apply_user_fan_control_profile() {
   local IS_PROFILE_APPLIED=true
 
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
+  # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
     IS_PROFILE_APPLIED=false
   fi
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
+  # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
     IS_PROFILE_APPLIED=false
@@ -1149,6 +1155,7 @@ function retrieve_temperatures() {
 function get_server_power_state() {
   local POWER_STATUS
   POWER_STATUS=$(ipmitool -I $IDRAC_LOGIN_STRING chassis power status 2>&1)
+  # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     IPMI_UNREACHABLE_REASON="$POWER_STATUS"
     return 2
