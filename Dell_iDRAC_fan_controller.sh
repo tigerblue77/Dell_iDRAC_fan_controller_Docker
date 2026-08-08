@@ -38,6 +38,67 @@ convert_fan_speed_parameter "$FAN_SPEED"
 readonly DECIMAL_FAN_SPEED="$DECIMAL_SPEED"
 readonly HEXADECIMAL_FAN_SPEED="$HEXADECIMAL_SPEED"
 
+# In local mode, the container runs on the target server itself. Two things depend on that : lm-sensors
+# can only describe the controlled server's CPUs in that mode, and the server can never be observed
+# powered off while the container is running, so that check is only meaningful in network mode
+if [[ "$IDRAC_HOST" == "local" ]]; then
+  readonly NETWORK_MODE=false
+else
+  readonly NETWORK_MODE=true
+fi
+
+# Resolve the CPU temperature threshold. "auto" (the default) asks the CPUs themselves, through lm-sensors,
+# for the "high" temperature defined by their manufacturer : that value describes the actual hardware being
+# cooled, unlike a single fixed threshold shared by every CPU model
+# (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/26)
+#
+# /!\ This resolution must stay ahead of everything that reads CPU_TEMPERATURE_THRESHOLD as a number /!\
+# It is deliberately placed here, right after the FAN_SPEED conversion, so that any later validation sees
+# an already-resolved integer rather than the literal string "auto"
+
+# Normalize the raw value first. Docker's --env-file parser keeps the trailing space of a
+# "CPU_TEMPERATURE_THRESHOLD=50 " line, and copying the documented placeholder can carry quotes along.
+# Bash's own "-gt" used to tolerate both, so rejecting them here would turn a previously working
+# configuration into a startup failure, which a restart policy then turns into a crash loop
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD//[[:space:]]/}"
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD#[\"\']}"
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD%[\"\']}"
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD#+}"
+CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD:-auto}"
+CPU_TEMPERATURE_THRESHOLD_SOURCE=""
+if [[ "${CPU_TEMPERATURE_THRESHOLD,,}" == "auto" ]]; then
+  if $NETWORK_MODE; then
+    # lm-sensors can only read the CPUs of the machine this container runs on. In network mode that machine
+    # isn't the server whose fans are controlled, so its "high" temperature would describe the wrong hardware
+    CPU_TEMPERATURE_THRESHOLD=$FALLBACK_CPU_TEMPERATURE_THRESHOLD
+    CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, automatic detection is only available in local mode)"
+  else
+    DETECTED_CPU_TEMPERATURE_THRESHOLD=$(retrieve_CPU_high_temperature_from_lm_sensors)
+    if [ -n "$DETECTED_CPU_TEMPERATURE_THRESHOLD" ]; then
+      CPU_TEMPERATURE_THRESHOLD=$DETECTED_CPU_TEMPERATURE_THRESHOLD
+      CPU_TEMPERATURE_THRESHOLD_SOURCE=" (automatically detected, \"high\" temperature reported by lm-sensors)"
+    else
+      CPU_TEMPERATURE_THRESHOLD=$FALLBACK_CPU_TEMPERATURE_THRESHOLD
+      CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, no CPU \"high\" temperature could be read from lm-sensors)"
+    fi
+  fi
+elif [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]{1,3}$ ]]; then
+  # Drop any leading zero so the value isn't later interpreted as an octal number (e.g. "050" as 40°C).
+  # The digit count is bounded above so that a very long number can't silently wrap around 64 bits here
+  CPU_TEMPERATURE_THRESHOLD=$((10#$CPU_TEMPERATURE_THRESHOLD))
+  # Hold a user-supplied value to the same plausibility window as an automatically detected one. A typo
+  # such as "500" (or a Fahrenheit value) is otherwise accepted silently and no CPU ever reaches it, so
+  # the Dell default profile is never restored and the fans stay low for the life of the container
+  if [ "$CPU_TEMPERATURE_THRESHOLD" -lt "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -gt "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
+    print_error_and_exit "CPU_TEMPERATURE_THRESHOLD must be between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C, but is ${CPU_TEMPERATURE_THRESHOLD}°C"
+  fi
+else
+  # Reject an unusable threshold right away : every temperature comparison would fail against it, which
+  # silently keeps the user's (low) fan speed applied instead of ever triggering the Dell default profile
+  print_error_and_exit "CPU_TEMPERATURE_THRESHOLD must be a positive integer number of degrees Celsius or \"auto\", but is \"$CPU_TEMPERATURE_THRESHOLD\""
+fi
+readonly CPU_TEMPERATURE_THRESHOLD
+
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 
 get_Dell_server_model
@@ -56,21 +117,13 @@ else
   readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
 fi
 
-# In local mode, the container runs on the target server itself, so it can never observe it powered off
-# while the container is running. This check is therefore only meaningful in network mode.
-if [[ "$IDRAC_HOST" == "local" ]]; then
-  readonly NETWORK_MODE=false
-else
-  readonly NETWORK_MODE=true
-fi
-
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
+echo "CPU temperature threshold: ${CPU_TEMPERATURE_THRESHOLD}°C${CPU_TEMPERATURE_THRESHOLD_SOURCE}"
 # The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
 # forms that would otherwise be logged as "90ss" and "5ms"
 if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then

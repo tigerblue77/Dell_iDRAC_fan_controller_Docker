@@ -81,7 +81,7 @@ docker run -d \
   --restart=unless-stopped \
   -e IDRAC_HOST=local \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
-  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
+  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
@@ -100,7 +100,7 @@ docker run -d \
   -e IDRAC_USERNAME=<iDRAC username> \
   -e IDRAC_PASSWORD=<iDRAC password> \
   -e FAN_SPEED=<decimal or hexadecimal fan speed> \
-  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold> \
+  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
   -e CHECK_INTERVAL=<seconds between each check> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
@@ -123,7 +123,7 @@ services:
     environment:
       - IDRAC_HOST=local
       - FAN_SPEED=<decimal or hexadecimal fan speed>
-      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
@@ -147,7 +147,7 @@ services:
       - IDRAC_USERNAME=<iDRAC username>
       - IDRAC_PASSWORD=<iDRAC password>
       - FAN_SPEED=<decimal or hexadecimal fan speed>
-      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
       - CHECK_INTERVAL=<seconds between each check>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
@@ -193,7 +193,21 @@ All parameters are optional as they have default values (including default iDRAC
 - `IDRAC_USERNAME` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "root".
 - `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "calvin".
 - `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%).
-- `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). **Default** value is 50(°C).
+- `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). It can be set to a decimal number of degrees Celsius, or to "auto" to let the container read the threshold from the CPUs themselves. **Default** value is "auto".
+  - In "auto" mode, the threshold is the "high" temperature your CPU manufacturer defined, as reported by the [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) utility (the `high = +62.0°C` value below), which is far more relevant than a single fixed value shared by every CPU model :
+
+    ```
+    coretemp-isa-0000
+    Adapter: ISA adapter
+    Package id 0:  +45.0°C  (high = +62.0°C, crit = +72.0°C)
+    Core 0:        +44.0°C  (high = +62.0°C, crit = +72.0°C)
+    ```
+
+    "high" is the temperature at which your CPU expects cooling to be at full, and it always sits below "crit", the temperature at which the CPU throttles itself — so it is the one that leaves the fans time to act. How far below varies a lot by CPU model : 10°C on the example above, but only 2°C on a PowerEdge T630 reporting `high = +83.0°C, crit = +85.0°C`. On a multi-socket server, the lowest "high" value of all detected CPUs is used as the threshold — note that only CPU 1 and CPU 2 temperatures are currently compared against it.
+  - Automatic detection is only available in "local" mode : `lm-sensors` reads the CPUs of the machine the container runs on, which is the controlled server itself only in that mode. It also requires your Docker host's kernel to expose CPU temperatures through `/sys` (the `coretemp` module).
+  - Automatic detection only works on **Intel** CPUs. AMD's `k10temp` driver publishes no "high" value at all on Zen parts (every EPYC server), and on older parts it publishes a fixed 70°C that is a Linux driver constant rather than an AMD specification, so it is deliberately ignored. AMD servers use the fallback value below.
+  - Whenever the threshold can't be detected, the container falls back to 50(°C) and logs why at startup.
+  - :warning: **This default changed.** Previous versions used a fixed 50°C. On Intel servers in "local" mode, "auto" typically resolves to a **higher** value (roughly 62 to 96°C depending on the CPU model — read the exact one from the startup log), so the fans stay at `FAN_SPEED` longer than they used to before Dell's profile takes over. This matches what your CPU actually asks for, but it also means the whole chassis runs at `FAN_SPEED` for longer, and the CPU is the only component this container watches. If you were relying on the old behaviour, set `CPU_TEMPERATURE_THRESHOLD=50` explicitly.
 - `CHECK_INTERVAL` parameter is the time between each temperature check and potential profile change, in seconds unless a unit suffix (`s`, `m`, `h` or `d`) says otherwise, so `90`, `90s` and `5m` are all valid. Fractions of a second are not. The container refuses to start on a value `sleep` cannot wait for, and on zero, as either would leave the monitoring loop unpaced and running at full speed against your iDRAC. **Default** value is 5(s). A short interval makes the controller react quickly to temperature spikes, at the cost of more IPMI traffic towards the iDRAC and more container log lines. If your iDRAC struggles to keep up (especially over LAN) or if you prefer quieter logs, increase this value.
 
   This interval is also the controller's reaction time, so it is bounded from above. While your fan control profile is applied, Dell's own dynamic fan control is disabled and the fans are pinned at `FAN_SPEED`: nothing raises them until the *next* check reads a temperature above `CPU_TEMPERATURE_THRESHOLD`. The interval is therefore the longest your server can heat up with its cooling frozen at a speed you chose for an idle machine. Above **60 seconds** the container starts and prints a warning saying so. Above **15 minutes** it refuses to start, that delay being long enough that the controller is not really controlling anything anymore.
@@ -209,7 +223,7 @@ All parameters are optional as they have default values (including default iDRAC
 ## Troubleshooting
 
 ### Your server frequently switches back to the default Dell fan mode:
-1. Check `Tcase` (case temperature) of your CPU on Intel Ark website and then set `CPU_TEMPERATURE_THRESHOLD` to a slightly lower value. Example with my CPUs ([Intel Xeon E5-2630L v2](https://www.intel.com/content/www/us/en/products/sku/75791/intel-xeon-processor-e52630l-v2-15m-cache-2-40-ghz/specifications.html)) : Tcase = 63°C, I set `CPU_TEMPERATURE_THRESHOLD` to 60(°C).
+1. Check `Tcase` (case temperature) of your CPU on Intel Ark website and then set `CPU_TEMPERATURE_THRESHOLD` to a slightly lower value. Example with my CPUs ([Intel Xeon E5-2630L v2](https://www.intel.com/content/www/us/en/products/sku/75791/intel-xeon-processor-e52630l-v2-15m-cache-2-40-ghz/specifications.html)) : Tcase = 63°C, I set `CPU_TEMPERATURE_THRESHOLD` to 60(°C). Note that the default "auto" value does **not** do this for you : Tcase is a case (heat spreader) temperature, while "auto" uses the junction-scale "high" value, which is usually well above Tcase (on a Xeon Gold 5122 for instance, Tcase is 71°C but "high" is around 94°C). If you want a Tcase-derived threshold, set it explicitly. The startup log always states which threshold was picked and where it comes from.
 2. If it's already good, adapt your `FAN_SPEED` value to increase the airflow and thus further decrease the temperature of your CPU(s)
 3. If neither increasing the fan speed nor increasing the threshold solves your problem, then it may be time to replace your thermal paste
 
@@ -244,7 +258,7 @@ export IDRAC_HOST=<iDRAC IP address>
 export IDRAC_USERNAME=<iDRAC username>
 export IDRAC_PASSWORD=<iDRAC password>
 export FAN_SPEED=<decimal or hexadecimal fan speed>
-export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold>
+export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
 export CHECK_INTERVAL=<seconds between each check>
 export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>

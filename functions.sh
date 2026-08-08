@@ -231,6 +231,75 @@ function set_iDRAC_login_string() {
   fi
 }
 
+# Retrieve the "high" temperature the CPU manufacturer itself defines, as reported by the lm-sensors
+# utility ("Package id 0:  +45.0°C  (high = +62.0°C, crit = +72.0°C)")
+# Usage : retrieve_CPU_high_temperature_from_lm_sensors
+# Returns : the lowest "high" temperature in degrees Celsius (integer), or an empty string if lm-sensors
+#           is unavailable or exposes no such value
+#
+# /!\ lm-sensors reads the CPUs of the machine this script runs on, so this is only meaningful in local
+# mode, where that machine is the very server whose fans are being controlled /!\
+#
+# Only Intel's "coretemp" chips are read. The other chips lm-sensors exposes (chipset, NVMe drives...)
+# publish their own unrelated "high" values, which would silently become the CPU threshold, and AMD's
+# drivers publish nothing usable : k10temp hides both "high" and "crit" on every Zen part (so on every
+# EPYC PowerEdge), its "high" on older parts is a hardcoded 70°C driver constant on the non-physical
+# Tctl scale rather than a manufacturer value, and k8temp exposes no limit at all. An AMD server
+# therefore falls back to FALLBACK_CPU_TEMPERATURE_THRESHOLD, which the startup log states explicitly,
+# instead of silently adopting a number that means nothing
+function retrieve_CPU_high_temperature_from_lm_sensors() {
+  if ! command -v sensors > /dev/null 2>&1; then
+    return
+  fi
+
+  # "sensors -u" prints raw sub-feature values ("temp1_max: 62.000") instead of the decorated, localized
+  # human-readable format ("high = +62.0°C"), which keeps the parsing independent from locale and layout
+  local -r HIGH_TEMPERATURE=$(sensors -u 2>/dev/null | awk '
+    # Chip names are the only unindented lines that are neither "Adapter: ..." nor a feature label such as
+    # "Package id 0:", which always ends with a colon
+    /^[^[:space:]]/ {
+      if ($0 !~ /^Adapter:/ && $0 !~ /:[[:space:]]*$/) {
+        chip = $0
+        is_CPU_chip = (chip ~ /^coretemp-/)
+      }
+      next
+    }
+    !is_CPU_chip { next }
+    # "high" is the "_max" sub-feature and "crit" the "_crit" one. Both are collected per sensor, so that
+    # they can be compared below ("_crit_alarm" and "_crit_hyst" do not match, the colon must follow)
+    $1 ~ /^temp[0-9]+_(max|crit):$/ && $2 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      split($1, subfeature, "_")
+      sub(/:$/, "", subfeature[2])
+      if (subfeature[2] == "max") {
+        high[chip, subfeature[1]] = $2 + 0
+      } else {
+        critical[chip, subfeature[1]] = $2 + 0
+      }
+    }
+    END {
+      for (sensor in high) {
+        # "high" must sit strictly below "crit". coretemp derives "high" by subtracting an offset from
+        # TjMax that Intel documents as reserved : when a CPU leaves it at zero, "high" comes back equal
+        # to "crit", i.e. to the temperature at which the CPU already throttles itself. Adopting that as
+        # the threshold would keep the fans low until the hardware has acted, so such a sensor is skipped
+        # and the caller falls back instead
+        if ((sensor in critical) && high[sensor] >= critical[sensor]) continue
+        # Keep the lowest, so the most constrained CPU of a multi-socket server is the one being protected
+        if (lowest == "" || high[sensor] < lowest) lowest = high[sensor]
+      }
+      # Truncate rather than round, so the threshold is never set above what the CPU manufacturer defined
+      if (lowest != "") printf "%d", lowest
+    }')
+
+  # Ignore implausible readings (unsupported or misreporting sensor) instead of letting them become the
+  # threshold that protects the hardware
+  if [[ "$HIGH_TEMPERATURE" =~ ^[0-9]+$ ]] \
+    && [ "$HIGH_TEMPERATURE" -ge "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] \
+    && [ "$HIGH_TEMPERATURE" -le "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
+    echo "$HIGH_TEMPERATURE"
+  fi
+}
+
 # Extract the temperature reading carried by a single ipmitool sdr line
 # Usage : extract_temperature_from_sdr_line "$SDR_LINE"
 # Returns : the temperature in degrees Celsius, or an empty string if that line carries no reading
