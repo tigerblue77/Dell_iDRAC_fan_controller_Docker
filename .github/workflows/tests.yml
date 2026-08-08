@@ -31,7 +31,7 @@ jobs:
             --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: Test Results (on the runner)
@@ -71,7 +71,7 @@ jobs:
         run: cat test-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Upload the test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: Test Results (in the Docker image)
@@ -95,7 +95,7 @@ jobs:
       actions: read
     steps:
       - name: Download the test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: Test Results (*)
           path: test-results
@@ -123,7 +123,7 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - name: Upload the event file
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Event File
           path: ${{ github.event_path }}
