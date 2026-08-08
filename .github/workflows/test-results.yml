@@ -36,7 +36,7 @@ jobs:
       actions: read
     steps:
       - name: Download the test results of the run that just finished
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
