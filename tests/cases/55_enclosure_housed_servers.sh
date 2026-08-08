@@ -217,6 +217,11 @@ function test_the_controller_refuses_to_run_on_a_server_reporting_no_cpu_sensor(
   assert_contains "$OUTPUT" "sdr type temperature" "the user is told what to run"
   assert_contains "$OUTPUT" "github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues" \
     "and where to report it"
+  # The likeliest cause by far, and the only one the user can fix themselves :
+  # lm-sensors cannot rescue this one either, the fallback being local mode only
+  # and the enclosure rejecting the fan control commands anyway
+  assert_contains "$OUTPUT" "chassis management controller" \
+    "the chassis mistake is named first, being the likeliest cause"
 }
 
 function test_the_fans_are_handed_back_to_dell_before_refusing_to_run() {
