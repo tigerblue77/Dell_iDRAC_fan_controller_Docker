@@ -265,12 +265,16 @@ function retrieve_temperatures() {
     CPUS_TEMPERATURES+="${CPU_TEMPERATURE:--}"
   done
 
-  # Parse inlet temperature data
-  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
+  # Parse inlet temperature data.
+  # Matched on the "degrees" suffix rather than on a fixed two-digit width, like the CPU readings are :
+  # '\d{2}' truncated "100 degrees C" to 10°C and missed a single-digit reading entirely.
+  # Inlet and exhaust are located by name and not by entity ID, unlike the CPUs : Dell puts them both on
+  # the same entity (7.1 on an R730), so their entity can't tell them apart
+  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | cut -d'|' -f5 | grep -Po '\d+(?=[[:space:]]*degrees)' | tail -1)
 
   # If exhaust temperature sensor is present, parse its temperature data
   if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
+    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | cut -d'|' -f5 | grep -Po '\d+(?=[[:space:]]*degrees)' | tail -1)
   else
     EXHAUST_TEMPERATURE="-"
   fi

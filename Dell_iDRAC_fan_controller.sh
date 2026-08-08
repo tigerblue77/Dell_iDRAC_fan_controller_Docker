@@ -137,6 +137,9 @@ retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
+  # Set the placeholder straight away : retrieve_temperatures() only does it on the next cycle, so the
+  # very first printed line would otherwise leave the exhaust column empty
+  EXHAUST_TEMPERATURE="-"
 fi
 # Output new line to beautify output
 echo ""
