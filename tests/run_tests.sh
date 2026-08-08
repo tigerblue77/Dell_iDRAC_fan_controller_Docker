@@ -98,9 +98,12 @@ if [ -z "$GENERATION_14_OR_NEWER_REGEX" ]; then
 fi
 
 # Collect the test case names of a file, in declaration order (declare -F would
-# sort them alphabetically, which would scramble the story each file tells)
+# sort them alphabetically, which would scramble the story each file tells).
+# Every form bash accepts for a top-level definition is matched : with or
+# without the "function" keyword, indented, and with spaces around the parens
 function test_case_names_of_file() {
-  grep -oE '^(function )?test_[A-Za-z0-9_]+\(\)' "$1" | sed -E 's/^function //; s/\(\)$//'
+  grep -oE '^[[:space:]]*(function[[:space:]]+)?test_[A-Za-z0-9_]+[[:space:]]*\(\)' "$1" |
+    sed -E 's/^[[:space:]]*//; s/^function[[:space:]]+//; s/[[:space:]]*\(\)$//'
 }
 
 # "test_the_fan_speed_is_applied" -> "the fan speed is applied"
@@ -127,21 +130,72 @@ if [ "${#TEST_FILES[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# The runner and the libraries have helpers of their own whose name starts with
+# "test_" ; only the functions the case files add count as test cases
+TEST_CASE_FUNCTIONS_BEFORE_SOURCING="$(declare -F | sed -n 's/^declare -f \(test_[A-Za-z0-9_]*\)$/\1/p')"
+readonly TEST_CASE_FUNCTIONS_BEFORE_SOURCING
+
+# A case file is sourced into this shell, so an "exit" reached while it is read
+# - a stray one, or a guard clause written at the top level by mistake - ends
+# the runner right here, with that file's own exit code and nothing printed. It
+# would look exactly like a successful run that happened to be quiet. The trap
+# is what turns that silence into a failure
+SOURCING_TEST_FILE=""
+function report_interrupted_sourcing() {
+  [ -n "$SOURCING_TEST_FILE" ] || return 0
+  printf '%s stopped the run while it was being sourced, so no test case ran.\n' \
+    "${SOURCING_TEST_FILE#"$REPO_ROOT"/}" >&2
+  printf 'A case file must only declare functions and constants at its top level.\n' >&2
+  exit 1
+}
+trap report_interrupted_sourcing EXIT
+
 for TEST_FILE in "${TEST_FILES[@]}"; do
+  SOURCING_TEST_FILE="$TEST_FILE"
   source "$TEST_FILE"
 done
 
+SOURCING_TEST_FILE=""
+trap - EXIT
+
 # Build the ordered list of test cases to run, as "file<tab>function" pairs
 declare -a SELECTED_TEST_CASES=()
+declare -a DISCOVERED_TEST_CASES=()
 for TEST_FILE in "${TEST_FILES[@]}"; do
   while IFS= read -r TEST_CASE_NAME; do
     [ -n "$TEST_CASE_NAME" ] || continue
+    DISCOVERED_TEST_CASES+=("$TEST_CASE_NAME")
     if [ -n "$FILTER" ] && [[ ! "$TEST_CASE_NAME" =~ $FILTER ]] && [[ ! "$TEST_FILE" =~ $FILTER ]]; then
       continue
     fi
     SELECTED_TEST_CASES+=("$TEST_FILE"$'\t'"$TEST_CASE_NAME")
   done < <(test_case_names_of_file "$TEST_FILE")
 done
+
+# Discovery reads the files as text, execution runs what bash actually defined.
+# When the two disagree, a test case exists and never runs - the failure mode
+# that costs the most, because the suite stays green while covering less than
+# it says. Comparing the two lists is what keeps them honest
+declare -a UNDISCOVERED_TEST_CASES=()
+while IFS= read -r DEFINED_TEST_CASE; do
+  [ -n "$DEFINED_TEST_CASE" ] || continue
+  FOUND=false
+  for TEST_CASE_NAME in "${DISCOVERED_TEST_CASES[@]}"; do
+    if [ "$TEST_CASE_NAME" == "$DEFINED_TEST_CASE" ]; then
+      FOUND=true
+      break
+    fi
+  done
+  $FOUND || UNDISCOVERED_TEST_CASES+=("$DEFINED_TEST_CASE")
+done < <(declare -F | sed -n 's/^declare -f \(test_[A-Za-z0-9_]*\)$/\1/p' |
+  grep -Fxv -f <(printf '%s\n' "$TEST_CASE_FUNCTIONS_BEFORE_SOURCING") || true)
+
+if [ "${#UNDISCOVERED_TEST_CASES[@]}" -ne 0 ]; then
+  printf 'These test cases are defined but were not found by the runner, so they would never run :\n' >&2
+  printf '  %s\n' "${UNDISCOVERED_TEST_CASES[@]}" >&2
+  printf 'Declare them at the top level of their file, as "function test_name() {".\n' >&2
+  exit 1
+fi
 
 readonly TOTAL_TEST_CASES="${#SELECTED_TEST_CASES[@]}"
 
@@ -225,7 +279,10 @@ for TEST_CASE in "${SELECTED_TEST_CASES[@]}"; do
   TEST_SUITE_NAME="$(humanize_test_file_name "$TEST_FILE")"
   TEST_FILE_PATH="${TEST_FILE#"$REPO_ROOT"/}"
 
-  if [ -f "$TEST_SKIPPED_FILE" ]; then
+  # skip_test() only records a reason, it does not return from the test case.
+  # Anything that failed before or after that call still counts : a skip is a
+  # statement that nothing was verified, so it cannot also hide a failure
+  if [ -f "$TEST_SKIPPED_FILE" ] && [ ! -s "$TEST_DIAGNOSTICS_FILE" ] && [ "$TEST_CASE_EXIT_CODE" -eq 0 ]; then
     ((SKIPPED_TEST_CASES++))
     SKIP_REASON="$(cat "$TEST_SKIPPED_FILE")"
     record_test_result "$TEST_SUITE_NAME" "$TEST_FILE_PATH" "$TEST_CASE_NAME" "$HUMAN_READABLE_NAME" \
@@ -236,6 +293,15 @@ for TEST_CASE in "${SELECTED_TEST_CASES[@]}"; do
       printf '  %sskip%s %s %s(%s)%s\n' "$COLOR_YELLOW" "$COLOR_RESET" "$HUMAN_READABLE_NAME" "$COLOR_DIM" "$SKIP_REASON" "$COLOR_RESET"
     fi
     continue
+  fi
+
+  # A test case that asserted nothing verified nothing. It usually means the
+  # case returned early on a condition that no longer holds, and it is the one
+  # failure a passing suite cannot show you, so it is reported as a failure
+  # rather than counted among the green ones
+  if [ ! -f "$TEST_SKIPPED_FILE" ] && [ "$TEST_CASE_ASSERTIONS" -eq 0 ] &&
+    [ ! -s "$TEST_DIAGNOSTICS_FILE" ] && [ "$TEST_CASE_EXIT_CODE" -eq 0 ]; then
+    printf 'the test case recorded no assertion, so it verified nothing\n' > "$TEST_DIAGNOSTICS_FILE"
   fi
 
   if [ -s "$TEST_DIAGNOSTICS_FILE" ] || [ "$TEST_CASE_EXIT_CODE" -ne 0 ]; then
