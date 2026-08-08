@@ -306,7 +306,7 @@ function test_an_unknown_source_stops_the_controller() {
   local -r EXIT_CODE=$?
 
   assert_equals 1 "$EXIT_CODE"
-  assert_contains "$OUTPUT" 'but is "idrac"' "the error should quote what the user wrote"
+  assert_contains "$OUTPUT" 'Value     : "idrac"' "the error should quote what the user wrote"
 }
 
 # --- Deciding to fall back ----------------------------------------------------
@@ -568,7 +568,8 @@ function test_an_unusable_source_stops_the_controller_before_it_touches_the_fans
 
   local -r OUTPUT=$(run_controller 'Error')
 
-  assert_contains "$OUTPUT" "CPU_TEMPERATURE_SOURCE must be"
+  assert_contains "$OUTPUT" "Parameter : CPU_TEMPERATURE_SOURCE" \
+    "the error should name the parameter at fault"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")" \
     "no fan control profile should be applied on a configuration the container refuses"
 }
