@@ -278,6 +278,12 @@ If your iDRAC reports **no** readable CPU temperature sensor at all, the contain
 /!\ Error /!\ No CPU temperature sensor could be read from DELL PowerEdge R730xd, and every PowerEdge has at least one CPU.
 ```
 
+`MONITORING_ONLY_MODE=true` is the exception: it drives no fan, so a CPU it cannot read costs it a column and nothing else. It keeps running and logs the chassis temperatures it *can* read, with no CPU column in the table:
+
+```
+No CPU temperature sensor detected, only the chassis temperatures will be monitored.
+```
+
 Some older iDRACs are in that state permanently: they accept Dell's raw fan control commands but answer nothing usable to a temperature query. In "local" mode, the machine running the container **is** the server, so its CPUs can be read directly instead, through `lm-sensors`. That is what `CPU_TEMPERATURE_SOURCE=auto` (the default) does, on the check that found no sensor and before the container would otherwise refuse to run:
 
 ```
