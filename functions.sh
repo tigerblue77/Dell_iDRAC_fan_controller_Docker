@@ -330,9 +330,12 @@ function graceful_exit() {
   apply_Dell_default_fan_control_profile
 
   # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at
-  # startup, and only on a server that took the command in the first place : one that refused it all
-  # along has nothing to reset, and sending it anyway would just be one more refusal on the way out
-  if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT" && $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
+  # startup. This is deliberately NOT gated on whether the server was seen to accept the command
+  # earlier : the controller gives up on a command refused several cycles in a row, and if it gave up
+  # for the wrong reason — an iDRAC that was being reset, a network outage — skipping the reset here
+  # would leave the server on the user's setting for good. One refused command on the way out costs
+  # nothing; a setting left behind on a server nothing is monitoring any more does
+  if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then
     enable_third_party_PCIe_card_Dell_default_cooling_response
   fi
 

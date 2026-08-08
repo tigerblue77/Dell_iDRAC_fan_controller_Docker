@@ -110,15 +110,50 @@ function test_the_controller_stops_sending_a_command_the_server_refused() {
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
   export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
 
-  # Wait for two table lines, so that a command re-sent on every cycle would have
-  # been recorded twice by the time the controller is stopped
-  local -r OUTPUT=$(run_controller "" 2)
+  # Wait for five table lines, well past the point where the controller gives up,
+  # so that a command still being re-sent would show up in the call log
+  local -r OUTPUT=$(run_controller "" 5)
 
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge R6515"
+  assert_matches "$OUTPUT" "fan control profile.*Refused by this server" \
+    "the first refusals must be reported as what they are"
   assert_matches "$OUTPUT" "fan control profile.*Not supported by this server" \
-    "the table must report the server's answer, not the user's request"
-  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
-    "the refusal is permanent, so the command must be sent exactly once"
+    "once the refusal has repeated, the controller concludes and says so"
+  # One per refusal before giving up, plus the one graceful_exit sends on the way
+  # out. That last one is deliberately NOT gated on having given up : if the
+  # controller gave up for the wrong reason — an iDRAC that was being reset — then
+  # skipping the reset would leave the server on the user's setting for good
+  assert_equals "$((THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_REFUSALS_BEFORE_GIVING_UP + 1))" \
+    "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "the command must stop being sent once the server has refused it enough times"
+}
+
+function test_a_transient_ipmi_failure_does_not_disable_the_cooling_response_for_good() {
+  # ipmitool exits non-zero both for a command the BMC does not implement and for
+  # a BMC it could not reach, and the controller cannot tell them apart. A single
+  # refusal must therefore not be taken as a verdict : an iDRAC being reset or a
+  # momentary network glitch would otherwise permanently disable the setting on a
+  # perfectly healthy server, and make the column report the opposite of reality —
+  # exactly the defect this whole change exists to remove
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_server "PowerEdge R730xd" --cpus 2
+  # Refuse the very first cooling response command, then answer normally
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Error: Unable to establish IPMI v2 / RMCP+ session"
+  export MOCK_IPMITOOL_RAW_FAIL_ONLY_ONCE=true
+
+  local -r OUTPUT=$(run_controller "" 4)
+
+  assert_matches "$OUTPUT" "fan control profile.*Disabled" \
+    "the server recovered, so the setting must be applied and reported again"
+  assert_not_contains "$OUTPUT" "Not supported by this server" \
+    "one glitch is not a verdict"
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 4 ]; then
+    pass
+  else
+    fail "the controller must keep sending the command after a transient refusal" \
+      "calls: $(recorded_ipmitool_calls)"
+  fi
 }
 
 function test_the_controller_keeps_applying_a_command_the_server_accepts() {

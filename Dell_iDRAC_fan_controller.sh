@@ -9,8 +9,9 @@ source constants.sh
 
 # Dell's "third-party PCIe card default cooling response" is an OEM command that not every server
 # takes, and the monitoring loop below finds out by sending it and reading the answer rather than by
-# guessing from the model name. Set before the trap, graceful_exit reading it too
+# guessing from the model name
 IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS=0
 
 # Trap the signals for container exit and run graceful_exit function
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
@@ -193,14 +194,25 @@ while true; do
     THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE=$?
 
     if [ $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE -eq 0 ]; then
+      THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS=0
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
 
       if $MONITORING_ONLY_MODE; then
         THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
       fi
     else
-      IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+      ((THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS++))
+      # Report the refusal on the cycle it happened rather than the setting the user asked for, which
+      # is the whole point : the column must say what the server did, not what it was told to do
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Refused by this server"
+
+      # ipmitool exits non-zero for a command the BMC does not implement and for a BMC it could not
+      # reach, and nothing here can tell the two apart. Only stop asking once the refusal has repeated:
+      # a server without the setting refuses every time, a network glitch refuses once
+      if [ "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_CONSECUTIVE_REFUSALS" -ge "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_REFUSALS_BEFORE_GIVING_UP" ]; then
+        IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
+        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+      fi
     fi
   fi
 

@@ -30,6 +30,11 @@
 #   MOCK_IPMITOOL_POWER_EXIT_CODE  its exit code (default 0)
 #   MOCK_IPMITOOL_RAW_STDERR       stderr printed by every "ipmitool raw" call
 #   MOCK_IPMITOOL_RAW_EXIT_CODE    exit code of every "ipmitool raw" call
+#   MOCK_IPMITOOL_RAW_FAIL_ONLY_ONCE  when "true", only the FIRST command matching
+#                                  MOCK_IPMITOOL_RAW_FAIL_PATTERN fails and the
+#                                  following ones succeed, reproducing a transient
+#                                  failure (an iDRAC being reset, a network glitch)
+#                                  rather than a command the BMC does not implement
 #   MOCK_IPMITOOL_RAW_FAIL_PATTERN extended regex matched against the raw
 #                                  command's arguments. When it matches, that
 #                                  single command fails with
@@ -105,8 +110,22 @@ case "$SUB_COMMAND" in
     RAW_ARGUMENTS="${ARGUMENTS[*]:1}"
     if [ -n "${MOCK_IPMITOOL_RAW_FAIL_PATTERN:-}" ] &&
       [[ "$RAW_ARGUMENTS" =~ $MOCK_IPMITOOL_RAW_FAIL_PATTERN ]]; then
-      printf '%s\n' "${MOCK_IPMITOOL_RAW_FAIL_STDERR:-Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state}" >&2
-      exit "${MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE:-1}"
+      SHOULD_FAIL=true
+
+      # A transient failure : only the first matching command is refused. The
+      # current call is already in the log, so a count above one means this is not
+      # the first one any more
+      if [ "${MOCK_IPMITOOL_RAW_FAIL_ONLY_ONCE:-false}" == "true" ] && [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
+        MATCHING_CALLS=$(grep -cE -- "$MOCK_IPMITOOL_RAW_FAIL_PATTERN" "$MOCK_IPMITOOL_CALL_LOG")
+        if [ "$MATCHING_CALLS" -gt 1 ]; then
+          SHOULD_FAIL=false
+        fi
+      fi
+
+      if $SHOULD_FAIL; then
+        printf '%s\n' "${MOCK_IPMITOOL_RAW_FAIL_STDERR:-Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state}" >&2
+        exit "${MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE:-1}"
+      fi
     fi
     if [ -n "${MOCK_IPMITOOL_RAW_STDERR:-}" ]; then
       printf '%s\n' "$MOCK_IPMITOOL_RAW_STDERR" >&2
