@@ -7,6 +7,11 @@
 source functions.sh
 source constants.sh
 
+# Dell's "third-party PCIe card default cooling response" is an OEM command that not every server
+# takes, and the monitoring loop below finds out by sending it and reading the answer rather than by
+# guessing from the model name
+IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+
 # Trap the signals for container exit and run graceful_exit function
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
@@ -112,13 +117,6 @@ fi
 # CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
 # instead of counting values, which no longer depends on the server generation
 
-# If server model is Gen 14 (*40) or newer
-if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
-else
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
-fi
-
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
@@ -191,11 +189,10 @@ while true; do
     apply_Dell_default_fan_control_profile
 
     # The third-party PCIe card cooling response is a setting the user asked for, not a reaction to a
-    # temperature: it has nothing to do with the CPU sensors being readable, and the monitoring loop
-    # applies it on every one of its own cycles. Leaving it out here means a server that never becomes
-    # readable keeps whatever state its iDRAC was left in, silently and for as long as the wait lasts
+    # temperature : it has nothing to do with the CPU sensors being readable, and the monitoring loop
+    # applies it on every one of its own cycles
     apply_third_party_PCIe_card_cooling_response_setting \
-      "$DELL_POWEREDGE_GEN_14_OR_NEWER" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
+      "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
   fi
 
   if ! $IS_TARGET_SERVER_ANSWERING; then
@@ -367,10 +364,18 @@ while true; do
     fi
   fi
 
-  # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling
-  # response. Gen 14 and newer dropped the command, so nothing is sent there
+  # The third-party PCIe card Dell default cooling response is an OEM command that not every server
+  # takes : it no longer exists from the 14th generation on, and a blade or a modular sled has no fan
+  # of its own to apply it to. Which servers those are cannot be read from the model name — Dell never
+  # named the AMD, dense and modular models to a scheme a pattern could follow, so a name-based check
+  # told an R6515 or an MX740c apart from an R730 exactly backwards (issue #173).
+  #
+  # So ask the server and report what it answered. A command that failed is not a verdict on its own :
+  # ipmitool exits non-zero both for a command the BMC does not have and for a BMC it never reached, and
+  # only the completion code it prints tells the two apart. The controller therefore stops asking on the
+  # first genuine "I do not have this command", and never on a network outage, however long it lasts
   apply_third_party_PCIe_card_cooling_response_setting \
-    "$DELL_POWEREDGE_GEN_14_OR_NEWER" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
+    "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$MONITORING_ONLY_MODE"
 
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
   if [ $TABLE_HEADER_PRINT_COUNTER -eq $TABLE_HEADER_PRINT_INTERVAL ]; then
