@@ -192,10 +192,10 @@ while true; do
     apply_Dell_default_fan_control_profile
 
     print_error_and_exit "No CPU temperature sensor could be read from $SERVER_MANUFACTURER $SERVER_MODEL, and every PowerEdge has at least one CPU.
- If IDRAC_HOST points at a chassis management controller (VRTX, FX2, M1000e, MX7000), point it at a node\'s own iDRAC instead : the chassis hosts no CPU, and its CMC drives the enclosure fans rather than a node\'s.
+ If IDRAC_HOST points at a chassis management controller (VRTX, FX2, M1000e, MX7000), point it at a node's own iDRAC instead : the chassis hosts no CPU, and its CMC drives the enclosure fans rather than a node's.
  Otherwise, run \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type temperature\" (drop the connection options in local mode) and look for lines whose 4th column is an entity \"3.<something>\" and whose reading ends in \"degrees C\".
  If some are listed and the container still reports none, or if none is listed at all, please open an issue with your server model and that output : https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues
- Dell default dynamic fan control profile applied for safety before exiting."
+ Dell default dynamic fan control profile applied for safety before exiting"
   fi
 
   # Worded and repeated exactly like the monitoring loop does for the same situation : this is the

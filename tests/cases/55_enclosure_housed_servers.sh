@@ -222,6 +222,10 @@ function test_the_controller_refuses_to_run_on_a_server_reporting_no_cpu_sensor(
   # and the enclosure rejecting the fan control commands anyway
   assert_contains "$OUTPUT" "chassis management controller" \
     "the chassis mistake is named first, being the likeliest cause"
+  assert_contains "$OUTPUT" "point it at a node's own iDRAC instead" \
+    "the apostrophe must not come out escaped, the message being a double quoted string"
+  assert_not_contains "$OUTPUT" "exiting.. Exiting." \
+    "print_error_and_exit appends its own sentence, so the message must not end on a full stop"
 }
 
 function test_the_fans_are_handed_back_to_dell_before_refusing_to_run() {
