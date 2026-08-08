@@ -826,7 +826,10 @@ function print_temperature_array_line() {
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
 
-  printf "%19s  %s°C " "$(date +"%d-%m-%Y %T")" "$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")"
+  local TIMESTAMP FORMATTED_TEMPERATURE
+  set_log_timestamp TIMESTAMP
+  FORMATTED_TEMPERATURE=$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")
+  printf "%19s  %s°C " "$TIMESTAMP" "$FORMATTED_TEMPERATURE"
   # Itération sur les températures dans le tableau.
   # Only the number is padded, never the assembled "NNN°C" string : the container runs in the POSIX
   # locale (the Dockerfile sets no LANG), where "°" is two bytes, so printf-padding the whole cell would
@@ -838,6 +841,17 @@ function print_temperature_array_line() {
   # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
   # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
   printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+}
+
+# Stamp the current local time into the named variable, in the format every logged line starts with.
+# Usage : set_log_timestamp TIMESTAMP
+#
+# bash's own strftime rather than $(date ...). A command substitution expanded alongside another one in
+# the same statement is what lets a SIGTERM delivered at that instant leave bash's parser mid-expansion:
+# the trap command string is then parsed with that state still open, fails, and graceful_exit never runs,
+# leaving the fans on the user's static speed (issue #188). It also saves a fork per logged line
+function set_log_timestamp() {
+  printf -v "$1" '%(%d-%m-%Y %T)T' -1
 }
 
 # Formats a temperature reading as a right-aligned decimal number of the given width (3 by default).

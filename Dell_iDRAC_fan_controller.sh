@@ -189,7 +189,8 @@ while true; do
   if ! $IS_TARGET_SERVER_ANSWERING; then
     # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
     # same powered-off server, only observed before the first reading rather than after
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+    set_log_timestamp TIMESTAMP
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
   elif ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
     # The server answers but exposes nothing readable. Logged once only, to say why the container isn't
     # printing temperatures yet without flooding the logs every cycle
@@ -204,10 +205,11 @@ while true; do
     fi
 
     # The profile is only claimed when it was really sent : applying it is a no-op in monitoring only mode
+    set_log_timestamp TIMESTAMP
     if $MONITORING_ONLY_MODE; then
-      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
+      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$TIMESTAMP" "$WAITING_REASON"
     else
-      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
+      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$TIMESTAMP" "$WAITING_REASON"
     fi
   fi
 
@@ -249,7 +251,8 @@ while true; do
   # temperatures (they would be meaningless) and don't apply any fan control profile
   if $NETWORK_MODE && ! is_server_powered_on; then
     IS_TARGET_SERVER_POWERED_OFF=true
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+    set_log_timestamp TIMESTAMP
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
 
     wait $SLEEP_PROCESS_PID
 
@@ -300,12 +303,16 @@ while true; do
     # count : it is the only trace left that the server used to have it. The line states the conclusion
     # the controller drew and the rule it applied to draw it, rather than the symptom alone : a sensor
     # that went quiet is not a reason to stop watching a CPU, a CPU that is gone is
+    set_log_timestamp TIMESTAMP
+    DETECTED_CPU_TEMPERATURE_SENSORS=$(format_detected_CPU_temperature_sensors)
     if [ "${#REMOVED_CPU_LABELS[@]}" -eq 1 ]; then
-      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$TIMESTAMP" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_REMOVAL_CONFIRMING_READINGS" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     elif [ "${#REMOVED_CPU_LABELS[@]}" -gt 1 ]; then
-      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
+      REMOVED_CPU_LABELS_ENUMERATION=$(join_with_and "${REMOVED_CPU_LABELS[@]}")
+      REMOVED_CPU_ENTITY_IDS_ENUMERATION=$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")
+      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$TIMESTAMP" "$REMOVED_CPU_LABELS_ENUMERATION" "$REMOVED_CPU_ENTITY_IDS_ENUMERATION" "$CPU_REMOVAL_CONFIRMING_READINGS" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     else
-      printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s.\n" "$TIMESTAMP" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     fi
 
     # Checked again here and not only at startup : a mis-parse can just as well show up mid-run
