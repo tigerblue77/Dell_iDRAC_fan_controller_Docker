@@ -252,7 +252,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             ${{ needs.check.outputs.image-name }} # docker.io/tigerblue77/dell_idrac_fan_controller
