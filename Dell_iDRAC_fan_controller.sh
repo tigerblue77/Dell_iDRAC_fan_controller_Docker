@@ -151,10 +151,6 @@ while true; do
   SLEEP_PROCESS_PID=$!
 done
 
-# Start the expiry delay of every CPU detected here : without this they would have no last-readable time
-# at all, and the first cycle on which one of them is silent would expire it instantly
-postpone_CPU_temperature_sensors_expiry "$(date +%s)"
-
 # Not readonly : the monitoring loop follows the CPUs the server exposes, which can change while it runs
 NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
 
@@ -188,10 +184,6 @@ while true; do
     IS_TARGET_SERVER_POWERED_OFF=true
     printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
 
-    # Its sensors are legitimately silent while it is off, so that silence must not count towards the
-    # delay after which a CPU is considered removed
-    postpone_CPU_temperature_sensors_expiry "$(date +%s)"
-
     wait $SLEEP_PROCESS_PID
 
     # Start timer in background for next cycle
@@ -204,16 +196,19 @@ while true; do
   # before/during the outage (could be the initial pre-loop reading, or readings from before it powered off)
   if $IS_TARGET_SERVER_POWERED_OFF; then
     IS_TARGET_SERVER_POWERED_OFF=false
+    # It has just been switched off and on again, which is the only way its CPUs can have changed : open
+    # the window during which one is allowed to leave the monitored set
+    IS_CPU_REMOVAL_ALLOWED=true
+    PENDING_CPU_REMOVAL_SIGNATURE=""
     retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   fi
 
   # Follow the CPUs the server exposes : one may have been added while it was powered off, one may have
-  # been removed, and one may simply not have finished POSTing yet. Checked every cycle rather than only
-  # on a power transition, and reusing the data retrieve_temperatures() just fetched, so it costs no
-  # extra IPMI round-trip
+  # been removed, and one may simply not have finished POSTing yet. Checked every cycle, and reusing the
+  # data retrieve_temperatures() just fetched, so it costs no extra IPMI round-trip
   PREVIOUS_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
   PREVIOUS_CPU_LABELS=("${DETECTED_CPU_LABELS[@]}")
-  if refresh_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA" "$(date +%s)"; then
+  if refresh_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"; then
     NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
     CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
     HEADER=$(build_header "$CPU_COLUMN_CONTENT_WIDTH" "${DETECTED_CPU_LABELS[@]}")
@@ -238,9 +233,9 @@ while true; do
     # the controller drew and the rule it applied to draw it, rather than the symptom alone : a sensor
     # that went quiet is not a reason to stop watching a CPU, a CPU that is gone is
     if [ "${#REMOVED_CPU_LABELS[@]}" -eq 1 ]; then
-      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) has reported nothing for more than %s. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$(format_duration_for_display "$CPU_TEMPERATURE_SENSOR_EXPIRY")" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the two readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$(format_detected_CPU_temperature_sensors)"
     elif [ "${#REMOVED_CPU_LABELS[@]}" -gt 1 ]; then
-      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) have reported nothing for more than %s. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$(format_duration_for_display "$CPU_TEMPERATURE_SENSOR_EXPIRY")" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the two readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$(format_detected_CPU_temperature_sensors)"
     else
       printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
     fi

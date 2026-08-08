@@ -12,13 +12,6 @@ readonly TABLE_HEADER_PRINT_INTERVAL=10
 # produce -- necessarily a parsing accident -- gets reported instead of passing unnoticed
 readonly MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER=4
 
-# How long a CPU temperature sensor may stay unreadable before its CPU is considered gone and stops
-# being monitored. Dell reports a socket being POSTed and a socket that has been removed identically
-# ("Disabled"), so only the duration tells them apart. Generous enough to outlast the POST of a large
-# memory configuration, since expiring a CPU that is merely booting would stop watching a real heat
-# source, while the only cost of waiting is running the Dell default fan control profile a bit longer
-readonly CPU_TEMPERATURE_SENSOR_EXPIRY=600
-
 # A temperature renders as "NNN°C", i.e. 5 display columns, which every label up to "CPU 9" fits into.
 # A CPU column only gets wider than that from a tenth CPU on ("CPU 10"), which no Dell server can have
 # and therefore only a mis-parse can produce

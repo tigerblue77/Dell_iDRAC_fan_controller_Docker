@@ -192,15 +192,3 @@ function test_an_unreadable_temperature_is_printed_as_a_placeholder() {
   assert_equals "-10" "$(format_temperature_for_display "-10")"
   assert_equals "-40" "$(format_temperature_for_display "-40")"
 }
-
-function test_a_duration_is_written_the_way_a_human_writes_one() {
-  # "600s" makes the reader do the arithmetic; the delay before a CPU is
-  # considered removed is a round number of minutes and should read as one
-  assert_equals "10m" "$(format_duration_for_display 600)"
-  assert_equals "5s" "$(format_duration_for_display 5)"
-  assert_equals "1m" "$(format_duration_for_display 60)"
-  assert_equals "1m30s" "$(format_duration_for_display 90)"
-  assert_equals "1h" "$(format_duration_for_display 3600)"
-  assert_equals "1h30m" "$(format_duration_for_display 5400)"
-  assert_equals "0s" "$(format_duration_for_display 0)" "zero still needs a unit to read as a duration"
-}

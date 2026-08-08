@@ -283,104 +283,80 @@ function set_detected_CPU_temperature_sensors() {
   done
 }
 
-# When each monitored CPU temperature sensor was last readable, keyed by IPMI entity ID, so that a CPU
-# staying silent longer than CPU_TEMPERATURE_SENSOR_EXPIRY can be told from one that is merely rebooting.
-# Declared here rather than in the entrypoint because the functions below are the ones that depend on it
-# being associative : subscripting it with an entity ID such as "3.1" is an arithmetic error otherwise,
-# which anything sourcing this file on its own would hit
-declare -A CPU_LAST_READABLE_AT
+# Set to true when the target server has just been powered back on. A CPU can only be added or removed
+# with the server switched off, so that transition is the only moment one may legitimately leave the
+# monitored set : while the server keeps running, a sensor going quiet is a fault, not a missing socket
+IS_CPU_REMOVAL_ALLOWED=false
+
+# The readable set seen on the previous cycle while a removal was allowed. A socket can still be slow to
+# become readable during POST, so a smaller set has to be confirmed by a second identical reading before
+# CPUs are dropped from the table
+PENDING_CPU_REMOVAL_SIGNATURE=""
 
 # Runs the detection again on already-fetched sensor data and reports whether the monitored set changed.
-# Usage : refresh_CPU_temperature_sensors "$SDR_DATA" $NOW
+# Usage : refresh_CPU_temperature_sensors "$SDR_DATA"
 # Returns : 0 (true) if the set changed, the DETECTED_CPU_* arrays then describing the new one
 #
 # A CPU showing up is adopted immediately : the server may have been powered off precisely to add one,
 # and keeping the previous set would leave it both invisible in the table and, far worse, never compared
 # to the temperature threshold.
 #
-# A CPU disappearing is only acted upon after CPU_TEMPERATURE_SENSOR_EXPIRY seconds without a reading.
-# A socket being POSTed and a socket that has been removed look exactly the same in the SDR, Dell
-# reporting both as "Disabled", so at any single instant they cannot be told apart -- but over time they
-# can, since POST ends and removal doesn't. Dropping a CPU on the spot would stop watching one that is
-# merely not readable yet; never dropping it would pin the server to the Dell default profile forever,
-# as its unreadable column keeps failing safe, until someone restarts the container
+# A CPU disappearing is only acted upon after a power cycle, and only once a second reading has confirmed
+# it. Dell reports a socket being POSTed and a socket that has been removed in exactly the same way, so
+# they cannot be told apart from a single reading -- but a CPU cannot physically leave a running server,
+# so a sensor that goes quiet while it keeps running is a fault, and its column stays, reading "-", which
+# fails safe to the Dell default profile. Dropping it there would silently stop watching a CPU that is
+# still installed
 function refresh_CPU_temperature_sensors() {
   local -r SDR_DATA="$1"
-  local -r NOW="$2"
   local -r -a PREVIOUS_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
 
   detect_CPU_temperature_sensors "$SDR_DATA"
+  local -r -a READABLE_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
 
-  local -a CPU_ENTITY_INSTANCES=()
+  # Entity IDs hold no space, so the padded-join membership test is unambiguous
+  local -a MISSING_CPU_ENTITY_IDS=()
   local CPU_ENTITY_ID
-  for CPU_ENTITY_ID in "${DETECTED_CPU_ENTITY_IDS[@]}"; do
-    CPU_LAST_READABLE_AT[$CPU_ENTITY_ID]=$NOW
+  for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+    if [[ " ${READABLE_CPU_ENTITY_IDS[*]} " != *" $CPU_ENTITY_ID "* ]]; then
+      MISSING_CPU_ENTITY_IDS+=("$CPU_ENTITY_ID")
+    fi
+  done
+
+  # Every CPU going silent at once is an IPMI or host problem, not every socket being unplugged together,
+  # so it never confirms anything
+  local IS_REMOVAL_CONFIRMED=false
+  if (( ${#MISSING_CPU_ENTITY_IDS[@]} > 0 )) && (( ${#READABLE_CPU_ENTITY_IDS[@]} > 0 )) && $IS_CPU_REMOVAL_ALLOWED; then
+    if [ "${READABLE_CPU_ENTITY_IDS[*]}" == "$PENDING_CPU_REMOVAL_SIGNATURE" ]; then
+      IS_REMOVAL_CONFIRMED=true
+    fi
+    PENDING_CPU_REMOVAL_SIGNATURE="${READABLE_CPU_ENTITY_IDS[*]}"
+  else
+    PENDING_CPU_REMOVAL_SIGNATURE=""
+  fi
+
+  # The new set is everything readable, plus the known CPUs keeping their column for now.
+  # detect_CPU_temperature_sensors() has already overwritten the arrays by now, hence the rebuild
+  local -a CPU_ENTITY_INSTANCES=()
+  for CPU_ENTITY_ID in "${READABLE_CPU_ENTITY_IDS[@]}"; do
     CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
   done
-
-  # Keep the CPUs that are missing from this reading but were still answering recently enough for the
-  # silence to be explainable by a reboot rather than by a removal
-  for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
-    # Entity IDs hold no space, so the padded-join membership test is unambiguous
-    if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " == *" $CPU_ENTITY_ID "* ]]; then
-      continue
-    fi
-    if (( NOW - ${CPU_LAST_READABLE_AT[$CPU_ENTITY_ID]:-0} <= CPU_TEMPERATURE_SENSOR_EXPIRY )); then
-      CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
-    fi
-  done
-
-  # Every CPU going silent at once is an IPMI or host problem, not four sockets being unplugged
-  # together. Emptying the table on that would leave nothing to fail safe on, so the previous set is
-  # restored and each column goes on reading "-", which does apply the Dell default profile.
-  # detect_CPU_temperature_sensors() has already overwritten the arrays by now, hence the rebuild
-  if (( ${#CPU_ENTITY_INSTANCES[@]} == 0 )); then
-    for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+  if ! $IS_REMOVAL_CONFIRMED; then
+    for CPU_ENTITY_ID in "${MISSING_CPU_ENTITY_IDS[@]}"; do
       CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
     done
-    set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
-    return 1
   fi
 
   mapfile -t CPU_ENTITY_INSTANCES < <(printf '%s\n' "${CPU_ENTITY_INSTANCES[@]}" | sort -n)
   set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
 
-  [ "${DETECTED_CPU_ENTITY_IDS[*]}" != "${PREVIOUS_CPU_ENTITY_IDS[*]}" ]
-}
-
-# Pushes back the expiry of every monitored CPU temperature sensor.
-# Usage : postpone_CPU_temperature_sensors_expiry $NOW
-#
-# Called while the target server is powered off : the sensors are legitimately silent then, and that
-# silence must not count towards the delay after which a CPU is considered removed. Without this, a
-# server left powered off longer than the delay would come back with all of its CPUs already expired
-function postpone_CPU_temperature_sensors_expiry() {
-  local -r NOW="$1"
-  local CPU_ENTITY_ID
-
-  for CPU_ENTITY_ID in "${DETECTED_CPU_ENTITY_IDS[@]}"; do
-    CPU_LAST_READABLE_AT[$CPU_ENTITY_ID]=$NOW
-  done
-}
-
-# Renders a number of seconds the way a human writes a duration : 600 as "10m", not as "600s"
-# Usage : format_duration_for_display $SECONDS
-function format_duration_for_display() {
-  local -r TOTAL_SECONDS="$1"
-  local -r HOURS=$(( TOTAL_SECONDS / 3600 ))
-  local -r MINUTES=$(( TOTAL_SECONDS % 3600 / 60 ))
-  local -r REMAINING_SECONDS=$(( TOTAL_SECONDS % 60 ))
-  local RESULT=""
-
-  (( HOURS > 0 )) && RESULT+="${HOURS}h"
-  (( MINUTES > 0 )) && RESULT+="${MINUTES}m"
-  # The seconds are dropped when a bigger unit already carries the whole duration, so that 600 reads
-  # "10m" rather than "10m0s", but kept when nothing else was printed, so that 0 reads "0s"
-  if (( REMAINING_SECONDS > 0 )) || [ -z "$RESULT" ]; then
-    RESULT+="${REMAINING_SECONDS}s"
+  # The window closes as soon as it has been used, or as soon as the server has come back with every CPU
+  # it had, there being nothing left to remove
+  if $IS_REMOVAL_CONFIRMED || (( ${#MISSING_CPU_ENTITY_IDS[@]} == 0 )); then
+    IS_CPU_REMOVAL_ALLOWED=false
   fi
 
-  printf '%s' "$RESULT"
+  [ "${DETECTED_CPU_ENTITY_IDS[*]}" != "${PREVIOUS_CPU_ENTITY_IDS[*]}" ]
 }
 
 # Describes the detected CPU temperature sensors, along with the IPMI entities they are read from : that

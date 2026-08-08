@@ -247,52 +247,75 @@ function test_a_cpu_showing_up_later_is_picked_up_and_monitored() {
   assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}"
 }
 
-function test_a_cpu_going_silent_keeps_its_column_until_it_has_been_silent_long_enough() {
-  # A socket being POSTed and a socket that has been removed are reported the
-  # same way by Dell, so only the duration tells them apart : dropping it at once
-  # would stop watching a CPU that is merely booting, never dropping it would pin
-  # the server to Dell's profile until someone restarts the container
+function test_a_cpu_going_silent_on_a_running_server_keeps_its_column() {
+  # A CPU cannot physically leave a server that is running, so a sensor going
+  # quiet there is a fault, not a missing socket. Dropping its column would
+  # silently stop watching a CPU that is still installed
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
   detect_then_retrieve_temperatures
-  postpone_CPU_temperature_sensors_expiry 1000
+  IS_CPU_REMOVAL_ALLOWED=false
 
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
   local -r SDR_DATA=$(retrieve_sdr_temperature_data)
 
-  refresh_CPU_temperature_sensors "$SDR_DATA" $((1000 + CPU_TEMPERATURE_SENSOR_EXPIRY - 1))
-  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "still within the delay, the columns stay"
+  refresh_CPU_temperature_sensors "$SDR_DATA"
+  refresh_CPU_temperature_sensors "$SDR_DATA"
+  retrieve_temperatures true "$SDR_DATA"
 
-  refresh_CPU_temperature_sensors "$SDR_DATA" $((1000 + CPU_TEMPERATURE_SENSOR_EXPIRY + 1))
-  assert_equals "3.1 3.2" "${DETECTED_CPU_ENTITY_IDS[*]}" "past the delay, the CPUs are considered removed"
+  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "no power cycle, no removal"
+  assert_equals "40;41;-;-" "$CPUS_TEMPERATURES" "the silent CPUs keep their column, reading as a placeholder"
+
+  CPU_TEMPERATURE_THRESHOLD=50
+  if is_any_CPU_overheating; then
+    pass
+  else
+    fail "an unreadable CPU must keep failing safe to Dell's profile"
+  fi
+}
+
+function test_a_cpu_removed_across_a_power_cycle_leaves_after_a_second_reading() {
+  # Powering the server off is the only way its CPUs can change, so that is the
+  # only moment one may leave the set -- and a socket can still be slow to become
+  # readable during POST, hence the confirmation by a second identical reading
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
+  detect_then_retrieve_temperatures
+
+  # The server has just been powered back on with two CPUs removed
+  IS_CPU_REMOVAL_ALLOWED=true
+  PENDING_CPU_REMOVAL_SIGNATURE=""
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
+  local -r SDR_DATA=$(retrieve_sdr_temperature_data)
+
+  refresh_CPU_temperature_sensors "$SDR_DATA"
+  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "one reading is not enough to conclude"
+
+  refresh_CPU_temperature_sensors "$SDR_DATA"
+  assert_equals "3.1 3.2" "${DETECTED_CPU_ENTITY_IDS[*]}" "the second identical reading confirms it"
   assert_equals "CPU 1 CPU 2" "${DETECTED_CPU_LABELS[*]}"
 }
 
-function test_every_cpu_going_silent_at_once_keeps_the_table_intact() {
-  # That is an IPMI or host problem, not four sockets unplugged together, and an
-  # empty table would leave nothing to fail safe on
+function test_a_socket_slow_to_become_readable_after_a_reboot_keeps_its_column() {
+  # The reason the removal needs confirming : right after POST, a populated
+  # socket can read "Disabled" on one cycle and report its temperature on the
+  # next. Concluding on the first reading would drop a CPU that is still there
   export MOCK_IPMITOOL_SDR_OUTPUT
-  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
   detect_then_retrieve_temperatures
-  postpone_CPU_temperature_sensors_expiry 1000
 
-  refresh_CPU_temperature_sensors "" $((1000 + CPU_TEMPERATURE_SENSOR_EXPIRY + 1))
+  IS_CPU_REMOVAL_ALLOWED=true
+  PENDING_CPU_REMOVAL_SIGNATURE=""
 
-  assert_equals "3.1 3.2" "${DETECTED_CPU_ENTITY_IDS[*]}"
-  assert_equals "CPU 1 CPU 2" "${DETECTED_CPU_LABELS[*]}"
+  # First reading after the reboot : CPU 3 and CPU 4 not readable yet
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
+  refresh_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}"
+
+  # They show up on the next one, and the window closes with nothing removed
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 4 --cpu-temperatures "40 41 42 43")
+  refresh_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "every CPU is back, none was dropped"
+  assert_equals "false" "$IS_CPU_REMOVAL_ALLOWED" "the server came back complete, nothing left to remove"
 }
 
-function test_a_powered_off_server_does_not_consume_the_expiry_delay() {
-  # Its sensors are legitimately silent then : without this, a server left off
-  # longer than the delay would come back with all of its CPUs already expired
-  export MOCK_IPMITOOL_SDR_OUTPUT
-  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
-  detect_then_retrieve_temperatures
-  postpone_CPU_temperature_sensors_expiry 1000
-
-  # Two hours powered off, then one cycle where the CPUs are still POSTing
-  postpone_CPU_temperature_sensors_expiry 8200
-  refresh_CPU_temperature_sensors "" 8230
-
-  assert_equals "3.1 3.2" "${DETECTED_CPU_ENTITY_IDS[*]}" "the outage must not count towards the delay"
-}

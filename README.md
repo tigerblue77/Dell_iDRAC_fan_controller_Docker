@@ -227,11 +227,13 @@ ipmitool -I lanplus \
 ```
 CPUs are the lines whose 4th column is an entity `3.<something>` and whose reading ends in `degrees C`. They need not be contiguous nor in order: a socket that is empty or unreadable is usually still listed, but as `Disabled` or `No Reading` instead of a temperature, and is therefore not monitored. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model and that output if a CPU that does report a temperature is missing from the table.
 
-The container follows those sensors while it runs, so there is no need to restart it after changing the CPUs of the target server. A CPU that starts reporting a temperature is picked up and monitored on the next check. A CPU that stops reporting one is assumed to be rebooting rather than removed, and the Dell default fan control profile is applied meanwhile, since its temperature is unknown; once it has reported nothing for 10m, the CPU is considered removed, leaves the table, and your fan speed setting resumes on the remaining ones. That is logged as such :
+The container follows those sensors while it runs, so there is no need to restart it after changing the CPUs of the target server. A CPU that starts reporting a temperature is picked up and monitored on the next check.
+
+A CPU that stops reporting one keeps its column, reading `-`, and the Dell default fan control profile is applied meanwhile, since its temperature is unknown. It is only dropped from the table if it is still silent after the server has been switched off and back on, that being the only way a CPU can physically leave the machine: a sensor going quiet on a running server is a fault, not a missing socket, and dropping it would silently stop watching a CPU that is still installed. The conclusion is logged as such :
 ```
-CPU 3 and CPU 4 are considered removed from the server: their temperature sensors (entities 3.3 and 3.4) have reported nothing for more than 10m. 2 CPU temperature sensors detected (entities 3.1 3.2).
+CPU 3 and CPU 4 are considered removed from the server: their temperature sensors (entities 3.3 and 3.4) reported nothing on the two readings that followed the server powering back on. 2 CPU temperature sensors detected (entities 3.1 3.2).
 ```
-The delay is what separates a socket that is merely POSTing from one that is gone, both being reported the same way by iDRAC. It is frozen while the server is powered off.
+Two readings are required because a populated socket can still be unreadable on the first check after a reboot, while its iDRAC reports it exactly like a socket that is gone.
 
 Note that on chassis products (VRTX, FX2, M1000e, MX7000) each server node has its own iDRAC with its own address: point the container at a node's iDRAC, not at the chassis CMC, which doesn't answer IPMI at all.
 
