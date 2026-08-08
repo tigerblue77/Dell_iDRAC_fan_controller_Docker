@@ -1,0 +1,121 @@
+#!/bin/bash
+
+# Fake ipmitool used by the test suite.
+#
+# It stands in for a real iDRAC/BMC so that every code path can be exercised
+# without any Dell hardware, and it is driven entirely through environment
+# variables so that a test can describe the server it wants to simulate.
+#
+# Every invocation is appended verbatim to $MOCK_IPMITOOL_CALL_LOG (when set),
+# which is how tests assert that the expected raw commands were (or were not)
+# sent to the server.
+#
+# Recognized environment variables:
+#   MOCK_IPMITOOL_CALL_LOG         file the invocations are appended to
+#   MOCK_IPMITOOL_FRU_OUTPUT       stdout of "ipmitool fru"
+#   MOCK_IPMITOOL_FRU_EXIT_CODE    exit code of "ipmitool fru" (default 0). When
+#                                  non-zero, MOCK_IPMITOOL_FRU_OUTPUT is printed
+#                                  on stderr instead of stdout, like the real
+#                                  tool does when the connection fails
+#   MOCK_IPMITOOL_SDR_OUTPUT       stdout of "ipmitool sdr type temperature"
+#   MOCK_IPMITOOL_SDR_STDERR       stderr of the same command (firmware noise)
+#   MOCK_IPMITOOL_SDR_EXIT_CODE    its exit code (default 0)
+#   MOCK_IPMITOOL_SDR_SECOND_OUTPUT          readings returned from the
+#                                            MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS+1-th
+#                                            call onwards, so that a running
+#                                            controller can be made to see the
+#                                            temperatures change between two cycles
+#   MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS     when to switch (default 1)
+#   MOCK_IPMITOOL_POWER_STATUS     stdout of "ipmitool chassis power status"
+#   MOCK_IPMITOOL_POWER_EXIT_CODE  its exit code (default 0)
+#   MOCK_IPMITOOL_RAW_STDERR       stderr printed by every "ipmitool raw" call
+#   MOCK_IPMITOOL_RAW_EXIT_CODE    exit code of every "ipmitool raw" call
+#   MOCK_IPMITOOL_RAW_FAIL_PATTERN extended regex matched against the raw
+#                                  command's arguments. When it matches, that
+#                                  single command fails with
+#                                  MOCK_IPMITOOL_RAW_FAIL_STDERR /
+#                                  MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE. This is how
+#                                  a specific command is made to fail (an iDRAC 9
+#                                  firmware >= 3.30.30.30 rejecting 0x30 0x30, or
+#                                  a Gen 14+ server rejecting 0x30 0xce) while
+#                                  the others keep succeeding
+
+if [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$MOCK_IPMITOOL_CALL_LOG"
+fi
+
+# Skip the connection options ("-I open", "-I lanplus -H host -U user -E") to
+# find the sub-command and its own arguments
+declare -a ARGUMENTS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -I | -H | -U | -P | -p | -L | -y)
+      # These options take a value, drop both
+      shift 2
+      ;;
+    -E | -v | -N | -R)
+      shift
+      ;;
+    *)
+      ARGUMENTS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+readonly SUB_COMMAND="${ARGUMENTS[0]:-}"
+
+case "$SUB_COMMAND" in
+  fru)
+    if [ "${MOCK_IPMITOOL_FRU_EXIT_CODE:-0}" -ne 0 ]; then
+      printf '%s\n' "${MOCK_IPMITOOL_FRU_OUTPUT:-}" >&2
+      exit "${MOCK_IPMITOOL_FRU_EXIT_CODE}"
+    fi
+    printf '%s\n' "${MOCK_IPMITOOL_FRU_OUTPUT:-}"
+    ;;
+
+  sdr)
+    if [ -n "${MOCK_IPMITOOL_SDR_STDERR:-}" ]; then
+      printf '%s\n' "$MOCK_IPMITOOL_SDR_STDERR" >&2
+    fi
+
+    SDR_OUTPUT="${MOCK_IPMITOOL_SDR_OUTPUT:-}"
+    if [ -n "${MOCK_IPMITOOL_SDR_SECOND_OUTPUT:-}" ] && [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
+      # The current call is already in the log, so this counts it too
+      SDR_CALL_NUMBER=$(grep -c ' sdr ' "$MOCK_IPMITOOL_CALL_LOG")
+      if [ "$SDR_CALL_NUMBER" -gt "${MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS:-1}" ]; then
+        SDR_OUTPUT="$MOCK_IPMITOOL_SDR_SECOND_OUTPUT"
+      fi
+    fi
+
+    if [ -n "$SDR_OUTPUT" ]; then
+      printf '%s\n' "$SDR_OUTPUT"
+    fi
+    exit "${MOCK_IPMITOOL_SDR_EXIT_CODE:-0}"
+    ;;
+
+  chassis)
+    # Set but empty means "the iDRAC answered nothing", which is not the same as
+    # unset, so the fallback deliberately does not use the ":-" form here
+    printf '%s\n' "${MOCK_IPMITOOL_POWER_STATUS-Chassis Power is on}"
+    exit "${MOCK_IPMITOOL_POWER_EXIT_CODE:-0}"
+    ;;
+
+  raw)
+    RAW_ARGUMENTS="${ARGUMENTS[*]:1}"
+    if [ -n "${MOCK_IPMITOOL_RAW_FAIL_PATTERN:-}" ] &&
+      [[ "$RAW_ARGUMENTS" =~ $MOCK_IPMITOOL_RAW_FAIL_PATTERN ]]; then
+      printf '%s\n' "${MOCK_IPMITOOL_RAW_FAIL_STDERR:-Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state}" >&2
+      exit "${MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE:-1}"
+    fi
+    if [ -n "${MOCK_IPMITOOL_RAW_STDERR:-}" ]; then
+      printf '%s\n' "$MOCK_IPMITOOL_RAW_STDERR" >&2
+    fi
+    exit "${MOCK_IPMITOOL_RAW_EXIT_CODE:-0}"
+    ;;
+
+  *)
+    printf 'mock ipmitool: unsupported sub-command "%s"\n' "$SUB_COMMAND" >&2
+    exit 127
+    ;;
+esac
