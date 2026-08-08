@@ -367,18 +367,79 @@ function format_temperature_for_display() {
   fi
 }
 
+# Returns 0 (true) if the given temperature reading is usable, i.e. a plain non-negative integer.
+# A missing sensor, a transient IPMI parsing glitch or an "ns"/"Disabled" sensor all yield something
+# that isn't
+function is_temperature_reading_valid() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
-# If a reading isn't a valid number (missing sensor, transient IPMI parsing glitch, etc.), fail safe and
-# report overheating so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt"
-# throws "unary operator expected" on empty/non-numeric input) or silently running the low user fan speed
-# on unverified data
+# If a reading isn't valid, fail safe and report overheating so the Dell default fan control profile
+# kicks in, instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric
+# input) or silently running the low user fan speed on unverified data
 function CPU1_OVERHEATING() {
-  [[ "$CPU1_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
+  is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
   [ "$((10#$CPU1_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
 function CPU2_OVERHEATING() {
-  [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
+  is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
   [ "$((10#$CPU2_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+}
+
+# Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
+# Usage : join_with_and $ITEM...
+function join_with_and() {
+  local result=""
+  local i
+
+  for (( i = 1; i <= $#; i++ )); do
+    if (( i == 1 )); then
+      result="${!i}"
+    elif (( i == $# )); then
+      result+=" and ${!i}"
+    else
+      result+=", ${!i}"
+    fi
+  done
+
+  echo "$result"
+}
+
+# Build the comment explaining why the Dell default fan control profile was applied.
+# Usage : build_fan_control_fallback_comment $CPU_NAME $CPU_TEMPERATURE [$CPU_NAME $CPU_TEMPERATURE]...
+#
+# CPU1_OVERHEATING()/CPU2_OVERHEATING() deliberately return true both when a CPU is genuinely too hot
+# and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile.
+# The comment has to tell the two apart : reporting "temperature is too high" on a reading that was
+# never obtained sends the user chasing a cooling problem instead of the sensor problem they have
+function build_fan_control_fallback_comment() {
+  local -a too_hot=()
+  local -a unreadable=()
+  local -a reasons=()
+
+  while (( $# >= 2 )); do
+    if is_temperature_reading_valid "$2"; then
+      too_hot+=("$1")
+    else
+      unreadable+=("$1")
+    fi
+    shift 2
+  done
+
+  if (( ${#too_hot[@]} == 1 )); then
+    reasons+=("${too_hot[0]} temperature is too high")
+  elif (( ${#too_hot[@]} > 1 )); then
+    reasons+=("$(join_with_and "${too_hot[@]}") temperatures are too high")
+  fi
+
+  if (( ${#unreadable[@]} == 1 )); then
+    reasons+=("${unreadable[0]} temperature could not be read")
+  elif (( ${#unreadable[@]} > 1 )); then
+    reasons+=("$(join_with_and "${unreadable[@]}") temperatures could not be read")
+  fi
+
+  echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
 }
 
 function print_error() {
