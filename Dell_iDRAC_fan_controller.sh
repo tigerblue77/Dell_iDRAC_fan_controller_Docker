@@ -166,9 +166,16 @@ SLEEP_PROCESS_PID=$!
 # from them. The loop then keeps watching for CPUs showing up later, so a partial set read here is not
 # final.
 # The target server may be powered off, or its iDRAC may not be answering yet, when the container starts.
-# No sensor can be read then, so keep waiting instead of giving up : this container is expected to
-# outlive its target server being powered off, and exiting here would just make it restart in a loop
-IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=false
+# Nothing can be read then, so keep waiting instead of giving up : this container is expected to
+# outlive its target server being powered off, and exiting here would just make it restart in a loop.
+#
+# What is waited for is the server answering at all, not a CPU being among what it answers. A server can
+# legitimately expose no processor entity and still have temperatures worth logging and a fan control
+# profile worth setting : an enclosure or CMC (M1000e, VRTX, FX2, MX7000) aimed at instead of a blade
+# reports its chassis sensors and no CPU, and so does an iDRAC exposing its processors in a form the
+# entity matcher does not recognise. Waiting on a CPU there means never printing a single line, in a
+# container whose entire purpose in MONITORING_ONLY_MODE is to print them
+IS_WAITING_FOR_TEMPERATURE_SENSORS_LOGGED=false
 while true; do
   IS_TARGET_SERVER_ANSWERING=true
   if $NETWORK_MODE && ! is_server_powered_on; then
@@ -180,14 +187,14 @@ while true; do
     # first readings cost a single IPMI round-trip and describe the very same instant
     SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
     detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
-    if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
+    if [ -n "$SDR_TEMPERATURE_DATA" ]; then
       break
     fi
 
-    # The server answers but exposes no readable CPU temperature, so nothing can be supervised. Hand the
-    # fans back to Dell rather than leave them wherever they were: a previous run of this container may
-    # have left the BMC in manual mode, in which case they would stay pinned at the user's low speed
-    # with nobody watching the temperatures
+    # The server answers the power query but its sensor list comes back empty, so there is nothing to
+    # supervise and nothing to print. Hand the fans back to Dell rather than leave them wherever they
+    # were: a previous run of this container may have left the BMC in manual mode, in which case they
+    # would stay pinned at the user's low speed with nobody watching the temperatures
     apply_Dell_default_fan_control_profile
   fi
 
@@ -195,24 +202,24 @@ while true; do
     # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
     # same powered-off server, only observed before the first reading rather than after
     printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
-  elif ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
-    # The server answers but exposes nothing readable. Logged once only, to say why the container isn't
+  elif ! $IS_WAITING_FOR_TEMPERATURE_SENSORS_LOGGED; then
+    # The server answers but returns no sensor at all. Logged once only, to say why the container isn't
     # printing temperatures yet without flooding the logs every cycle
-    IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=true
+    IS_WAITING_FOR_TEMPERATURE_SENSORS_LOGGED=true
 
     if $NETWORK_MODE; then
       WAITING_REASON="is the target server still starting up ?"
     else
       # In local mode the server is by definition powered on, so pointing at its power state would send
-      # the user looking in the wrong direction: the sensors are there, they just can't be parsed
+      # the user looking in the wrong direction: the sensors are there, they just can't be read
       WAITING_REASON="see the troubleshooting section of the README"
     fi
 
     # The profile is only claimed when it was really sent : applying it is a no-op in monitoring only mode
     if $MONITORING_ONLY_MODE; then
-      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
+      printf "%19s  No temperature sensor could be read (%s), waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
     else
-      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
+      printf "%19s  No temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
     fi
   fi
 

@@ -225,13 +225,77 @@ function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_sa
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge M1000e"
   assert_contains "$OUTPUT" "Dell default dynamic fan control profile" \
     "an unreadable CPU must fall back on Dell's own profile"
-  # No processor entity at all means there is nothing to build a temperatures
-  # table around, so the controller says so and keeps waiting for one instead of
-  # printing a table whose only CPU column would never hold a reading
-  assert_contains "$OUTPUT" "No CPU temperature sensor could be read" \
+  # It exposes no processor entity, which is stated once at startup. The chassis
+  # sensors it does expose are still worth logging, so the table is printed with
+  # no CPU column rather than not printed at all
+  assert_contains "$OUTPUT" "No CPU temperature sensor detected, only the chassis temperatures will be monitored." \
     "the enclosure reports no processor entity, and the controller says so"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
     "manual fan control must never be enabled on readings the controller never got"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")" \
     "no fan speed must be sent either"
+}
+
+function test_the_enclosure_is_still_monitored_when_it_exposes_no_processor_entity() {
+  # Regression test for issue #221 : waiting for a processor entity that a CMC
+  # will never expose left the container printing one line and then nothing, for
+  # ever -- with MONITORING_ONLY_MODE, whose entire purpose is those lines, the
+  # sharpest edge. What the enclosure does expose is monitored instead
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_matches "$OUTPUT" 'Date & time      Inlet  Exhaust' \
+    "the table is printed, with no CPU column between the inlet and the exhaust"
+  assert_matches "$OUTPUT" '01-01-2024 00:00:00[[:space:]]+22°C' \
+    "and the inlet reading the enclosure does report is logged"
+  assert_contains "$OUTPUT" "No CPU temperature could be read, Dell default dynamic fan control profile applied for safety" \
+    "the comment column says why the fans were handed to Dell"
+  # The setting is applied inside the monitoring loop, so it was never applied at
+  # all while the container waited for a CPU that was not coming
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 1 ]; then
+    pass
+  else
+    fail "the third-party PCIe card cooling response setting must still be applied"
+  fi
+}
+
+function test_monitoring_only_mode_keeps_logging_an_enclosure_that_exposes_no_processor_entity() {
+  # The sharp edge of issue #221 : logging temperatures is the entire purpose of
+  # this mode, so a server it can only ever read chassis sensors from is exactly
+  # the one it must keep printing lines for -- and it must still touch no fan
+  export MONITORING_ONLY_MODE=true
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_matches "$OUTPUT" '01-01-2024 00:00:00[[:space:]]+22°C' \
+    "the inlet reading must be logged, mode or no mode"
+  assert_contains "$OUTPUT" "(monitoring only, not applied)" \
+    "and the profile column must say the fans were left alone"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")" \
+    "no fan control command must be sent in monitoring only mode"
+}
+
+function test_a_processor_entity_showing_up_later_is_adopted_by_a_table_that_had_none() {
+  # The other half : an iDRAC answering before its processor entities are readable
+  # starts a CPU-less table, and must widen it as soon as one answers rather than
+  # stay chassis-only for the life of the container
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --no-exhaust --inlet 22)
+  MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=2
+
+  # Waiting on the reading rather than on the adoption line : the columns are
+  # widened on the cycle the set changes and filled on the next one, so stopping
+  # at the adoption line would stop one cycle before the table proves it
+  local -r OUTPUT=$(run_controller "44°C")
+
+  assert_matches "$OUTPUT" 'Date & time      Inlet  Exhaust' \
+    "the chassis-only table runs while no socket answers"
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)." \
+    "the sockets that became readable are adopted"
+  assert_matches "$OUTPUT" 'Date & time      Inlet  CPU 1  CPU 2  Exhaust' \
+    "and the table grows the two columns it had none of"
+  assert_contains "$OUTPUT" "44°C" "and reads them from then on"
 }

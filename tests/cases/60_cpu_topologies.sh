@@ -142,13 +142,35 @@ function test_the_internal_functions_reject_a_wrong_number_of_parameters() {
 
   RETRIEVE_OUTPUT=$(retrieve_temperatures true true true 2>&1)
   local -r RETRIEVE_EXIT_CODE=$?
-  BUILD_HEADER_OUTPUT=$(build_header 5 2>&1)
+  # No CPU label is a valid table, a server exposing no processor entity still
+  # having an inlet and an exhaust to log, so the guard is on the width alone
+  BUILD_HEADER_OUTPUT=$(build_header 2>&1)
   local -r BUILD_HEADER_EXIT_CODE=$?
 
   assert_equals 1 "$RETRIEVE_EXIT_CODE"
   assert_contains "$RETRIEVE_OUTPUT" "Illegal number of parameters"
   assert_equals 1 "$BUILD_HEADER_EXIT_CODE"
-  assert_contains "$BUILD_HEADER_OUTPUT" "requires a column content width and at least one CPU label"
+  assert_contains "$BUILD_HEADER_OUTPUT" "requires a column content width"
+}
+
+function test_the_header_of_a_server_exposing_no_processor_entity() {
+  # An enclosure or a CMC reports chassis sensors and no CPU. The banner then
+  # spans "Inlet  Exhaust", which is exactly the width of its own title, so it
+  # comes out with no dash on either side rather than mis-sized
+  # Written as two concatenated lines rather than one string spanning them, so that
+  # the space the title is padded with on its right -- the one no dash replaces at
+  # this width -- survives an editor trimming trailing whitespace
+  local -r BANNER_LINE="                      Temperatures "
+  local -r COLUMNS_LINE="    Date & time      Inlet  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
+
+  assert_equals "$BANNER_LINE"$'\n'"$COLUMNS_LINE" "$(build_header 5)"
+}
+
+function test_the_temperature_line_of_a_server_exposing_no_processor_entity() {
+  local -r LINE=$(print_temperature_array_line 5 "22" "" "31" "Dell default dynamic fan control profile" "Enabled" "No CPU temperature could be read, Dell default dynamic fan control profile applied for safety")
+
+  assert_matches "$LINE" '^[0-9-]{10} [0-9:]{8}[[:space:]]+22°C[[:space:]]+31°C' \
+    "the inlet and the exhaust sit next to each other, with no empty CPU column between them"
 }
 
 function test_the_header_of_a_single_cpu_server() {
