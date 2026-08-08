@@ -159,6 +159,19 @@ else
 fi
 echo ""
 
+# The profile column has zero slack: "Dell default dynamic fan control profile" is exactly 40
+# characters, so the "(monitoring only, not applied)" badge cannot be made to fit by shortening
+# anything. MONITORING_ONLY_MODE is fixed for the container's lifetime, so the widths are settled once
+# here and used for both the header and the rows, instead of the rows silently overflowing a header
+# that reserved less
+if "$MONITORING_ONLY_MODE"; then
+  readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=71
+  readonly COOLING_RESPONSE_COLUMN_WIDTH=51
+else
+  readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=40
+  readonly COOLING_RESPONSE_COLUMN_WIDTH=51
+fi
+
 TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 # Tracks which fan control profile is currently applied, so that a change can be commented on the
 # cycle it happens rather than on every cycle. A boolean was enough while there were only two
