@@ -256,8 +256,13 @@ function refresh_CPU_temperature_sensors() {
 
   # Every CPU going silent at once is an IPMI or host problem, not four sockets being unplugged
   # together. Emptying the table on that would leave nothing to fail safe on, so the previous set is
-  # kept and each column goes on reading "-", which does apply the Dell default profile
+  # restored and each column goes on reading "-", which does apply the Dell default profile.
+  # detect_CPU_temperature_sensors() has already overwritten the arrays by now, hence the rebuild
   if (( ${#CPU_ENTITY_INSTANCES[@]} == 0 )); then
+    for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+      CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
+    done
+    set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
     return 1
   fi
 
@@ -291,6 +296,22 @@ function format_detected_CPU_temperature_sensors() {
   else
     printf '%d CPU temperature sensors detected (entities %s)' "${#DETECTED_CPU_ENTITY_IDS[@]}" "${DETECTED_CPU_ENTITY_IDS[*]}"
   fi
+}
+
+# Warns when more CPU temperature sensors are detected than any Dell server has sockets.
+# Usage : warn_if_unexpected_number_of_CPUs
+#
+# Nothing is ever dropped : every detected CPU stays monitored whatever its number, because dropping a
+# column would mean silently not watching a heat source. This only reports a count the hardware cannot
+# produce, which necessarily means the sensors were mis-parsed
+function warn_if_unexpected_number_of_CPUs() {
+  if (( ${#DETECTED_CPU_ENTITY_IDS[@]} <= MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER )); then
+    return
+  fi
+
+  print_warning "${#DETECTED_CPU_ENTITY_IDS[@]} CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command"
+  # print_warning() emits no trailing newline
+  echo ""
 }
 
 # The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), which every label
@@ -561,8 +582,10 @@ function is_any_CPU_overheating() {
     CPU_TEMPERATURE="${CPU_TEMPERATURES[INDEX]}"
     if ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$((10#$CPU_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
       # The label is taken from the table's own labels rather than rebuilt here, so that the CPU named
-      # in the comment is always the one whose column shows the reading that triggered it
-      OVERHEATING_CPUS_AND_TEMPERATURES+=("${DETECTED_CPU_LABELS[INDEX]}" "$CPU_TEMPERATURE")
+      # in the comment is always the one whose column shows the reading that triggered it. It falls back
+      # to the position rather than to an empty string, so that a comment naming no CPU at all can never
+      # be the thing a user has to diagnose an overheat with
+      OVERHEATING_CPUS_AND_TEMPERATURES+=("${DETECTED_CPU_LABELS[INDEX]:-CPU $((INDEX + 1))}" "$CPU_TEMPERATURE")
     fi
   done
 

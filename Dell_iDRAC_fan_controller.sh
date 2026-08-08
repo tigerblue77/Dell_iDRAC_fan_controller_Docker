@@ -89,7 +89,12 @@ SLEEP_PROCESS_PID=$!
 # outlive its target server being powered off, and exiting here would just make it restart in a loop
 IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=false
 while true; do
-  if ! $NETWORK_MODE || is_server_powered_on; then
+  IS_TARGET_SERVER_ANSWERING=true
+  if $NETWORK_MODE && ! is_server_powered_on; then
+    IS_TARGET_SERVER_ANSWERING=false
+  fi
+
+  if $IS_TARGET_SERVER_ANSWERING; then
     detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
     if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
       break
@@ -105,13 +110,24 @@ while true; do
   # Only logged once, to say why the container isn't printing temperatures yet without flooding the logs
   if ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
     IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=true
-    if $NETWORK_MODE; then
-      printf "%19s  No CPU temperature sensor could be read yet (is the target server powered off ?), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")"
+
+    if ! $IS_TARGET_SERVER_ANSWERING; then
+      WAITING_REASON="the target server is powered off"
+    elif $NETWORK_MODE; then
+      WAITING_REASON="no CPU temperature sensor could be read (is the target server still starting up ?)"
     else
       # In local mode the server is by definition powered on, so pointing at its power state would send
       # the user looking in the wrong direction: the sensors are there, they just can't be parsed
-      printf "%19s  No CPU temperature sensor could be read, see the troubleshooting section of the README. Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")"
+      WAITING_REASON="no CPU temperature sensor could be read, see the troubleshooting section of the README"
     fi
+
+    # Only claimed when it actually happened : the profile is not applied on a server that isn't
+    # answering, and applying it is a no-op in monitoring only mode
+    if $IS_TARGET_SERVER_ANSWERING && ! $MONITORING_ONLY_MODE; then
+      WAITING_REASON+=". Dell default dynamic fan control profile applied for safety"
+    fi
+
+    printf "%19s  Waiting, %s...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
   fi
 
   wait $SLEEP_PROCESS_PID
@@ -130,13 +146,7 @@ NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
 
 echo "$(format_detected_CPU_temperature_sensors)."
 
-# Nothing is dropped when this triggers, every detected CPU is monitored : it only flags a count that no
-# Dell hardware can produce, which most likely means the sensors were mis-parsed
-if [ "$NUMBER_OF_DETECTED_CPUS" -gt "$MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER" ]; then
-  # print_warning() emits no trailing newline, hence the echo
-  print_warning "$NUMBER_OF_DETECTED_CPUS CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command"
-  echo ""
-fi
+warn_if_unexpected_number_of_CPUs
 
 retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 
@@ -187,7 +197,7 @@ while true; do
   # been removed, and one may simply not have finished POSTing yet. Checked every cycle rather than only
   # on a power transition, and reusing the data retrieve_temperatures() just fetched, so it costs no
   # extra IPMI round-trip
-  PREVIOUS_NUMBER_OF_DETECTED_CPUS=$NUMBER_OF_DETECTED_CPUS
+  PREVIOUS_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
   if refresh_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA" "$(date +%s)"; then
     NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
     CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
@@ -195,13 +205,28 @@ while true; do
     # The table just changed shape, so its header is reprinted before the next line
     TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 
+    # Which CPUs left is computed from the sets themselves rather than from the count, so that CPUs
+    # leaving and appearing on the same cycle can't cancel each other out and pass unreported
+    EXPIRED_CPU_ENTITY_IDS=()
+    for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+      if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " != *" $CPU_ENTITY_ID "* ]]; then
+        EXPIRED_CPU_ENTITY_IDS+=("$CPU_ENTITY_ID")
+      fi
+    done
+
     # A CPU leaving the table means one less heat source watched, which deserves more than the plain
-    # count : it is the only trace left that the server used to have it
-    if [ "$NUMBER_OF_DETECTED_CPUS" -lt "$PREVIOUS_NUMBER_OF_DETECTED_CPUS" ]; then
-      printf "%19s  A CPU stopped reporting its temperature for more than %ss and is no longer monitored, %s.\n" "$(date +"%d-%m-%Y %T")" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
+    # count : it is the only trace left that the server used to have it. Named by entity, the labels
+    # having just been renumbered
+    if [ "${#EXPIRED_CPU_ENTITY_IDS[@]}" -eq 1 ]; then
+      printf "%19s  CPU temperature sensor %s stopped reporting for more than %ss and is no longer monitored, %s.\n" "$(date +"%d-%m-%Y %T")" "${EXPIRED_CPU_ENTITY_IDS[0]}" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
+    elif [ "${#EXPIRED_CPU_ENTITY_IDS[@]}" -gt 1 ]; then
+      printf "%19s  CPU temperature sensors %s stopped reporting for more than %ss and are no longer monitored, %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${EXPIRED_CPU_ENTITY_IDS[@]}")" "$CPU_TEMPERATURE_SENSOR_EXPIRY" "$(format_detected_CPU_temperature_sensors)"
     else
       printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
     fi
+
+    # Checked again here and not only at startup : a mis-parse can just as well show up mid-run
+    warn_if_unexpected_number_of_CPUs
 
     # A CPU appearing can sort before the known ones, so the readings must be taken again against the
     # new entity list rather than reused from before it changed
