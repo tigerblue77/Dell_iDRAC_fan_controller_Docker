@@ -143,8 +143,9 @@ retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
-  # Set the placeholder straight away : retrieve_temperatures() only does it on the next cycle, so the
-  # very first printed line would otherwise leave the exhaust column empty
+  # This reading was taken before the sensor was known to be absent, so it holds an empty string where
+  # every later cycle will hold the "-" placeholder. Backfilling it here keeps the first printed line
+  # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
   EXHAUST_TEMPERATURE="-"
 fi
 # Output new line to beautify output
@@ -216,8 +217,13 @@ while true; do
     if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 
-      # is_any_CPU_overheating() named the CPUs actually concerned, however many of them there are
-      COMMENT="$OVERHEATING_REASON, Dell default dynamic fan control profile applied for safety"
+      # is_any_CPU_overheating() collected every CPU concerned, however many of them there are, each
+      # with its reading so the comment can tell "too high" from "could not be read"
+      if (( ${#OVERHEATING_CPUS_AND_TEMPERATURES[@]} > 0 )); then
+        COMMENT=$(build_fan_control_fallback_comment "${OVERHEATING_CPUS_AND_TEMPERATURES[@]}")
+      else
+        COMMENT="No CPU temperature could be read, Dell default dynamic fan control profile applied for safety"
+      fi
     fi
   else
     apply_user_fan_control_profile
