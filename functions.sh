@@ -176,6 +176,75 @@ function set_iDRAC_login_string() {
   fi
 }
 
+# Retrieve the "high" temperature the CPU manufacturer itself defines, as reported by the lm-sensors
+# utility ("Package id 0:  +45.0°C  (high = +62.0°C, crit = +72.0°C)")
+# Usage : retrieve_CPU_high_temperature_from_lm_sensors
+# Returns : the lowest "high" temperature in degrees Celsius (integer), or an empty string if lm-sensors
+#           is unavailable or exposes no such value
+#
+# /!\ lm-sensors reads the CPUs of the machine this script runs on, so this is only meaningful in local
+# mode, where that machine is the very server whose fans are being controlled /!\
+#
+# Only Intel's "coretemp" chips are read. The other chips lm-sensors exposes (chipset, NVMe drives...)
+# publish their own unrelated "high" values, which would silently become the CPU threshold, and AMD's
+# drivers publish nothing usable : k10temp hides both "high" and "crit" on every Zen part (so on every
+# EPYC PowerEdge), its "high" on older parts is a hardcoded 70°C driver constant on the non-physical
+# Tctl scale rather than a manufacturer value, and k8temp exposes no limit at all. An AMD server
+# therefore falls back to FALLBACK_CPU_TEMPERATURE_THRESHOLD, which the startup log states explicitly,
+# instead of silently adopting a number that means nothing
+function retrieve_CPU_high_temperature_from_lm_sensors() {
+  if ! command -v sensors > /dev/null 2>&1; then
+    return
+  fi
+
+  # "sensors -u" prints raw sub-feature values ("temp1_max: 62.000") instead of the decorated, localized
+  # human-readable format ("high = +62.0°C"), which keeps the parsing independent from locale and layout
+  local -r HIGH_TEMPERATURE=$(sensors -u 2>/dev/null | awk '
+    # Chip names are the only unindented lines that are neither "Adapter: ..." nor a feature label such as
+    # "Package id 0:", which always ends with a colon
+    /^[^[:space:]]/ {
+      if ($0 !~ /^Adapter:/ && $0 !~ /:[[:space:]]*$/) {
+        chip = $0
+        is_CPU_chip = (chip ~ /^coretemp-/)
+      }
+      next
+    }
+    !is_CPU_chip { next }
+    # "high" is the "_max" sub-feature and "crit" the "_crit" one. Both are collected per sensor, so that
+    # they can be compared below ("_crit_alarm" and "_crit_hyst" do not match, the colon must follow)
+    $1 ~ /^temp[0-9]+_(max|crit):$/ && $2 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      split($1, subfeature, "_")
+      sub(/:$/, "", subfeature[2])
+      if (subfeature[2] == "max") {
+        high[chip, subfeature[1]] = $2 + 0
+      } else {
+        critical[chip, subfeature[1]] = $2 + 0
+      }
+    }
+    END {
+      for (sensor in high) {
+        # "high" must sit strictly below "crit". coretemp derives "high" by subtracting an offset from
+        # TjMax that Intel documents as reserved : when a CPU leaves it at zero, "high" comes back equal
+        # to "crit", i.e. to the temperature at which the CPU already throttles itself. Adopting that as
+        # the threshold would keep the fans low until the hardware has acted, so such a sensor is skipped
+        # and the caller falls back instead
+        if ((sensor in critical) && high[sensor] >= critical[sensor]) continue
+        # Keep the lowest, so the most constrained CPU of a multi-socket server is the one being protected
+        if (lowest == "" || high[sensor] < lowest) lowest = high[sensor]
+      }
+      # Truncate rather than round, so the threshold is never set above what the CPU manufacturer defined
+      if (lowest != "") printf "%d", lowest
+    }')
+
+  # Ignore implausible readings (unsupported or misreporting sensor) instead of letting them become the
+  # threshold that protects the hardware
+  if [[ "$HIGH_TEMPERATURE" =~ ^[0-9]+$ ]] \
+    && [ "$HIGH_TEMPERATURE" -ge "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] \
+    && [ "$HIGH_TEMPERATURE" -le "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
+    echo "$HIGH_TEMPERATURE"
+  fi
+}
+
 # Extract the temperature reading carried by a single ipmitool sdr line
 # Usage : extract_temperature_from_sdr_line "$SDR_LINE"
 # Returns : the temperature in degrees Celsius, or an empty string if that line carries no reading
@@ -264,43 +333,242 @@ function retrieve_temperature_by_sensor_name() {
   extract_temperature_from_sdr_line "$SDR_LINE"
 }
 
+# Read the raw temperature sensors data from ipmitool
+# Usage : retrieve_sdr_temperature_data
+# Returns : the "sdr type temperature" lines holding an actual reading
+#
+# stderr is discarded here: this is a read-only diagnostic call (it never changes fan behavior) and some
+# iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
+function retrieve_sdr_temperature_data() {
+  ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees
+}
+
+# Detect the CPU temperature sensors the server exposes
+# Usage : detect_CPU_temperature_sensors "$SDR_DATA"
+# Returns : populates the DETECTED_CPU_ENTITY_IDS and DETECTED_CPU_LABELS global arrays, index-aligned,
+#           in socket order
+#
+# Entity 3 is "Processor" (IPMI v2.0 table 43-13), so the sockets are exposed as 3.1, 3.2, ... Every
+# processor entity actually carrying a reading is enumerated, rather than probing 3.1, 3.2, ... in order
+# and stopping at the first gap, because none of what that probing assumed holds :
+# - IPMI only requires entity instances to be unique, not contiguous nor 1-based (section 39.1)
+# - iDRAC returns them out of order (an R930 lists 3.4 before 3.1, see issue #91)
+# - Dell keeps the SDR row of an unreadable or depopulated socket and reports it "Disabled" instead of
+#   omitting it, so the set of *readable* CPUs is legitimately sparse
+# No upper bound is applied either : the entity instance is a 7-bit field, and a CPU dropped for being
+# past an arbitrary limit would be a heat source nobody watches
+function detect_CPU_temperature_sensors() {
+  local -r SDR_DATA="$1"
+
+  # The entity is matched on the trimmed 4th column, anchored, so that "13.1" or "30.1" can't be taken
+  # for a processor and "3.10" can't be truncated to "3.1". Instances are deduplicated, as two sensors
+  # sharing an entity would otherwise get two columns both showing the first one
+  # (retrieve_temperature_by_entity_id() stops at the first match), and sorted on the instance number
+  # alone, a lexicographic sort putting 3.10 between 3.1 and 3.2
+  local -a CPU_ENTITY_INSTANCES
+  mapfile -t CPU_ENTITY_INSTANCES < <(printf '%s\n' "$SDR_DATA" | awk -F'|' '
+    { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4) }
+    $4 ~ /^3\.[0-9]+$/ && $5 ~ /[0-9]+[[:space:]]*degrees/ {
+      split($4, ENTITY, ".")
+      if (!(ENTITY[2] in SEEN)) {
+        SEEN[ENTITY[2]] = 1
+        print ENTITY[2] + 0
+      }
+    }' | sort -n)
+
+  set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
+}
+
+# Fills the DETECTED_CPU_* arrays from a list of entity instances, expected sorted
+# Usage : set_detected_CPU_temperature_sensors 1 2 3 4
+function set_detected_CPU_temperature_sensors() {
+  local -r -a CPU_ENTITY_INSTANCES=("$@")
+
+  # CPUs are numbered 1, 2, 3... in the order their entities come, rather than after the entity instance
+  # they are read from. The instance is an IPMI implementation detail : it is only required to be unique,
+  # so it is free to start at 0 or to be sparse, and labelling a two-CPU server "CPU 0"/"CPU 96" would be
+  # accurate yet useless. The entity each column maps to is logged at startup instead, which is what
+  # makes an unusual numbering diagnosable without putting it in the table
+  DETECTED_CPU_ENTITY_IDS=()
+  DETECTED_CPU_LABELS=()
+  local CPU_ENTITY_INSTANCE
+  local CPU_NUMBER=1
+  for CPU_ENTITY_INSTANCE in "${CPU_ENTITY_INSTANCES[@]}"; do
+    DETECTED_CPU_ENTITY_IDS+=("3.$CPU_ENTITY_INSTANCE")
+    DETECTED_CPU_LABELS+=("CPU $CPU_NUMBER")
+    ((CPU_NUMBER++))
+  done
+}
+
+# Set to true when the target server has just been powered back on. A CPU can only be added or removed
+# with the server switched off, so that transition is the only moment one may legitimately leave the
+# monitored set : while the server keeps running, a sensor going quiet is a fault, not a missing socket
+IS_CPU_REMOVAL_ALLOWED=false
+
+# The readable set seen while a removal is allowed, and how many consecutive readings have agreed on it.
+# A socket can still be slow to become readable during POST, so a smaller set has to be confirmed by
+# CPU_REMOVAL_CONFIRMING_READINGS identical readings before CPUs are dropped from the table
+PENDING_CPU_REMOVAL_SIGNATURE=""
+PENDING_CPU_REMOVAL_READINGS=0
+
+# Runs the detection again on already-fetched sensor data and reports whether the monitored set changed.
+# Usage : refresh_CPU_temperature_sensors "$SDR_DATA"
+# Returns : 0 (true) if the set changed, the DETECTED_CPU_* arrays then describing the new one
+#
+# A CPU showing up is adopted immediately : the server may have been powered off precisely to add one,
+# and keeping the previous set would leave it both invisible in the table and, far worse, never compared
+# to the temperature threshold.
+#
+# A CPU disappearing is only acted upon after a power cycle, and only once CPU_REMOVAL_CONFIRMING_READINGS
+# readings have agreed on it. Dell reports a socket being POSTed and a socket that has been removed in exactly the same way, so
+# they cannot be told apart from a single reading -- but a CPU cannot physically leave a running server,
+# so a sensor that goes quiet while it keeps running is a fault, and its column stays, reading "-", which
+# fails safe to the Dell default profile. Dropping it there would silently stop watching a CPU that is
+# still installed
+function refresh_CPU_temperature_sensors() {
+  local -r SDR_DATA="$1"
+  local -r -a PREVIOUS_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
+
+  detect_CPU_temperature_sensors "$SDR_DATA"
+  local -r -a READABLE_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
+
+  # Entity IDs hold no space, so the padded-join membership test is unambiguous
+  local -a MISSING_CPU_ENTITY_IDS=()
+  local CPU_ENTITY_ID
+  for CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+    if [[ " ${READABLE_CPU_ENTITY_IDS[*]} " != *" $CPU_ENTITY_ID "* ]]; then
+      MISSING_CPU_ENTITY_IDS+=("$CPU_ENTITY_ID")
+    fi
+  done
+
+  # Every CPU going silent at once is an IPMI or host problem, not every socket being unplugged together,
+  # so it never confirms anything
+  local IS_REMOVAL_CONFIRMED=false
+  if (( ${#MISSING_CPU_ENTITY_IDS[@]} > 0 )) && (( ${#READABLE_CPU_ENTITY_IDS[@]} > 0 )) && $IS_CPU_REMOVAL_ALLOWED; then
+    if [ "${READABLE_CPU_ENTITY_IDS[*]}" == "$PENDING_CPU_REMOVAL_SIGNATURE" ]; then
+      ((PENDING_CPU_REMOVAL_READINGS++))
+    else
+      # A different set restarts the count : only readings that agree with each other confirm anything
+      PENDING_CPU_REMOVAL_SIGNATURE="${READABLE_CPU_ENTITY_IDS[*]}"
+      PENDING_CPU_REMOVAL_READINGS=1
+    fi
+    if (( PENDING_CPU_REMOVAL_READINGS >= CPU_REMOVAL_CONFIRMING_READINGS )); then
+      IS_REMOVAL_CONFIRMED=true
+    fi
+  else
+    PENDING_CPU_REMOVAL_SIGNATURE=""
+    PENDING_CPU_REMOVAL_READINGS=0
+  fi
+
+  # The new set is everything readable, plus the known CPUs keeping their column for now.
+  # detect_CPU_temperature_sensors() has already overwritten the arrays by now, hence the rebuild
+  local -a CPU_ENTITY_INSTANCES=()
+  for CPU_ENTITY_ID in "${READABLE_CPU_ENTITY_IDS[@]}"; do
+    CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
+  done
+  if ! $IS_REMOVAL_CONFIRMED; then
+    for CPU_ENTITY_ID in "${MISSING_CPU_ENTITY_IDS[@]}"; do
+      CPU_ENTITY_INSTANCES+=("${CPU_ENTITY_ID#3.}")
+    done
+  fi
+
+  mapfile -t CPU_ENTITY_INSTANCES < <(printf '%s\n' "${CPU_ENTITY_INSTANCES[@]}" | sort -n)
+  set_detected_CPU_temperature_sensors "${CPU_ENTITY_INSTANCES[@]}"
+
+  # The window closes as soon as it has been used, or as soon as the server has come back with every CPU
+  # it had, there being nothing left to remove
+  if $IS_REMOVAL_CONFIRMED || (( ${#MISSING_CPU_ENTITY_IDS[@]} == 0 )); then
+    IS_CPU_REMOVAL_ALLOWED=false
+  fi
+
+  [ "${DETECTED_CPU_ENTITY_IDS[*]}" != "${PREVIOUS_CPU_ENTITY_IDS[*]}" ]
+}
+
+# Describes the detected CPU temperature sensors, along with the IPMI entities they are read from : that
+# is what the README asks users to correlate with their own "ipmitool sdr type temperature" output
+# Usage : format_detected_CPU_temperature_sensors
+function format_detected_CPU_temperature_sensors() {
+  if (( ${#DETECTED_CPU_ENTITY_IDS[@]} == 1 )); then
+    printf '1 CPU temperature sensor detected (entity %s)' "${DETECTED_CPU_ENTITY_IDS[0]}"
+  else
+    printf '%d CPU temperature sensors detected (entities %s)' "${#DETECTED_CPU_ENTITY_IDS[@]}" "${DETECTED_CPU_ENTITY_IDS[*]}"
+  fi
+}
+
+# Warns when more CPU temperature sensors are detected than any Dell server has sockets.
+# Usage : warn_if_unexpected_number_of_CPUs
+#
+# Nothing is ever dropped : every detected CPU stays monitored whatever its number, because dropping a
+# column would mean silently not watching a heat source. This only reports a count the hardware cannot
+# produce, which necessarily means the sensors were mis-parsed
+function warn_if_unexpected_number_of_CPUs() {
+  if (( ${#DETECTED_CPU_ENTITY_IDS[@]} <= MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER )); then
+    return
+  fi
+
+  print_warning "${#DETECTED_CPU_ENTITY_IDS[@]} CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command"
+  # print_warning() emits no trailing newline
+  echo ""
+}
+
+# The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), which every label
+# up to "CPU 9" fits into. A tenth column would be labelled "CPU 10" and push everything on its right by
+# one, so the width follows the labels. No Dell server has ten sockets, so this only ever triggers on a
+# mis-parse -- the same one the startup warning reports -- but a broken table is a poor way to find out
+# Usage : compute_CPU_column_content_width "CPU 1" "CPU 2" ...
+function compute_CPU_column_content_width() {
+  local WIDTH=$MINIMUM_CPU_COLUMN_CONTENT_WIDTH
+  local CPU_LABEL
+
+  for CPU_LABEL in "$@"; do
+    if (( ${#CPU_LABEL} > WIDTH )); then
+      WIDTH=${#CPU_LABEL}
+    fi
+  done
+
+  printf '%s' "$WIDTH"
+}
+
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT ["$SDR_DATA"]
+#
+# The sensor data can be handed over by a caller that has just read it, so that detecting the CPUs and
+# taking their first readings cost a single IPMI round-trip and describe the very same instant
 function retrieve_temperatures() {
-  if (( $# != 2 )); then
-    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
+  if (( $# < 1 || $# > 2 )); then
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT [\"\$SDR_DATA\"]"
     return 1
   fi
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
-  local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
 
-  # stderr is discarded here: this is a read-only diagnostic call (it never changes fan behavior) and some
-  # iDRAC/BMC firmwares print a harmless protocol warning on every call even though the reading succeeds
-  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees)
-
-  # Parse CPU data, each CPU being located by its IPMI entity ID (3.1 is CPU 1, 3.2 is CPU 2)
-  CPU1_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.1")
-  if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-    CPU2_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "3.2")
+  # Kept in a global so that refresh_CPU_temperature_sensors() can look for a newly readable CPU in the
+  # very same data, without spending another IPMI round-trip on it
+  if (( $# == 2 )); then
+    SDR_TEMPERATURE_DATA="$2"
   else
-    CPU2_TEMPERATURE="-"
+    SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
   fi
+  local -r DATA="$SDR_TEMPERATURE_DATA"
 
-  # Initialize CPUS_TEMPERATURES. An unreadable CPU 1 reading falls back to the "-" placeholder so that it
-  # still takes up its column when the line is printed : CPUS_TEMPERATURES is split on whitespace to build
-  # the display array, so an empty value would be dropped and shift every following column to the left.
-  # CPU1_TEMPERATURE itself is left untouched, CPU1_OVERHEATING() must still see the invalid reading
-  CPUS_TEMPERATURES="${CPU1_TEMPERATURE:--}"
-  NUMBER_OF_DETECTED_CPUS=1
+  # Parse every CPU detected at startup, each one being located by its IPMI entity ID.
+  # DETECTED_CPU_TEMPERATURES holds the raw readings, indexed by CPU number minus one, and is what
+  # is_any_CPU_overheating() evaluates : a reading left empty by a transient IPMI glitch must reach it
+  # untouched so it can fail safe on it.
+  # CPUS_TEMPERATURES is the display string, in which an unreadable reading falls back to the "-"
+  # placeholder so that it still takes up its column when the line is printed : it is split to build the
+  # display array, so an empty value would be dropped and shift every following column to the left
+  DETECTED_CPU_TEMPERATURES=()
+  CPUS_TEMPERATURES=""
+  local ENTITY_ID CPU_TEMPERATURE
+  for ENTITY_ID in "${DETECTED_CPU_ENTITY_IDS[@]}"; do
+    CPU_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "$ENTITY_ID")
+    DETECTED_CPU_TEMPERATURES+=("$CPU_TEMPERATURE")
 
-  # If CPU2 is present, parse its temperature data and add it to CPUS_TEMPERATURES.
-  # "-" is the placeholder set above when the sensor is known to be absent, so it must not be counted as a
-  # detected CPU: otherwise servers without a CPU2 sensor get an extra column that the header, built once
-  # from the first reading (when the placeholder isn't set yet), doesn't account for
-  if [ -n "$CPU2_TEMPERATURE" ] && [ "$CPU2_TEMPERATURE" != "-" ]; then
-    CPUS_TEMPERATURES+=";$CPU2_TEMPERATURE"
-    ((NUMBER_OF_DETECTED_CPUS++))
-  fi
+    if [ -n "$CPUS_TEMPERATURES" ]; then
+      CPUS_TEMPERATURES+=";"
+    fi
+    CPUS_TEMPERATURES+="${CPU_TEMPERATURE:--}"
+  done
 
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
@@ -409,94 +677,101 @@ function get_Dell_server_model() {
   fi
 }
 
+# Builds the two header lines of the temperatures table, sized for the CPUs actually detected
+# Usage : build_header $CPU_COLUMN_CONTENT_WIDTH "CPU 1" "CPU 2" ...
 function build_header() {
-  # Check number of arguments
-  if [ "$#" -ne 1 ]; then
-    print_error "build_header() requires an argument (number_of_CPUs)"
+  if (( $# < 2 )); then
+    print_error "build_header() requires a column content width and at least one CPU label"
     return 1
   fi
 
-  local -r number_of_CPUs="$1"
-  local -r CPU_column_width=7
-  local -r Exhaust_column_width=9
+  # Prefixed with LOCAL_ like in print_temperature_array_line() : the caller stores this width in a
+  # readonly global of the obvious name, and a local shadowing it would be refused by bash
+  local -r LOCAL_CPU_COLUMN_CONTENT_WIDTH="$1"
+  shift
+  local -r -a CPU_LABELS=("$@")
 
-  local header="                     ----" # Width ready for 1 CPU
+  # The banner spans the whole temperatures section, from the "I" of "Inlet" to the "t" of "Exhaust" :
+  # "Inlet" (5) and its trailing space, then one column per CPU (its content plus a space on each side),
+  # then the space preceding "Exhaust" (7). Hence the fixed 5 + 1 + 1 + 7 = 14
+  local -r TITLE=" Temperatures "
+  local -r BANNER_WIDTH=$(( ${#CPU_LABELS[@]} * (LOCAL_CPU_COLUMN_CONTENT_WIDTH + 2) + 14 ))
+  local -r NUMBER_OF_LEFT_DASHES=$(( (BANNER_WIDTH - ${#TITLE} + 1) / 2 ))
+  local -r NUMBER_OF_RIGHT_DASHES=$(( BANNER_WIDTH - ${#TITLE} - NUMBER_OF_LEFT_DASHES ))
 
-  # Calculate the number of dashes to add on each side of the title
-  number_of_dashes=$(((number_of_CPUs-1)*CPU_column_width/2))
+  local LEFT_DASHES RIGHT_DASHES
+  printf -v LEFT_DASHES '%*s' "$NUMBER_OF_LEFT_DASHES" ''
+  printf -v RIGHT_DASHES '%*s' "$NUMBER_OF_RIGHT_DASHES" ''
 
-  # Loop to add dashes
-  for ((i=1; i<=number_of_dashes; i++)); do
-    header+="-"
+  # 21 leading spaces : the date column (19) plus the two spaces separating it from the inlet column
+  local header
+  printf -v header '%21s' ''
+  header+="${LEFT_DASHES// /-}${TITLE}${RIGHT_DASHES// /-}"$'\n'
+  header+='    Date & time      Inlet '
+
+  # Each CPU label is right-aligned in the shared column width, so that a label wider than a reading
+  # widens every column consistently instead of shifting the ones on its right
+  local CPU_LABEL
+  for CPU_LABEL in "${CPU_LABELS[@]}"; do
+    header+=$(printf ' %*s ' "$LOCAL_CPU_COLUMN_CONTENT_WIDTH" "$CPU_LABEL")
   done
 
-  header+=" Temperatures ---"
-
-  # Check parity and add an extra dash on the right if odd
-  if (( (number_of_CPUs - 1) * CPU_column_width % 2 != 0 )); then
-    header+="-"
-  fi
-
-  # Loop to add dashes
-  for ((i=1; i<=number_of_dashes; i++)); do
-    header+="-"
-  done
-  header+=$'\n    Date & time      Inlet  CPU 1 '
-
-  # Loop to add CPU columns
-  for ((i=2; i<=number_of_CPUs; i++)); do
-    header+=" CPU $i "
-  done
-
-  header+=$' Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment'
+  header+=' Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment'
   printf "%s" "$header"
 }
 
 function print_temperature_array_line() {
-  local -r LOCAL_INLET_TEMPERATURE="$1"
-  local -r LOCAL_CPUS_TEMPERATURES="$2"
-  local -r LOCAL_EXHAUST_TEMPERATURE="$3"
-  local -r LOCAL_CURRENT_FAN_CONTROL_PROFILE="$4"
-  local -r LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$5"
-  local -r LOCAL_COMMENT="$6"
+  local -r LOCAL_CPU_COLUMN_CONTENT_WIDTH="$1"
+  local -r LOCAL_INLET_TEMPERATURE="$2"
+  local -r LOCAL_CPUS_TEMPERATURES="$3"
+  local -r LOCAL_EXHAUST_TEMPERATURE="$4"
+  local -r LOCAL_CURRENT_FAN_CONTROL_PROFILE="$5"
+  local -r LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$6"
+  local -r LOCAL_COMMENT="$7"
 
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
 
-  # Every value is computed into a variable before being printed rather than substituted inside the
-  # printf arguments : a command substitution carrying double quotes, nested inside an argument that is
-  # itself double-quoted, is what lets a signal delivered at that instant take the graceful exit down
-  # with it (issue #188). The timestamp uses bash's own strftime for the same reason, which also saves
-  # a fork per printed line
   local TIMESTAMP FORMATTED_TEMPERATURE
-  printf -v TIMESTAMP '%(%d-%m-%Y %T)T' -1
-
+  set_log_timestamp TIMESTAMP
   FORMATTED_TEMPERATURE=$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")
   printf "%19s  %s°C " "$TIMESTAMP" "$FORMATTED_TEMPERATURE"
-  # Itération sur les températures dans le tableau
+  # Itération sur les températures dans le tableau.
+  # Only the number is padded, never the assembled "NNN°C" string : the container runs in the POSIX
+  # locale (the Dockerfile sets no LANG), where "°" is two bytes, so printf-padding the whole cell would
+  # count it as two columns and shift the table by one character per CPU
   for temperature in "${CPUs_temperatures_array[@]}"; do
-    FORMATTED_TEMPERATURE=$(format_temperature_for_display "$temperature")
-    printf " %s°C " "$FORMATTED_TEMPERATURE"
+    printf " %s°C " "$(format_temperature_for_display "$temperature" "$((LOCAL_CPU_COLUMN_CONTENT_WIDTH - 2))")"
   done
 
   # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
   # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
-  FORMATTED_TEMPERATURE=$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")
-  printf " %5s°C  %40s  %51s  %s\n" "$FORMATTED_TEMPERATURE" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+  printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
-# Formats a temperature reading as a right-aligned, 3-character-wide decimal number for display.
-# Falls back to "  -" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
+# Stamp the current local time into the named variable, in the format every logged line starts with.
+# Usage : set_log_timestamp TIMESTAMP
+#
+# bash's own strftime rather than $(date ...). A command substitution expanded alongside another one in
+# the same statement is what lets a SIGTERM delivered at that instant leave bash's parser mid-expansion:
+# the trap command string is then parsed with that state still open, fails, and graceful_exit never runs,
+# leaving the fans on the user's static speed (issue #188). It also saves a fork per logged line
+function set_log_timestamp() {
+  printf -v "$1" '%(%d-%m-%Y %T)T' -1
+}
+
+# Formats a temperature reading as a right-aligned decimal number of the given width (3 by default).
+# Falls back to "-" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
 # or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09").
 # Sub-zero readings are values in their own right, not invalid ones, so they keep their sign
+# Usage : format_temperature_for_display "$VALUE" [$WIDTH]
 function format_temperature_for_display() {
   local -r VALUE="$1"
+  local -r WIDTH="${2:-3}"
   if is_temperature_reading_valid "$VALUE"; then
-    local NORMALIZED_VALUE
-    NORMALIZED_VALUE=$(normalize_decimal_value "$VALUE")
-    printf '%3d' "$NORMALIZED_VALUE"
+    printf '%*d' "$WIDTH" "$(normalize_decimal_value "$VALUE")"
   else
-    printf '%3s' "-"
+    printf '%*s' "$WIDTH" "-"
   fi
 }
 
@@ -510,21 +785,42 @@ function is_temperature_reading_valid() {
   [[ "$1" =~ ^-?[0-9]+$ ]]
 }
 
-# Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
-# If a reading isn't valid, fail safe and report overheating so the Dell default fan control profile
-# kicks in, instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric
-# input) or silently running the low user fan speed on unverified data
-function CPU1_OVERHEATING() {
-  is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
-  local NORMALIZED_TEMPERATURE
-  NORMALIZED_TEMPERATURE=$(normalize_decimal_value "$CPU1_TEMPERATURE")
-  [ "$NORMALIZED_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
-}
-function CPU2_OVERHEATING() {
-  is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
-  local NORMALIZED_TEMPERATURE
-  NORMALIZED_TEMPERATURE=$(normalize_decimal_value "$CPU2_TEMPERATURE")
-  [ "$NORMALIZED_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+# Checks whether any of the detected CPUs needs the Dell default fan control profile.
+# Returns 0 (true) if at least one does, and fills OVERHEATING_CPUS_AND_TEMPERATURES with the
+# "label temperature" pairs build_fan_control_fallback_comment() expects, so the log line can tell the
+# user which CPU triggered the switch and whether it was too hot or simply unreadable.
+#
+# Every detected CPU is evaluated, not just the first two : on a 4-socket server (R930, R830...) CPU 3
+# and CPU 4 used to be read by nobody, so they could cross the threshold while the controller happily
+# kept the user's low fan speed running.
+#
+# Like the per-CPU checks it replaces, it deliberately returns true both when a CPU is genuinely too hot
+# and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile
+# instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric input) or
+# silently running the low user fan speed on unverified data
+function is_any_CPU_overheating() {
+  OVERHEATING_CPUS_AND_TEMPERATURES=()
+
+  local INDEX CPU_TEMPERATURE
+  for INDEX in "${!DETECTED_CPU_TEMPERATURES[@]}"; do
+    CPU_TEMPERATURE="${DETECTED_CPU_TEMPERATURES[INDEX]}"
+    if ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
+      # The label is taken from the table's own labels rather than rebuilt here, so that the CPU named
+      # in the comment is always the one whose column shows the reading that triggered it. It falls back
+      # to the position rather than to an empty string, so that a comment naming no CPU at all can never
+      # be the thing a user has to diagnose an overheat with
+      OVERHEATING_CPUS_AND_TEMPERATURES+=("${DETECTED_CPU_LABELS[INDEX]:-CPU $((INDEX + 1))}" "$CPU_TEMPERATURE")
+    fi
+  done
+
+  # Not being able to read a single CPU means nothing can be verified, so fail safe rather than trust
+  # the absence of data. refresh_CPU_temperature_sensors() keeps the set from ever emptying, so this
+  # only guards against a caller reaching here before any detection ran
+  if (( ${#DETECTED_CPU_TEMPERATURES[@]} == 0 )); then
+    return 0
+  fi
+
+  (( ${#OVERHEATING_CPUS_AND_TEMPERATURES[@]} > 0 ))
 }
 
 # Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
@@ -549,8 +845,8 @@ function join_with_and() {
 # Build the comment explaining why the Dell default fan control profile was applied.
 # Usage : build_fan_control_fallback_comment $CPU_NAME $CPU_TEMPERATURE [$CPU_NAME $CPU_TEMPERATURE]...
 #
-# CPU1_OVERHEATING()/CPU2_OVERHEATING() deliberately return true both when a CPU is genuinely too hot
-# and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile.
+# is_any_CPU_overheating() deliberately reports both a CPU that is genuinely too hot and one whose
+# reading is unusable, so an unverifiable temperature still falls back to Dell's profile.
 # The comment has to tell the two apart : reporting "temperature is too high" on a reading that was
 # never obtained sends the user chasing a cooling problem instead of the sensor problem they have
 function build_fan_control_fallback_comment() {
@@ -567,24 +863,19 @@ function build_fan_control_fallback_comment() {
     shift 2
   done
 
-  local enumeration
-
   if (( ${#too_hot[@]} == 1 )); then
     reasons+=("${too_hot[0]} temperature is too high")
   elif (( ${#too_hot[@]} > 1 )); then
-    enumeration=$(join_with_and "${too_hot[@]}")
-    reasons+=("$enumeration temperatures are too high")
+    reasons+=("$(join_with_and "${too_hot[@]}") temperatures are too high")
   fi
 
   if (( ${#unreadable[@]} == 1 )); then
     reasons+=("${unreadable[0]} temperature could not be read")
   elif (( ${#unreadable[@]} > 1 )); then
-    enumeration=$(join_with_and "${unreadable[@]}")
-    reasons+=("$enumeration temperatures could not be read")
+    reasons+=("$(join_with_and "${unreadable[@]}") temperatures could not be read")
   fi
 
-  enumeration=$(join_with_and "${reasons[@]}")
-  echo "$enumeration, Dell default dynamic fan control profile applied for safety"
+  echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
 }
 
 function print_error() {
