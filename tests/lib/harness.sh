@@ -17,6 +17,7 @@ function setup_test_context() {
   export IDRAC_PASSWORD="calvin"
   export FAN_SPEED=5
   export CPU_TEMPERATURE_THRESHOLD=auto
+  export CPU_TEMPERATURE_SOURCE=auto
   export CHECK_INTERVAL=5
   export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
   export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
@@ -26,6 +27,11 @@ function setup_test_context() {
   DECIMAL_FAN_SPEED=5
   HEXADECIMAL_FAN_SPEED="0x05"
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -E"
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR=0
+  # The repository itself : only provide_local_ipmi_device() moves it
+  CONTROLLER_WORKING_DIRECTORY="$REPO_ROOT"
   # Set before the trap by the controller, so graceful_exit can read it whenever a signal lands
   IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
 
@@ -37,6 +43,8 @@ function setup_test_context() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output)"
   export MOCK_IPMITOOL_POWER_STATUS="Chassis Power is on"
+  export MOCK_SENSORS_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/sensors_calls.log"
+  : > "$MOCK_SENSORS_CALL_LOG"
   export MOCK_DATE_OUTPUT="01-01-2024 00:00:00"
   # Short enough to keep the suite fast, long enough for run_controller to stop
   # the controller while it is idle between two cycles rather than mid-cycle
@@ -71,6 +79,54 @@ function capture_output() {
   CAPTURED_OUTPUT=$(cat "$CAPTURE_FILE")
 
   return "$EXIT_CODE"
+}
+
+# Make "local" mode runnable : set_iDRAC_login_string() refuses to start the
+# controller without the Docker host's IPMI device, so a test that needs local
+# mode has to have one. /dev is only writable when the suite runs as root (in the
+# Docker image, or in a CI container), hence the graceful failure : the caller
+# skips rather than reporting a failure about something it never got to test.
+#
+# Make run_controller() start the whole controller in "local" mode, on a machine
+# that has no IPMI device of its own.
+#
+# The controller refuses to start without one, and the lookup it walks lives in
+# the IPMI_DEVICE_PATHS array so that it can be pointed elsewhere (issue #190) --
+# but a bash array cannot cross a process boundary, and run_controller() starts
+# the controller as its own process. That seam is deliberately out of reach of the
+# environment, precisely so that "docker run -e IPMI_DEVICE_PATHS=..." cannot
+# redirect it, and this must not weaken that.
+#
+# The controller sources "functions.sh" by a relative path, so the directory it
+# runs from is the seam that is left. A throwaway one is built here, holding
+# symbolic links to the real scripts and, in place of functions.sh, three lines
+# that source the real one and then point the lookup at a file of this run's own
+# temporary directory. Nothing is written outside it, and no root is needed, so
+# these cases run on the CI runner as well as in the Docker image rather than
+# skipping on whichever machine has no /dev to write to.
+#
+# Usage : provide_local_ipmi_device; OUTPUT=$(run_controller)
+function provide_local_ipmi_device() {
+  local -r LOCAL_MODE_DIRECTORY="$TEST_TEMPORARY_DIRECTORY/local_mode_repository"
+  local -r FAKE_IPMI_DEVICE="$LOCAL_MODE_DIRECTORY/ipmi0"
+
+  rm -rf "$LOCAL_MODE_DIRECTORY"
+  mkdir -p "$LOCAL_MODE_DIRECTORY"
+
+  local REPOSITORY_FILE
+  for REPOSITORY_FILE in "$REPO_ROOT"/*.sh; do
+    [ "$(basename "$REPOSITORY_FILE")" == "functions.sh" ] && continue
+    ln -s "$REPOSITORY_FILE" "$LOCAL_MODE_DIRECTORY/"
+  done
+
+  {
+    printf 'source "%s/functions.sh"\n' "$REPO_ROOT"
+    printf 'IPMI_DEVICE_PATHS=("%s")\n' "$FAKE_IPMI_DEVICE"
+  } > "$LOCAL_MODE_DIRECTORY/functions.sh"
+
+  touch "$FAKE_IPMI_DEVICE"
+
+  CONTROLLER_WORKING_DIRECTORY="$LOCAL_MODE_DIRECTORY"
 }
 
 # A COMPLETE line of the temperature table. The controller prints a line with
@@ -108,7 +164,9 @@ function run_controller() {
 
   local EXIT_CODE=0
   (
-    cd "$REPO_ROOT" || exit 1
+    # The repository itself, unless provide_local_ipmi_device() has pointed this at
+    # the throwaway one it builds to make local mode runnable
+    cd "${CONTROLLER_WORKING_DIRECTORY:-$REPO_ROOT}" || exit 1
 
     bash ./Dell_iDRAC_fan_controller.sh > "$OUTPUT_FILE" 2>&1 &
     CONTROLLER_PID=$!

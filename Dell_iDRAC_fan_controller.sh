@@ -54,6 +54,13 @@ else
   readonly NETWORK_MODE=true
 fi
 
+# Resolve where the CPU temperatures will be read from. The iDRAC is the source in every case where it
+# can be one; lm-sensors only ever takes over on an iDRAC that drives the fans but reports no CPU
+# temperature at all, or when the user names it explicitly
+# (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)
+resolve_CPU_temperature_source "$CPU_TEMPERATURE_SOURCE" "$NETWORK_MODE"
+readonly CPU_TEMPERATURE_SOURCE
+
 # Resolve the CPU temperature threshold. "auto" (the default) asks the CPUs themselves, through lm-sensors,
 # for the "high" temperature defined by their manufacturer : that value describes the actual hardware being
 # cooled, unlike a single fixed threshold shared by every CPU model
@@ -124,6 +131,7 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: ${CPU_TEMPERATURE_THRESHOLD}°C${CPU_TEMPERATURE_THRESHOLD_SOURCE}"
+echo "CPU temperature source: $CPU_TEMPERATURE_SOURCE_DESCRIPTION"
 # The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
 # forms that would otherwise be logged as "90ss" and "5ms"
 if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
@@ -176,11 +184,16 @@ while true; do
   if $IS_TARGET_SERVER_ANSWERING; then
     # Kept for the first retrieve_temperatures() below, so that detecting the CPUs and taking their
     # first readings cost a single IPMI round-trip and describe the very same instant
-    SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+    SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
     detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
     if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
       break
     fi
+
+    # This is the check that decides whether the iDRAC is merely slow to answer or reports no CPU
+    # temperature at all. Several agreeing ones hand the CPUs over to lm-sensors, from the next reading
+    # on, rather than waiting here forever on a firmware that will never answer
+    note_check_without_readable_CPU_temperature_sensor
 
     # The server answers but exposes no readable CPU temperature, so nothing can be supervised. Hand the
     # fans back to Dell rather than leave them wherever they were: a previous run of this container may

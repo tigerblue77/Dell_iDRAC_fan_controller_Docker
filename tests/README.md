@@ -21,8 +21,10 @@ It exits `0` when every test case passed, `1` otherwise.
 | File | What it checks |
 | --- | --- |
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, healthcheck |
+| `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified |
 | `cases/20_fan_speed_conversions.sh` | `FAN_SPEED` given as a percentage or as a hexadecimal byte |
 | `cases/22_cpu_temperature_threshold.sh` | `CPU_TEMPERATURE_THRESHOLD`, and reading "auto" off the CPUs with `lm-sensors` |
+| `cases/23_cpu_temperature_source.sh` | `CPU_TEMPERATURE_SOURCE`, and reading the CPUs from `lm-sensors` when the iDRAC reports none |
 | `cases/25_check_interval_validation.sh` | `CHECK_INTERVAL` values the monitoring loop can actually be paced by, and the reaction time bounds above them |
 | `cases/26_boolean_parameter_validation.sh` | The boolean parameters, which are dispatched by running their value as a command |
 | `cases/30_idrac_login_string.sh` | Local (`/dev/ipmi0`) and network (`lanplus`) modes, password handling |
@@ -80,7 +82,9 @@ test case only has to set what it is about.
 
 Add a function named `test_<what it checks>` to the relevant file in `cases/` :
 the runner picks it up on its own, in declaration order, and turns its name into
-the line it reports. Nothing else to register.
+the line it reports. Nothing else to register. Its name has to be unique across
+the whole suite, every case file being sourced into the same shell : the runner
+refuses to run rather than let one definition silently replace another.
 
 ```bash
 function test_a_single_cpu_server_reports_one_cpu() {
