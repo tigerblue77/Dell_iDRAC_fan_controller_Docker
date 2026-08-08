@@ -2,7 +2,7 @@
 # This function applies Dell's default dynamic fan control profile
 # In monitoring only mode, the profile is only logged, not actually applied
 function apply_Dell_default_fan_control_profile() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (monitoring only, not applied)"
     return
   fi
@@ -22,7 +22,7 @@ function apply_Dell_default_fan_control_profile() {
 # This function applies a user-specified static fan control profile
 # In monitoring only mode, the profile is only logged, not actually applied
 function apply_user_fan_control_profile() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (monitoring only, not applied)"
     return
   fi
@@ -76,6 +76,44 @@ function convert_check_interval_to_seconds() {
     *d) echo "$((NUMBER * 86400))" ;;
     *) echo "$NUMBER" ;;
   esac
+}
+
+# Stop the container unless the given parameter is one of the two literals the shell can safely run
+# Usage : validate_boolean_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# Boolean parameters are dispatched by running their value as a command : "if $MONITORING_ONLY_MODE".
+# The idiom is exact for "true" and "false", which really are commands returning 0 and 1, and it is a
+# trap for every other spelling, because every other spelling is a command too.
+#
+# A value naming nothing exits 127, which the branch reads as false. "True", "TRUE", "1", "on" and
+# "Yes" therefore all silently mean false : MONITORING_ONLY_MODE=True seizes manual fan control and
+# pins the fans on a server the operator explicitly asked it not to touch, while logging "Monitoring
+# only mode: Disabled", and KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=True resets on
+# exit the very state it names.
+#
+# A value that does name a real command is worse. "yes" is /usr/bin/yes, so the branch never returns :
+# it fills the log at hundreds of megabytes a second and, running in the foreground, defers the
+# graceful_exit trap indefinitely, so docker stop cannot end the container and only SIGKILL does. The
+# unquoted occurrences word-split on top of that, so a value carrying arguments runs with them.
+#
+# Refusing anything but the two literals is what makes that idiom safe, which is why the call sites
+# keep it instead of being rewritten. No coherent configuration stops working : the rejected spellings
+# were already read as false, or already hanging the container. The one that did reach the monitoring
+# branch is an empty MONITORING_ONLY_MODE, which the unquoted dispatch expanded to no words at all, so
+# the branch tested nothing and succeeded ; it reached it while validate_check_interval_parameter, given
+# that same empty value and defaulting it with "${3:-false}", judged the interval as if the fans were
+# being driven. That value never meant one thing, so refusing it settles a contradiction rather than
+# taking a working setup away.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+function validate_boolean_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+
+  if [ "$VALUE" != "true" ] && [ "$VALUE" != "false" ]; then
+    print_error_and_exit "$PARAMETER_NAME must be exactly \"true\" or \"false\", but is \"$VALUE\". Spellings such as \"True\", \"1\", \"yes\" or \"on\" are not accepted : this parameter is dispatched by running its value, so anything else is either read as false without a word or run as whatever command it names"
+  fi
 }
 
 # Stop the container unless the given parameter is a duration sleep can actually wait for, and unless
@@ -324,7 +362,7 @@ function is_server_powered_on() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 # In monitoring only mode, this is a no-op
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
@@ -339,7 +377,7 @@ function enable_third_party_PCIe_card_Dell_default_cooling_response() {
 # /!\ Use this function only for Gen 13 and older generation servers /!\
 # In monitoring only mode, this is a no-op
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     return
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
@@ -370,7 +408,7 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 
 # Prepare traps in case of container exit
 function graceful_exit() {
-  if $MONITORING_ONLY_MODE; then
+  if "$MONITORING_ONLY_MODE"; then
     print_warning_and_exit "Container stopped (monitoring only mode, no fan control profile was ever applied)"
   fi
 

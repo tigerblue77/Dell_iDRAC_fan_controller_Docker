@@ -23,6 +23,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, healthcheck |
 | `cases/20_fan_speed_conversions.sh` | `FAN_SPEED` given as a percentage or as a hexadecimal byte |
 | `cases/25_check_interval_validation.sh` | `CHECK_INTERVAL` values the monitoring loop can actually be paced by, and the reaction time bounds above them |
+| `cases/26_boolean_parameter_validation.sh` | The boolean parameters, which are dispatched by running their value as a command |
 | `cases/30_idrac_login_string.sh` | Local (`/dev/ipmi0`) and network (`lanplus`) modes, password handling |
 | `cases/40_temperature_parsing.sh` | Reading the sensors out of `ipmitool sdr type temperature` |
 | `cases/50_server_model_detection.sh` | Identifying the server, and detecting Gen 14 or newer |
