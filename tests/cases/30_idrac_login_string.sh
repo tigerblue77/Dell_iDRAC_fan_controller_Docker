@@ -5,44 +5,87 @@
 # ("lanplus"). Everything else in the script depends on the login string built
 # here, and the password must never leak into the container's process list.
 
-function test_local_mode_uses_the_open_interface() {
-  local IPMI_DEVICE_CREATED=false
+# Local mode looks the IPMI character device up through IPMI_DEVICE_PATHS, so the
+# cases below point it at a file of their own inside the run's temporary directory
+# rather than at /dev, which is machine-global. Both branches of the lookup are
+# then reachable on any machine, whether or not it has a real IPMI device, and two
+# runs sharing a machine cannot make each other skip or fail.
+function fake_IPMI_device() {
+  local -r FAKE_IPMI_DEVICE="$TEST_TEMPORARY_DIRECTORY/ipmi0"
 
-  if [ ! -e /dev/ipmi0 ] && [ ! -e /dev/ipmi/0 ] && [ ! -e /dev/ipmidev/0 ]; then
-    # No real IPMI device here : fake the one the function looks for. /dev is
-    # only writable when the suite runs as root (in the Docker image, or in a
-    # CI container), so give up gracefully rather than fail elsewhere
-    if ! (mkdir -p /dev/ipmi && touch /dev/ipmi/0) 2> /dev/null; then
-      skip_test "no IPMI device available and /dev is not writable"
-      return 0
-    fi
-    IPMI_DEVICE_CREATED=true
-  fi
+  touch "$FAKE_IPMI_DEVICE"
+  IPMI_DEVICE_PATHS=("$FAKE_IPMI_DEVICE")
+}
+
+function no_IPMI_device() {
+  IPMI_DEVICE_PATHS=("$TEST_TEMPORARY_DIRECTORY/absent/ipmi0")
+}
+
+function test_local_mode_uses_the_open_interface() {
+  fake_IPMI_device
 
   set_iDRAC_login_string "local" "root" "calvin"
-  assert_equals "open" "$IDRAC_LOGIN_STRING"
 
-  if $IPMI_DEVICE_CREATED; then
-    rm -f /dev/ipmi/0
-    rmdir /dev/ipmi 2> /dev/null
-  fi
+  assert_equals "open" "$IDRAC_LOGIN_STRING"
+}
+
+function test_local_mode_accepts_any_of_the_device_paths_the_driver_may_use() {
+  # The driver has exposed its device under three different names, and only one of
+  # them is ever present : finding the last one must work as well as the first
+  local -r FAKE_IPMI_DEVICE="$TEST_TEMPORARY_DIRECTORY/ipmidev_0"
+  touch "$FAKE_IPMI_DEVICE"
+  IPMI_DEVICE_PATHS=("$TEST_TEMPORARY_DIRECTORY/absent0" "$TEST_TEMPORARY_DIRECTORY/absent1" "$FAKE_IPMI_DEVICE")
+
+  set_iDRAC_login_string "local" "root" "calvin"
+
+  assert_equals "open" "$IDRAC_LOGIN_STRING"
 }
 
 function test_local_mode_stops_the_controller_when_no_ipmi_device_is_exposed() {
-  if [ -e /dev/ipmi0 ] || [ -e /dev/ipmi/0 ] || [ -e /dev/ipmidev/0 ]; then
-    skip_test "this machine really has an IPMI device"
-    return 0
-  fi
+  no_IPMI_device
 
   local OUTPUT
   OUTPUT=$(set_iDRAC_login_string "local" "root" "calvin" 2>&1)
   local -r EXIT_CODE=$?
 
   assert_equals 1 "$EXIT_CODE" "local mode without an IPMI device should stop the controller"
-  assert_contains "$OUTPUT" "/dev/ipmi0" "the error should name the device paths that were looked for"
-  assert_contains "$OUTPUT" "/dev/ipmi/0"
-  assert_contains "$OUTPUT" "/dev/ipmidev/0"
   assert_contains "$OUTPUT" "stop using local mode" "the error should tell the user how to recover"
+}
+
+function test_the_error_enumerates_every_path_that_was_looked_for() {
+  # The paths in the error are what a user matches against their --device flag, so
+  # every one that was tried has to appear, joined the way the message always has
+  IPMI_DEVICE_PATHS=("$TEST_TEMPORARY_DIRECTORY/absent0" "$TEST_TEMPORARY_DIRECTORY/absent1" "$TEST_TEMPORARY_DIRECTORY/absent2")
+
+  local OUTPUT
+  OUTPUT=$(set_iDRAC_login_string "local" "root" "calvin" 2>&1)
+
+  assert_contains "$OUTPUT" "Could not open device at $TEST_TEMPORARY_DIRECTORY/absent0 or $TEST_TEMPORARY_DIRECTORY/absent1 or $TEST_TEMPORARY_DIRECTORY/absent2,"
+}
+
+function test_the_shipped_lookup_is_the_three_paths_the_driver_may_use() {
+  # Asserted on the list itself rather than through the error, so that the case
+  # holds identically on a machine that does have a real IPMI device.
+  # Re-sourcing functions.sh in a subshell is what restores the shipped list
+  assert_equals "/dev/ipmi0 /dev/ipmi/0 /dev/ipmidev/0" \
+    "$(source "$REPO_ROOT/functions.sh"; printf '%s' "${IPMI_DEVICE_PATHS[*]}")"
+}
+
+function test_the_suite_never_writes_the_ipmi_device_to_dev() {
+  # /dev is machine-global : creating the real path there to exercise the "device
+  # is present" branch is what used to make two runs on the same machine interfere,
+  # one silently skipping a case the other had made unreachable, and what left an
+  # empty /dev/ipmi behind on a developer's machine. Regression test for issue #190
+  local DEVICE_CREATED_UNDER_DEV
+  DEVICE_CREATED_UNDER_DEV=$(grep -rnE '(^|[[:space:]])(mkdir|touch|ln|cp|mv|rm|rmdir)[[:space:]][^;|&]*/dev/ipmi' "$TESTS_DIRECTORY" || true)
+
+  assert_empty "$DEVICE_CREATED_UNDER_DEV" \
+    "no test may create or delete a device under /dev : the lookup is injectable for that reason"
+
+  fake_IPMI_device
+  set_iDRAC_login_string "local" "root" "calvin"
+
+  assert_equals "open" "$IDRAC_LOGIN_STRING" "and the present-device branch is still covered"
 }
 
 function test_network_mode_builds_a_lanplus_login_string() {
