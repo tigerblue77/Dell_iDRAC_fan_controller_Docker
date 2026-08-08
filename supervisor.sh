@@ -46,12 +46,10 @@ SIGNAL_WAS_FORWARDED=false
 function apply_Dell_default_fan_control_profile_on_behalf_of_the_monitoring_process() {
   if "$MONITORING_ONLY_MODE"; then
     print_warning "Monitoring process stopped without exiting cleanly. Monitoring only mode, so no fan control profile was ever applied and none is applied now"
-    printf "\n"
     return 0
   fi
 
   print_warning "Monitoring process stopped without handing the fans back. Applying Dell default dynamic fan control profile for safety"
-  printf "\n"
 
   apply_Dell_default_fan_control_profile
 
@@ -82,7 +80,6 @@ function stop_the_monitored_process() {
 
   if kill -0 "$MONITORED_PROCESS_PID" 2> /dev/null; then
     print_warning "Monitoring process did not stop within ${SUPERVISOR_GRACE_PERIOD_IN_SECONDS}s, killing it"
-    printf "\n"
     kill -KILL "$MONITORED_PROCESS_PID" 2> /dev/null
   fi
 }
