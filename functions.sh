@@ -771,10 +771,18 @@ function set_detected_CPU_temperature_sensors() {
   local -r -a CPU_ENTITY_INSTANCES=("$@")
 
   # CPUs are numbered 1, 2, 3... in the order their entities come, rather than after the entity instance
-  # they are read from. The instance is an IPMI implementation detail : it is only required to be unique,
-  # so it is free to start at 0 or to be sparse, and labelling a two-CPU server "CPU 0"/"CPU 96" would be
-  # accurate yet useless. The entity each column maps to is logged at startup instead, which is what
-  # makes an unusual numbering diagnosable without putting it in the table
+  # they are read from. Every Dell dump this repository has seen numbers its processor entities 1..N,
+  # matching the sockets -- see the comment above retrieve_temperature_by_entity_id() -- so on that
+  # hardware the two schemes agree, and the counter is preferred for what it guarantees when they would
+  # not : it is defined for every possible instance set, including a sparse one, whereas "CPU <instance>"
+  # has no sensible output on an empty one ; and it keeps a real Dell's columns at
+  # MINIMUM_CPU_COLUMN_CONTENT_WIDTH, which a two-digit instance would widen for every CPU at once.
+  # The entity each column maps to is logged at startup and on every set change, which is what makes an
+  # unusual numbering diagnosable without putting it in the table.
+  # /!\ IPMI only requires entity instances to be unique (section 39.1), so a BMC numbering them from 0
+  # or sparsely would be within spec -- but no Dell server has been observed doing it, and this comment
+  # used to present that possibility as if it had been. If you ever see one, the "ipmitool sdr elist all"
+  # output is worth attaching to https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues
   DETECTED_CPU_ENTITY_IDS=()
   DETECTED_CPU_LABELS=()
   local CPU_ENTITY_INSTANCE
