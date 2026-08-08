@@ -15,6 +15,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Majors come one PR each and sit there until reviewed, so they fill the
+    # queue. The default limit is 5, and the first scan hit it exactly : five
+    # majors were raised, the rest were never mentioned again. Raising it is
+    # what keeps an action from ageing out of sight behind a full queue
+    open-pull-requests-limit: 10
     groups:
       # Minor and patch updates are grouped into a single PR,
       # auto-merged by the dependabot-auto-merge workflow.
