@@ -10,9 +10,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The Tests workflow runs on push and pull_request, neither of which fires on
+  # a version tag : without this job a release would be built and published
+  # without a single test having run on the commit being released
+  test:
+    name: Run the test suite before publishing
+    runs-on: ubuntu-latest
+    # Reading the repository is all this job does ; publishing keeps the
+    # workflow's default token
+    permissions:
+      contents: read
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run the test suite
+        run: ./tests/run_tests.sh --summary "$GITHUB_STEP_SUMMARY"
+
   build:
     name: Build and publish Docker image to Docker Hub and GitHub Containers Repository
     runs-on: ubuntu-latest
+    # Nothing is published unless the suite passed on the tagged commit
+    needs: [test]
     # The workflow_dispatch ref dropdown offers branches too. Publishing an image
     # built from a branch would move "latest" onto unreleased code, so only run
     # when the ref is a version tag
