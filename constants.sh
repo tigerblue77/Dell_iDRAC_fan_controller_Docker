@@ -16,3 +16,11 @@ readonly MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER=4
 # A CPU column only gets wider than that from a tenth CPU on ("CPU 10"), which no Dell server can have
 # and therefore only a mis-parse can produce
 readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5
+
+# How many consecutive readings must agree before a CPU that stopped reporting its temperature is
+# considered removed. They are only counted after the target server has been switched off and back on,
+# a CPU being unable to leave a running machine.
+# The cost of waiting is running the Dell default fan control profile a few cycles longer on a server
+# that has genuinely lost a CPU; the cost of concluding too early is dropping a socket that was merely
+# slow to become readable after POST, and monitoring one heat source less until it shows up again
+readonly CPU_REMOVAL_CONFIRMING_READINGS=5

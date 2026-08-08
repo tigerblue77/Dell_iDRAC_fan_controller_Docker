@@ -234,7 +234,7 @@ function test_a_removed_cpu_is_reported_as_removed_and_not_merely_as_silent() {
   # a second reading
   simulate_server "PowerEdge R930" --cpus 4 --cpu-temperatures "41 40 39 38"
   export MOCK_IPMITOOL_POWER_STATUS_SEQUENCE MOCK_IPMITOOL_SDR_SECOND_OUTPUT MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS
-  MOCK_IPMITOOL_POWER_STATUS_SEQUENCE="on on off on on"
+  MOCK_IPMITOOL_POWER_STATUS_SEQUENCE="on on off on"
   MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "41 40")
   MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=2
 

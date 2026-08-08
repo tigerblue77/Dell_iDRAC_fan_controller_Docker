@@ -259,8 +259,10 @@ function test_a_cpu_going_silent_on_a_running_server_keeps_its_column() {
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
   local -r SDR_DATA=$(retrieve_sdr_temperature_data)
 
-  refresh_CPU_temperature_sensors "$SDR_DATA"
-  refresh_CPU_temperature_sensors "$SDR_DATA"
+  local READING
+  for ((READING = 1; READING <= CPU_REMOVAL_CONFIRMING_READINGS + 2; READING++)); do
+    refresh_CPU_temperature_sensors "$SDR_DATA"
+  done
   retrieve_temperatures true "$SDR_DATA"
 
   assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "no power cycle, no removal"
@@ -274,7 +276,7 @@ function test_a_cpu_going_silent_on_a_running_server_keeps_its_column() {
   fi
 }
 
-function test_a_cpu_removed_across_a_power_cycle_leaves_after_a_second_reading() {
+function test_a_cpu_removed_across_a_power_cycle_leaves_once_enough_readings_agree() {
   # Powering the server off is the only way its CPUs can change, so that is the
   # only moment one may leave the set -- and a socket can still be slow to become
   # readable during POST, hence the confirmation by a second identical reading
@@ -288,11 +290,15 @@ function test_a_cpu_removed_across_a_power_cycle_leaves_after_a_second_reading()
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
   local -r SDR_DATA=$(retrieve_sdr_temperature_data)
 
-  refresh_CPU_temperature_sensors "$SDR_DATA"
-  assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "one reading is not enough to conclude"
+  local READING
+  for ((READING = 1; READING < CPU_REMOVAL_CONFIRMING_READINGS; READING++)); do
+    refresh_CPU_temperature_sensors "$SDR_DATA"
+    assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" \
+      "reading $READING of $CPU_REMOVAL_CONFIRMING_READINGS is not enough to conclude"
+  done
 
   refresh_CPU_temperature_sensors "$SDR_DATA"
-  assert_equals "3.1 3.2" "${DETECTED_CPU_ENTITY_IDS[*]}" "the second identical reading confirms it"
+  assert_equals "3.1 3.2" "${DETECTED_CPU_ENTITY_IDS[*]}" "the last agreeing reading confirms it"
   assert_equals "CPU 1 CPU 2" "${DETECTED_CPU_LABELS[*]}"
 }
 
@@ -307,8 +313,9 @@ function test_a_socket_slow_to_become_readable_after_a_reboot_keeps_its_column()
   IS_CPU_REMOVAL_ALLOWED=true
   PENDING_CPU_REMOVAL_SIGNATURE=""
 
-  # First reading after the reboot : CPU 3 and CPU 4 not readable yet
+  # First readings after the reboot : CPU 3 and CPU 4 not readable yet
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "40 41")
+  refresh_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
   refresh_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
   assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}"
 

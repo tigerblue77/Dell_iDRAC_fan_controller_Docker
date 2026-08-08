@@ -288,10 +288,11 @@ function set_detected_CPU_temperature_sensors() {
 # monitored set : while the server keeps running, a sensor going quiet is a fault, not a missing socket
 IS_CPU_REMOVAL_ALLOWED=false
 
-# The readable set seen on the previous cycle while a removal was allowed. A socket can still be slow to
-# become readable during POST, so a smaller set has to be confirmed by a second identical reading before
-# CPUs are dropped from the table
+# The readable set seen while a removal is allowed, and how many consecutive readings have agreed on it.
+# A socket can still be slow to become readable during POST, so a smaller set has to be confirmed by
+# CPU_REMOVAL_CONFIRMING_READINGS identical readings before CPUs are dropped from the table
 PENDING_CPU_REMOVAL_SIGNATURE=""
+PENDING_CPU_REMOVAL_READINGS=0
 
 # Runs the detection again on already-fetched sensor data and reports whether the monitored set changed.
 # Usage : refresh_CPU_temperature_sensors "$SDR_DATA"
@@ -301,8 +302,8 @@ PENDING_CPU_REMOVAL_SIGNATURE=""
 # and keeping the previous set would leave it both invisible in the table and, far worse, never compared
 # to the temperature threshold.
 #
-# A CPU disappearing is only acted upon after a power cycle, and only once a second reading has confirmed
-# it. Dell reports a socket being POSTed and a socket that has been removed in exactly the same way, so
+# A CPU disappearing is only acted upon after a power cycle, and only once CPU_REMOVAL_CONFIRMING_READINGS
+# readings have agreed on it. Dell reports a socket being POSTed and a socket that has been removed in exactly the same way, so
 # they cannot be told apart from a single reading -- but a CPU cannot physically leave a running server,
 # so a sensor that goes quiet while it keeps running is a fault, and its column stays, reading "-", which
 # fails safe to the Dell default profile. Dropping it there would silently stop watching a CPU that is
@@ -328,11 +329,18 @@ function refresh_CPU_temperature_sensors() {
   local IS_REMOVAL_CONFIRMED=false
   if (( ${#MISSING_CPU_ENTITY_IDS[@]} > 0 )) && (( ${#READABLE_CPU_ENTITY_IDS[@]} > 0 )) && $IS_CPU_REMOVAL_ALLOWED; then
     if [ "${READABLE_CPU_ENTITY_IDS[*]}" == "$PENDING_CPU_REMOVAL_SIGNATURE" ]; then
+      ((PENDING_CPU_REMOVAL_READINGS++))
+    else
+      # A different set restarts the count : only readings that agree with each other confirm anything
+      PENDING_CPU_REMOVAL_SIGNATURE="${READABLE_CPU_ENTITY_IDS[*]}"
+      PENDING_CPU_REMOVAL_READINGS=1
+    fi
+    if (( PENDING_CPU_REMOVAL_READINGS >= CPU_REMOVAL_CONFIRMING_READINGS )); then
       IS_REMOVAL_CONFIRMED=true
     fi
-    PENDING_CPU_REMOVAL_SIGNATURE="${READABLE_CPU_ENTITY_IDS[*]}"
   else
     PENDING_CPU_REMOVAL_SIGNATURE=""
+    PENDING_CPU_REMOVAL_READINGS=0
   fi
 
   # The new set is everything readable, plus the known CPUs keeping their column for now.

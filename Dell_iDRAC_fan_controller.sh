@@ -200,6 +200,7 @@ while true; do
     # the window during which one is allowed to leave the monitored set
     IS_CPU_REMOVAL_ALLOWED=true
     PENDING_CPU_REMOVAL_SIGNATURE=""
+    PENDING_CPU_REMOVAL_READINGS=0
     retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   fi
 
@@ -233,9 +234,9 @@ while true; do
     # the controller drew and the rule it applied to draw it, rather than the symptom alone : a sensor
     # that went quiet is not a reason to stop watching a CPU, a CPU that is gone is
     if [ "${#REMOVED_CPU_LABELS[@]}" -eq 1 ]; then
-      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the two readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
     elif [ "${#REMOVED_CPU_LABELS[@]}" -gt 1 ]; then
-      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the two readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
     else
       printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
     fi
@@ -243,9 +244,11 @@ while true; do
     # Checked again here and not only at startup : a mis-parse can just as well show up mid-run
     warn_if_unexpected_number_of_CPUs
 
-    # A CPU appearing can sort before the known ones, so the readings must be taken again against the
-    # new entity list rather than reused from before it changed
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+    # A CPU appearing can sort before the known ones, so the readings are taken again against the new
+    # entity list rather than reused from before it changed. The same data is handed back rather than
+    # fetched again : following the CPUs then costs no IPMI round-trip at all, and the readings keep
+    # describing the very instant the set was detected on
+    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
   fi
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
