@@ -104,13 +104,27 @@ function test_a_non_numeric_reading_fails_safe_and_reports_overheating() {
   done
 }
 
-function test_a_sub_zero_reading_is_a_value_and_not_an_unusable_one() {
-  # A sub-zero reading is a temperature in its own right : it must be compared
-  # like any other, not treated as unreadable
+function test_a_sub_zero_reading_is_a_reading_not_a_parsing_accident() {
+  # A negative reading is in-spec, not unusable : Dell rates the PowerEdge line
+  # down to -5°C, and a disconnected CPU sensor reports around -40°C on some
+  # iDRACs. Reading it unsigned is what used to invert the decision -- -40 came
+  # back as +40 and tripped the overheating branch, ramping the fans on a
+  # machine that was not hot -- so a sub-zero CPU must be treated as cold
   export CPU_TEMPERATURE_THRESHOLD=50
-  given_the_detected_cpu_temperatures "-10" 40
 
-  assert_no_cpu_is_overheating "-10 degrees is below the threshold, not an unusable reading"
+  local SUB_ZERO_READING
+  for SUB_ZERO_READING in "-1" "-10" "-40"; do
+    given_the_detected_cpu_temperatures "$SUB_ZERO_READING" "$SUB_ZERO_READING"
+
+    assert_no_cpu_is_overheating "$SUB_ZERO_READING°C is below the threshold, no CPU is overheating"
+  done
+
+  # And it stays a comparison, not a string match : a threshold below the
+  # reading still trips, whichever side of zero they are on
+  export CPU_TEMPERATURE_THRESHOLD=-20
+  given_the_detected_cpu_temperatures "-10"
+  assert_a_cpu_is_overheating "-10°C is above a -20°C threshold"
+
   assert_equals " -10" "$(format_temperature_for_display "-10" 4)" "the sign is kept when printing"
 }
 
@@ -171,4 +185,10 @@ function test_an_unreadable_temperature_is_printed_as_a_placeholder() {
     assert_equals "  -" "$(format_temperature_for_display "$UNUSABLE_READING")" \
       "\"$UNUSABLE_READING\" should be printed as a placeholder"
   done
+
+  # A sub-zero reading is a reading : it must be printed, sign included, and not
+  # replaced by the placeholder the unusable ones get
+  assert_equals " -1" "$(format_temperature_for_display "-1")"
+  assert_equals "-10" "$(format_temperature_for_display "-10")"
+  assert_equals "-40" "$(format_temperature_for_display "-40")"
 }
