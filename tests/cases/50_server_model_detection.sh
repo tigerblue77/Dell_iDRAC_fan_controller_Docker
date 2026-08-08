@@ -141,6 +141,62 @@ function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_
   assert_contains "$OUTPUT" "Unable to establish IPMI v2 / RMCP+ session" "the error should quote what ipmitool said"
 }
 
+function test_unreadable_fru_devices_do_not_stop_a_server_that_could_still_be_identified() {
+  # "ipmitool fru" walks every FRU device and exits non-zero as soon as one of them
+  # fails to read, so an R740xd with an empty drive backplane bay returns 1 while still
+  # reporting its model. Exiting on that exit code alone refused to start on healthy
+  # hardware, which is the regression this guards against.
+  # The harness builds a lanplus login string, so this is the network mode case
+  export MOCK_IPMITOOL_FRU_OUTPUT MOCK_IPMITOOL_FRU_STDERR MOCK_IPMITOOL_FRU_EXIT_CODE
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R740xd" --with-unreadable-devices)
+  MOCK_IPMITOOL_FRU_STDERR="Get Device ID command failed: 0xc9 Parameter out of range"
+  MOCK_IPMITOOL_FRU_EXIT_CODE=1
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "an identified server should start even though ipmitool exited non-zero"
+  assert_not_contains "$CAPTURED_OUTPUT" "Could not establish IPMI connection" "a partial FRU read is not a connection failure"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+}
+
+function test_unreadable_fru_devices_do_not_stop_the_controller_in_local_mode_either() {
+  # The transport says nothing about whether individual FRU devices answered, so local
+  # mode must not be stricter than the network mode covered above. Both were reproduced
+  # on the same R740xd : "-I open" and "-I lanplus" each exit 1, each report the same
+  # three unreadable bays (BP0, BP2, PERC2), and each still return the model
+  export MOCK_IPMITOOL_FRU_OUTPUT MOCK_IPMITOOL_FRU_STDERR MOCK_IPMITOOL_FRU_EXIT_CODE
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R740xd" --with-unreadable-devices)
+  MOCK_IPMITOOL_FRU_STDERR="Get Device ID command failed: 0xc9 Parameter out of range"
+  MOCK_IPMITOOL_FRU_EXIT_CODE=1
+
+  local -r IDRAC_LOGIN_STRING="open"
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "local mode should tolerate a partial FRU read exactly like network mode"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+}
+
+function test_unreadable_fru_devices_still_stop_a_server_that_could_not_be_identified_at_all() {
+  # The counterpart : when nothing came back, the non-zero exit code is a real failure
+  # and the controller must still refuse to run blind
+  export MOCK_IPMITOOL_FRU_OUTPUT MOCK_IPMITOOL_FRU_STDERR MOCK_IPMITOOL_FRU_EXIT_CODE
+  MOCK_IPMITOOL_FRU_OUTPUT=""
+  MOCK_IPMITOOL_FRU_STDERR="Device not present (Timeout)"
+  MOCK_IPMITOOL_FRU_EXIT_CODE=1
+
+  local OUTPUT
+  OUTPUT=$(get_Dell_server_model 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "a server that could not be identified at all should stop the controller"
+  assert_contains "$OUTPUT" "Could not establish IPMI connection"
+}
+
 function test_the_catalogue_covers_every_generation_and_typology_without_duplicates() {
   local GENERATION
   for GENERATION in "${DELL_SERVER_GENERATIONS[@]}"; do
