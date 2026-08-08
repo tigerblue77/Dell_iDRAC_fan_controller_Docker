@@ -26,11 +26,12 @@ name: Auto-update pull request branches
 # get new SHAs : the review comments already written on it are marked outdated,
 # and anyone holding a local copy of that branch has to reset onto it.
 #
-# /!\ The update cannot be pushed with the default GITHUB_TOKEN. An update that
-# token pushes does fire "pull_request : synchronize", but the runs it creates
-# are held in an approval-required state : the pull request shows an "Approve
-# workflows to run" banner that somebody with write access has to click before
-# the required checks even start. No repository setting turns that off, and
+# /!\ The default GITHUB_TOKEN can push the update, it just gains nothing by it.
+# An update that token pushes does fire "pull_request : synchronize", but the
+# runs it creates are held in an approval-required state : the pull request
+# shows an "Approve workflows to run" banner that somebody with write access has
+# to click before the required checks even start. No repository setting turns
+# that off, and
 # swapping one click per pull request for another is not worth a workflow, so
 # the update has to come from an identity GitHub already trusts.
 #
@@ -50,10 +51,14 @@ name: Auto-update pull request branches
 # regularly, so a token missing it would work until precisely the pull request
 # that needed it most.
 #
-# A GitHub App installation token is the other identity that works, with the
-# same three permissions, and nothing about it expires : the private key is
-# permanent and the token is minted per run. It is what GitHub itself points to
-# for this case. The cost is registering and installing the App once
+# A GitHub App is the other identity that works, with the same three
+# permissions, and it is what GitHub itself points to for this case. Nothing
+# about it has to be renewed by hand, because the private key does not expire.
+# Its installation token does, after an hour, so it is not something to paste
+# into the secret : the private key goes there instead, and a step such as
+# actions/create-github-app-token mints a fresh token at the start of every run.
+# That step, which this workflow does not currently carry, plus registering and
+# installing the App, is what the App route costs over the token
 
 on:
   push:
@@ -90,10 +95,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Updates one pull request, by rebase or by merge. The mutation is the
-          # one "gh pr update-branch" itself calls ; it is used directly here
-          # because gh does not expose expectedHeadOid, which is what keeps the
-          # update from landing on a commit the author pushed in the meantime.
+          # Updates one pull request, by rebase or by merge, through the same
+          # updatePullRequestBranch mutation that "gh pr update-branch" wraps.
+          # expectedHeadOid pins the update to the head commit read just above,
+          # so it cannot land on a commit the author pushed in the meantime.
+          # The mutation is called directly rather than through gh for the error
+          # message : gh reports any failure as "Cannot update PR branch due to
+          # conflicts", which would misdiagnose a token missing the Workflows
+          # permission as a conflict and send the reader hunting the wrong
+          # thing. The log below quotes what GitHub actually said instead.
           # A GraphQL error comes back inside a 200 response, so the body has to
           # be looked at rather than only the exit status
           update_error=""
