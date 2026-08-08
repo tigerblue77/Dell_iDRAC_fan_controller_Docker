@@ -217,6 +217,8 @@ All parameters are optional as they have default values (including default iDRAC
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
 - `MONITORING_ONLY_MODE` parameter is a boolean that allows to run the container in a read-only, monitoring-only mode: temperatures are still read and logged at each `CHECK_INTERVAL`, but no fan control profile (neither the user-defined one nor Dell's default) and no third-party PCIe card cooling response change is ever sent to the server. Useful to observe temperatures and validate your `FAN_SPEED`/`CPU_TEMPERATURE_THRESHOLD` values before letting the container actually take control of the fans. **Default** value is false.
 
+The three boolean parameters above accept **only the lowercase literals `true` and `false`**, and the container refuses to start on anything else — `True`, `TRUE`, `1`, `on` and `yes` included. This is not pickiness: these parameters are dispatched by running their value, so those spellings used to be taken as `false` without a word. `MONITORING_ONLY_MODE=True` would take control of the fans on a server you had explicitly asked the container to leave alone, while logging "Monitoring only mode: Disabled".
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- TROUBLESHOOTING -->
