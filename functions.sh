@@ -1270,6 +1270,39 @@ function get_Dell_server_model() {
   fi
 }
 
+# Settle the width of the "Active fan speed profile" column, which the header and the rows both lay
+# themselves out from. It depends only on MONITORING_ONLY_MODE, fixed for the container's lifetime, so it
+# is resolved once at startup rather than per row -- and, coming from one place, the header and the rows
+# cannot end up reserving different widths for the same column, which is the defect this exists to close
+# Usage : resolve_fan_control_profile_column_width
+# Returns : TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH
+function resolve_fan_control_profile_column_width() {
+  if "$MONITORING_ONLY_MODE"; then
+    TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=$MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH
+  else
+    TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=$FAN_CONTROL_PROFILE_COLUMN_WIDTH
+  fi
+}
+
+# Centre a column heading in a column of the given width, the odd character going to the left, which is the
+# convention the "Temperatures" banner already follows. Written into a named variable like
+# set_log_timestamp() does, rather than echoed, so that no subshell is paid for a string this short.
+#
+# Centred rather than right-aligned : the values below are right-aligned, but the monitoring only mode
+# profile column is 71 characters wide, and a heading flush against its right edge would drift away from
+# the heading on its left. This is also what the table has always displayed
+# Usage : center_column_heading HEADING_VARIABLE "Heading" $COLUMN_WIDTH
+function center_column_heading() {
+  local -r TARGET_VARIABLE_NAME="$1"
+  local -r HEADING="$2"
+  local -r COLUMN_WIDTH="$3"
+
+  local -r LEFT_PADDING_WIDTH=$(( (COLUMN_WIDTH - ${#HEADING} + 1) / 2 ))
+  local -r RIGHT_PADDING_WIDTH=$(( COLUMN_WIDTH - ${#HEADING} - LEFT_PADDING_WIDTH ))
+
+  printf -v "$TARGET_VARIABLE_NAME" '%*s%s%*s' "$LEFT_PADDING_WIDTH" '' "$HEADING" "$RIGHT_PADDING_WIDTH" ''
+}
+
 # Builds the two header lines of the temperatures table, sized for the CPUs actually detected
 # Usage : build_header $CPU_COLUMN_CONTENT_WIDTH ["CPU 1" "CPU 2" ...]
 #
@@ -1280,6 +1313,15 @@ function get_Dell_server_model() {
 function build_header() {
   if (( $# < 1 )); then
     print_error "build_header() requires a column content width"
+    return 1
+  fi
+
+  # The one width that does not arrive as an argument : the rows read it too, and threading it through the
+  # seven parameters print_temperature_array_line() already takes would be worse than naming it once. Left
+  # unresolved it would pad to nothing and misalign every row silently, so it is refused here instead --
+  # this runs once, at startup, and the caller turns a refusal into a container that stops
+  if [ -z "$TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH" ]; then
+    print_error "build_header() needs the fan control profile column width, resolve_fan_control_profile_column_width() has not run"
     return 1
   fi
 
@@ -1314,7 +1356,13 @@ function build_header() {
     header+=$(printf ' %*s ' "$LOCAL_CPU_COLUMN_CONTENT_WIDTH" "$CPU_LABEL")
   done
 
-  header+=' Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment'
+  # Padded to the very widths the rows print into, so that a heading keeps sitting above its own values
+  # instead of the rows overflowing a header that reserved less
+  local FAN_CONTROL_PROFILE_HEADING COOLING_RESPONSE_HEADING
+  center_column_heading FAN_CONTROL_PROFILE_HEADING 'Active fan speed profile' "$TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH"
+  center_column_heading COOLING_RESPONSE_HEADING 'Third-party PCIe card Dell default cooling response' "$COOLING_RESPONSE_COLUMN_WIDTH"
+
+  header+=" Exhaust  ${FAN_CONTROL_PROFILE_HEADING}  ${COOLING_RESPONSE_HEADING}  Comment"
   printf "%s" "$header"
 }
 
@@ -1329,6 +1377,9 @@ function print_temperature_array_line() {
 
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
+  # Declared like its neighbours : functions.sh is sourced into the entry point, so a loop counter left
+  # undeclared here lands in the container's main shell, and this function runs on every cycle
+  local temperature
 
   local TIMESTAMP FORMATTED_TEMPERATURE
   set_log_timestamp TIMESTAMP
@@ -1344,7 +1395,7 @@ function print_temperature_array_line() {
 
   # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
   # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
-  printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+  printf " %5s°C  %*s  %*s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$COOLING_RESPONSE_COLUMN_WIDTH" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
 # Stamp the current local time into the named variable, in the format every logged line starts with.
@@ -1395,14 +1446,27 @@ function is_temperature_reading_valid() {
 # Like the per-CPU checks it replaces, it deliberately returns true both when a CPU is genuinely too hot
 # and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile
 # instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric input) or
-# silently running the low user fan speed on unverified data
+# silently running the low user fan speed on unverified data. The same goes for an unusable threshold,
+# the comparison having two operands and only one of them having been guarded until now
 function is_any_CPU_overheating() {
   OVERHEATING_CPUS_AND_TEMPERATURES=()
+
+  # The threshold is the comparison's other operand, and "-gt" fails the same way on either side : on a
+  # value it cannot parse the test returns non-zero, which reads as "not overheating" -- the one answer
+  # that leaves a hot CPU running on the user's low static fan speed. It is therefore checked like the
+  # readings are, and normalized once here rather than per CPU, an empty result meaning "unusable".
+  # Dell_iDRAC_fan_controller.sh resolves and validates the threshold before the monitoring loop starts
+  # and then makes it readonly, so this is not reachable from the container : it is what keeps the answer
+  # safe on its own terms instead of by depending on a check living in another file (see issue #218)
+  local NORMALIZED_CPU_TEMPERATURE_THRESHOLD=""
+  if is_temperature_reading_valid "$CPU_TEMPERATURE_THRESHOLD"; then
+    NORMALIZED_CPU_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$CPU_TEMPERATURE_THRESHOLD")
+  fi
 
   local INDEX CPU_TEMPERATURE
   for INDEX in "${!DETECTED_CPU_TEMPERATURES[@]}"; do
     CPU_TEMPERATURE="${DETECTED_CPU_TEMPERATURES[INDEX]}"
-    if ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    if [ -z "$NORMALIZED_CPU_TEMPERATURE_THRESHOLD" ] || ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$NORMALIZED_CPU_TEMPERATURE_THRESHOLD" ]; then
       # The label is taken from the table's own labels rather than rebuilt here, so that the CPU named
       # in the comment is always the one whose column shows the reading that triggered it. It falls back
       # to the position rather than to an empty string, so that a comment naming no CPU at all can never
