@@ -15,7 +15,7 @@ function assert_generation_is_detected_as_the_catalogue_expects() {
   local ENTRY MODEL EXPECTED_FLAG
 
   while IFS= read -r ENTRY; do
-    IFS='|' read -r _ MODEL _ EXPECTED_FLAG _ <<< "$ENTRY"
+    IFS='|' read -r _ MODEL _ EXPECTED_FLAG _ _ <<< "$ENTRY"
 
     local ACTUAL_FLAG=false
     if is_detected_as_gen_14_or_newer "$MODEL"; then
@@ -169,9 +169,17 @@ function test_the_catalogue_covers_every_generation_and_typology_without_duplica
   DUPLICATED_MODELS=$(printf '%s\n' "${DELL_SERVER_CATALOGUE[@]}" | cut -d'|' -f2 | sort | uniq -d)
   assert_empty "$DUPLICATED_MODELS" "the catalogue should not list the same model twice"
 
+  # Rack and tower servers, blades and modular sleds must all be represented
+  local -r ENCLOSURE_HOUSED_COUNT=$(catalogue_entries_housed_in_an_enclosure | wc -l)
+  if [ "$ENCLOSURE_HOUSED_COUNT" -ge 20 ]; then
+    pass
+  else
+    fail "only $ENCLOSURE_HOUSED_COUNT servers housed in an enclosure are catalogued"
+  fi
+
   local ENTRY
   for ENTRY in "${DELL_SERVER_CATALOGUE[@]}"; do
-    assert_matches "$ENTRY" '^(9|1[0-7])\|[^|]+\|[124]\|(true|false)\|(supported|firmware-dependent|unsupported)$' \
+    assert_matches "$ENTRY" '^(9|1[0-7])\|[^|]+\|[124]\|(true|false)\|(supported|firmware-dependent|unsupported|chassis-managed)\|(standalone|[A-Za-z0-9-]+(/[A-Za-z0-9-]+)*)$' \
       "malformed catalogue entry"
   done
 }

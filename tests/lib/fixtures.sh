@@ -143,3 +143,49 @@ function simulate_server() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output "$@")"
 }
+
+# The stderr a BMC with no fan of its own answers to Dell's raw fan control
+# commands : the command exists in the netfn, but the fans it would drive are not
+# behind this BMC, so it is refused outright
+readonly ENCLOSURE_REJECTED_FAN_CONTROL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xc1): Invalid command"
+
+# Point the mocked ipmitool at a server housed in an enclosure : an M1000e or
+# VRTX blade, an FX2 or MX7000 sled, a node of a C-series chassis.
+#
+# Two things set them apart from a rack server, and both are reproduced here :
+#   - they report no exhaust sensor. The airflow leaves through the enclosure,
+#     not through the server, so only the enclosure measures it
+#   - their fans belong to the enclosure and are driven by its CMC, so their own
+#     iDRAC rejects Dell's raw fan control commands whatever the generation
+#
+# Usage : simulate_enclosure_housed_server "$SERVER_MODEL" [make_sdr_output option ...]
+function simulate_enclosure_housed_server() {
+  local -r SERVER_MODEL="$1"
+  shift
+
+  simulate_server "$SERVER_MODEL" --no-exhaust "$@"
+
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$ENCLOSURE_REJECTED_FAN_CONTROL_STDERR"
+}
+
+# Point the mocked ipmitool at the enclosure's own management controller (the
+# M1000e's or the VRTX's CMC, the MX7000's OME-Modular) rather than at a server
+# housed in it.
+#
+# It is a Dell product and it answers IPMI, so the controller accepts it, but it
+# hosts no CPU : it reports the enclosure's own temperature sensors and not a
+# single processor entity. Aiming IDRAC_HOST at it is a mistake users do make,
+# the enclosure being the address printed on the front panel.
+#
+# Usage : simulate_enclosure_management_controller "PowerEdge M1000e"
+function simulate_enclosure_management_controller() {
+  local -r ENCLOSURE_MODEL="$1"
+
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT="$(make_fru_output --model "$ENCLOSURE_MODEL")"
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output --cpus 0 --no-exhaust --inlet 22)"
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$ENCLOSURE_REJECTED_FAN_CONTROL_STDERR"
+}
