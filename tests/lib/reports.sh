@@ -58,9 +58,23 @@ function current_time_in_milliseconds() {
   printf '%s' "$(($(date +%s) * 1000))"
 }
 
-# "1234" -> "1.234", the duration format both reports use
+# "1234" -> "1.234", the duration format both reports use.
+#
+# A negative input is clamped to zero rather than formatted. Bash truncates
+# integer division towards zero and gives the remainder the sign of the
+# dividend, so -992 would come out as "0.-992" : both fields are individually
+# correct and the string they compose is not a number. Nothing downstream
+# survives that -- the JUnit publisher parses every "time" attribute as a float
+# and a malformed one aborts the whole report, turning a green run red.
+#
+# The durations are wall clock differences, and a wall clock is allowed to go
+# backwards : a CI runner that syncs its clock between the two reads produces
+# exactly the small negative value above. Zero is what to report then, a test
+# case having taken an unknown but certainly not negative amount of time
 function format_duration() {
-  printf '%d.%03d' "$(($1 / 1000))" "$(($1 % 1000))"
+  local -r DURATION_IN_MILLISECONDS=$(($1 > 0 ? $1 : 0))
+
+  printf '%d.%03d' "$((DURATION_IN_MILLISECONDS / 1000))" "$((DURATION_IN_MILLISECONDS % 1000))"
 }
 
 # Replace the characters XML gives a meaning to, and drop the control characters
