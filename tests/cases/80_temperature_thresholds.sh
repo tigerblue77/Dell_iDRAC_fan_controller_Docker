@@ -82,13 +82,37 @@ function test_a_non_numeric_reading_fails_safe_and_reports_overheating() {
   export CPU_TEMPERATURE_THRESHOLD=50
 
   local UNUSABLE_READING
-  for UNUSABLE_READING in "n/a" "-" "Disabled" "4 5" "45.5" "-10" "no reading"; do
+  for UNUSABLE_READING in "n/a" "-" "Disabled" "4 5" "45.5" "no reading"; do
     CPU1_TEMPERATURE="$UNUSABLE_READING"
     CPU2_TEMPERATURE="$UNUSABLE_READING"
 
     assert_cpu_is_overheating 1 "an unusable CPU 1 reading must fail safe"
     assert_cpu_is_overheating 2 "an unusable CPU 2 reading must fail safe"
   done
+}
+
+function test_a_sub_zero_reading_is_a_reading_not_a_parsing_accident() {
+  # A negative reading is in-spec, not unusable : Dell rates the PowerEdge line
+  # down to -5°C, and a disconnected CPU sensor reports around -40°C on some
+  # iDRACs. Reading it unsigned is what used to invert the decision -- -40 came
+  # back as +40 and tripped the overheating branch, ramping the fans on a
+  # machine that was not hot -- so a sub-zero CPU must be treated as cold
+  export CPU_TEMPERATURE_THRESHOLD=50
+
+  local SUB_ZERO_READING
+  for SUB_ZERO_READING in "-1" "-10" "-40"; do
+    CPU1_TEMPERATURE="$SUB_ZERO_READING"
+    CPU2_TEMPERATURE="$SUB_ZERO_READING"
+
+    assert_cpu_is_not_overheating 1 "$SUB_ZERO_READING°C is below the threshold, CPU 1 is not overheating"
+    assert_cpu_is_not_overheating 2 "$SUB_ZERO_READING°C is below the threshold, CPU 2 is not overheating"
+  done
+
+  # And it stays a comparison, not a string match : a threshold below the
+  # reading still trips, whichever side of zero they are on
+  export CPU_TEMPERATURE_THRESHOLD=-20
+  CPU1_TEMPERATURE="-10"
+  assert_cpu_is_overheating 1 "-10°C is above a -20°C threshold"
 }
 
 function test_a_reading_with_a_leading_zero_is_not_read_as_octal() {
@@ -126,8 +150,14 @@ function test_temperatures_are_printed_right_aligned_on_three_characters() {
 function test_an_unreadable_temperature_is_printed_as_a_placeholder() {
   # printf %d would abort on any of these, taking the whole container down
   local UNUSABLE_READING
-  for UNUSABLE_READING in "" "-" "n/a" "Disabled" "45.5" "-10"; do
+  for UNUSABLE_READING in "" "-" "n/a" "Disabled" "45.5"; do
     assert_equals "  -" "$(format_temperature_for_display "$UNUSABLE_READING")" \
       "\"$UNUSABLE_READING\" should be printed as a placeholder"
   done
+
+  # A sub-zero reading is a reading : it must be printed, sign included, and not
+  # replaced by the placeholder the unusable ones get
+  assert_equals " -1" "$(format_temperature_for_display "-1")"
+  assert_equals "-10" "$(format_temperature_for_display "-10")"
+  assert_equals "-40" "$(format_temperature_for_display "-40")"
 }
