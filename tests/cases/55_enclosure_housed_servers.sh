@@ -291,3 +291,38 @@ function test_the_refusal_still_fires_on_a_server_that_did_answer_with_sensors()
   assert_equals 1 "$EXIT_CODE"
   assert_contains "$OUTPUT" "No CPU temperature sensor could be read from DELL PowerEdge M1000e"
 }
+
+function test_monitoring_only_mode_is_exempt_from_the_refusal() {
+  # The refusal exists because a container that cannot read a CPU cannot decide a
+  # fan speed. Monitoring only mode decides no fan speed to begin with : a CPU it
+  # cannot read costs it a column, while the chassis sensors it can read are the
+  # whole reason it was started. Refusing there would take away the one mode that
+  # still has something to do on such a server
+  export MONITORING_ONLY_MODE=true
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_not_contains "$OUTPUT" "No CPU temperature sensor could be read from" \
+    "this mode must not be refused"
+  assert_contains "$OUTPUT" "No CPU temperature sensor detected, only the chassis temperatures will be monitored." \
+    "it says what it will monitor instead"
+  assert_matches "$OUTPUT" 'Date & time      Inlet  Exhaust' \
+    "and prints the table with no CPU column between the inlet and the exhaust"
+  assert_matches "$OUTPUT" '[[:space:]]22°C[[:space:]]+-°C[[:space:]]' \
+    "with the inlet reading the enclosure does report, and the exhaust it does not"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")" \
+    "and still sends no fan control command at all"
+}
+
+function test_the_refusal_points_at_monitoring_only_mode() {
+  # The mode above is the way out for a user whose server genuinely reports no
+  # CPU : the refusal has to name it, or they are left with a container that only
+  # ever exits
+  simulate_enclosure_management_controller "PowerEdge M1000e"
+
+  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+
+  assert_contains "$OUTPUT" "Set MONITORING_ONLY_MODE=true" \
+    "the refusal must offer the mode that still works on such a server"
+}

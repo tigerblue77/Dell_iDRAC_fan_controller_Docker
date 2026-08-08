@@ -203,10 +203,20 @@ while true; do
       continue
     fi
 
-    # The server answers, and answers that it has no readable CPU temperature sensor. Every PowerEdge
-    # has at least one CPU, so this is not a state to sit and wait out : an iDRAC that exposes no
-    # processor entity does so on every check, not on this one. Retrying forever would leave a container
-    # that looks alive and supervises nothing.
+    # The server answers, and answers that it has no readable CPU temperature sensor.
+    #
+    # Monitoring only mode is the exception : it drives no fan, so a CPU it cannot read costs it a
+    # column and nothing else, while the chassis sensors it can read are the whole reason it was
+    # started. Refusing there would take away the one mode that still has something to do -- and it is
+    # also the mode the refusal below tells everyone else to fall back on, which it cannot do if that
+    # mode refuses too
+    if $MONITORING_ONLY_MODE; then
+      break
+    fi
+
+    # Every PowerEdge has at least one CPU, so this is not a state to sit and wait out : an iDRAC that
+    # exposes no processor entity does so on every check, not on this one. Retrying forever would leave
+    # a container that looks alive and supervises nothing.
     #
     # Hand the fans back to Dell before leaving, rather than leave them wherever they were : a previous
     # run of this container may have left the BMC in manual mode, in which case they would stay pinned
@@ -218,6 +228,7 @@ while true; do
  If IDRAC_HOST points at a chassis management controller (VRTX, FX2, M1000e, MX7000), point it at a node's own iDRAC instead : the chassis hosts no CPU, and its CMC drives the enclosure fans rather than a node's.
  Otherwise, run \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type temperature\" (drop the connection options in local mode) and look for lines whose 4th column is an entity \"3.<something>\" and whose reading ends in \"degrees C\".
  If some are listed and the container still reports none, or if none is listed at all, please open an issue with your server model and that output : https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues
+ Set MONITORING_ONLY_MODE=true to keep the container running and logging the temperatures it can read, without driving the fans.
  Dell default dynamic fan control profile applied for safety before exiting"
   fi
 
