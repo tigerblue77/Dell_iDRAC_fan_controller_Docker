@@ -236,7 +236,7 @@ while true; do
     # also the mode the refusal below tells everyone else to fall back on, which it cannot do if that
     # mode refuses too. Checked here, once both sources have failed, so that lm-sensors still gets to
     # fill the CPU columns of a local mode container rather than being skipped over
-    if $MONITORING_ONLY_MODE; then
+    if "$MONITORING_ONLY_MODE"; then
       break
     fi
 
