@@ -328,6 +328,10 @@ fi
 # Output new line to beautify output
 echo ""
 
+# Settled here, once, and read by both the header and every row : the profile column is too tight to hold
+# the monitoring only mode badge, so its width follows the mode rather than being a literal in two places
+resolve_fan_control_profile_column_width
+
 CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
 if ! HEADER=$(build_header "$CPU_COLUMN_CONTENT_WIDTH" "${DETECTED_CPU_LABELS[@]}"); then
   print_error_and_exit "Could not build the temperatures table header"

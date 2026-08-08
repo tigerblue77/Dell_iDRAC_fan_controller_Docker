@@ -44,6 +44,22 @@ readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5
 # slow to become readable after POST, and monitoring one heat source less until it shows up again
 readonly CPU_REMOVAL_CONFIRMING_READINGS=5
 
+# Widths of the two right-hand columns of the temperatures table. The header and the rows are both laid out
+# from these, rather than each repeating a literal of its own, which is how the profile column came to
+# reserve less in the header than the rows were printing into it.
+#
+# That column has zero slack by construction : "Dell default dynamic fan control profile" is exactly 40
+# characters, so the " (monitoring only, not applied)" badge -- 31 more -- cannot be made to fit by
+# shortening anything, and the column has to widen with the mode instead. MONITORING_ONLY_MODE is fixed for
+# the container's lifetime, so which of the two applies is settled once at startup
+readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=40
+readonly MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=71
+
+# The cooling response column is sized by its own heading, "Third-party PCIe card Dell default cooling
+# response", which is longer than anything that column ever holds : its widest value is "Disabled (not
+# applied: monitoring only mode)" at 44. So, unlike the profile column, it does not move with the mode
+readonly COOLING_RESPONSE_COLUMN_WIDTH=51
+
 # How long the supervisor gives the monitoring process to stop on its own after forwarding it the signal,
 # before killing it outright. Docker's own grace period is 10 seconds by default, so this has to stay
 # comfortably inside it or the container is SIGKILLed as a whole before the supervisor gets to act
