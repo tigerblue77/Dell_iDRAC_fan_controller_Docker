@@ -78,34 +78,6 @@ function convert_check_interval_to_seconds() {
   esac
 }
 
-# Stop the container unless the given parameter is an integer within an inclusive range
-# Usage : validate_integer_parameter "$PARAMETER_NAME" "$VALUE" $MINIMUM $MAXIMUM
-#
-# User-supplied parameters reach us as unchecked text and are then used in arithmetic, where a
-# malformed one fails quietly instead of loudly. A non-integer CPU_TEMPERATURE_THRESHOLD makes bash's
-# "-gt" return 2, which every caller reads as "not overheating", disabling the safety fallback the
-# container exists to provide. Refusing to start is the only outcome that can't be mistaken for
-# normal operation.
-#
-# This function must be called as a statement, never through a command substitution : the exit inside
-# print_configuration_error_and_exit would otherwise only leave the subshell and the container would
-# keep running
-function validate_integer_parameter() {
-  local -r PARAMETER_NAME="$1"
-  local -r VALUE="$2"
-  local -r MINIMUM="$3"
-  local -r MAXIMUM="$4"
-
-  if [[ ! "$VALUE" =~ ^-?[0-9]+$ ]]; then
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a whole number between $MINIMUM and $MAXIMUM"
-  fi
-
-  local -r NORMALIZED_VALUE=$(normalize_decimal_value "$VALUE")
-  if [ "$NORMALIZED_VALUE" -lt "$MINIMUM" ] || [ "$NORMALIZED_VALUE" -gt "$MAXIMUM" ]; then
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a whole number between $MINIMUM and $MAXIMUM"
-  fi
-}
-
 # Stop the container unless the given parameter is a usable fan speed, in either accepted notation
 # Usage : validate_fan_speed_parameter "$PARAMETER_NAME" "$VALUE"
 #
