@@ -35,6 +35,8 @@ function setup_test_context() {
   CONTROLLER_WORKING_DIRECTORY="$REPO_ROOT"
   # Set before the trap by the controller, so graceful_exit can read it whenever a signal lands
   IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+  # Settled once at startup by the controller, and read by build_header() and by every row it prints
+  resolve_fan_control_profile_column_width
 
   # Mock defaults : a healthy, powered-on dual CPU Gen 13 server
   export MOCK_IPMITOOL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/ipmitool_calls.log"
