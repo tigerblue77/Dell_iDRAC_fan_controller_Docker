@@ -53,6 +53,13 @@ else
   readonly NETWORK_MODE=true
 fi
 
+# Resolve where the CPU temperatures will be read from. The iDRAC is the source in every case where it
+# can be one; lm-sensors only ever takes over on an iDRAC that drives the fans but reports no CPU
+# temperature at all, or when the user names it explicitly
+# (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)
+resolve_CPU_temperature_source "$CPU_TEMPERATURE_SOURCE" "$NETWORK_MODE"
+readonly CPU_TEMPERATURE_SOURCE
+
 # Resolve the CPU temperature threshold. "auto" (the default) asks the CPUs themselves, through lm-sensors,
 # for the "high" temperature defined by their manufacturer : that value describes the actual hardware being
 # cooled, unlike a single fixed threshold shared by every CPU model
@@ -123,6 +130,7 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: ${CPU_TEMPERATURE_THRESHOLD}°C${CPU_TEMPERATURE_THRESHOLD_SOURCE}"
+echo "CPU temperature source: $CPU_TEMPERATURE_SOURCE_DESCRIPTION"
 # The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
 # forms that would otherwise be logged as "90ss" and "5ms"
 if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
@@ -174,7 +182,7 @@ while true; do
   if $IS_TARGET_SERVER_ANSWERING; then
     # Kept for the first retrieve_temperatures() below, so that detecting the CPUs and taking their
     # first readings cost a single IPMI round-trip and describe the very same instant
-    SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+    SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
     detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
     if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
       break
@@ -203,20 +211,36 @@ while true; do
       continue
     fi
 
-    # The server answers, and answers that it has no readable CPU temperature sensor.
+    # The server answers, and answers that it has no readable CPU temperature sensor. Every PowerEdge
+    # has at least one CPU, so this is not a state to sit and wait out : an iDRAC that exposes no
+    # processor entity does so on every check, not on this one.
+    #
+    # That very conclusion is what makes the fallback safe to engage on this single check rather than on
+    # several agreeing ones : the answer will not change. In local mode this machine is the server, so
+    # its own CPUs can be read instead of the ones its iDRAC refuses to report, which is the whole point
+    # of issue #216. Tried before giving up, and only ever reached once the iDRAC has failed to supply
+    # the one thing the controller cannot do without
+    if engage_lm_sensors_CPU_temperature_fallback; then
+      SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
+      detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
+      if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
+        break
+      fi
+    fi
+
+    # Neither source has a CPU to offer.
     #
     # Monitoring only mode is the exception : it drives no fan, so a CPU it cannot read costs it a
     # column and nothing else, while the chassis sensors it can read are the whole reason it was
     # started. Refusing there would take away the one mode that still has something to do -- and it is
     # also the mode the refusal below tells everyone else to fall back on, which it cannot do if that
-    # mode refuses too
+    # mode refuses too. Checked here, once both sources have failed, so that lm-sensors still gets to
+    # fill the CPU columns of a local mode container rather than being skipped over
     if $MONITORING_ONLY_MODE; then
       break
     fi
 
-    # Every PowerEdge has at least one CPU, so this is not a state to sit and wait out : an iDRAC that
-    # exposes no processor entity does so on every check, not on this one. Retrying forever would leave
-    # a container that looks alive and supervises nothing.
+    # Retrying forever would leave a container that looks alive and supervises nothing.
     #
     # Hand the fans back to Dell before leaving, rather than leave them wherever they were : a previous
     # run of this container may have left the BMC in manual mode, in which case they would stay pinned
