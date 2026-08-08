@@ -26,11 +26,14 @@ name: Auto-update pull request branches
 # get new SHAs : the review comments already written on it are marked outdated,
 # and anyone holding a local copy of that branch has to reset onto it.
 #
-# /!\ The update cannot be pushed with the default GITHUB_TOKEN. Nothing that
-# token pushes fires a "pull_request" event, so the "Tests" workflow would never
-# run on the head commit the update creates and the required checks would stay
-# at "Expected — Waiting for status to be reported", blocking the very merge
-# this workflow exists to unblock. It uses the PULL_REQUESTS_UPDATE_TOKEN secret
+# /!\ The update cannot be pushed with the default GITHUB_TOKEN. An update that
+# token pushes does fire "pull_request : synchronize", but the runs it creates
+# are held in an approval-required state : the pull request shows an "Approve
+# workflows to run" banner that somebody with write access has to click before
+# the required checks even start. No repository setting turns that off, and
+# swapping one click per pull request for another is not worth a workflow, so
+# the update is made by an identity GitHub already trusts. It uses the
+# PULL_REQUESTS_UPDATE_TOKEN secret
 # instead : a fine-grained personal access token, whose resource owner is this
 # account and whose repository access covers this repository, granting the
 # "Contents : read and write" and "Pull requests : read and write" repository
@@ -67,7 +70,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PULL_REQUESTS_UPDATE_TOKEN }}
           REPOSITORY: ${{ github.repository }}
-          MASTER_SHA: ${{ github.sha }}
           # Whether a pull request whose rebase conflicts is updated with a
           # merge commit rather than left behind
           FALL_BACK_TO_MERGE: "true"
@@ -122,6 +124,14 @@ jobs:
             exit 1
           fi
 
+          # Master is asked for by name rather than taken from github.sha :
+          # that is master's tip under the push trigger, but under
+          # workflow_dispatch it is the tip of whichever ref the run was started
+          # from, and the ref picker offers every branch carrying this file.
+          # Measuring against the wrong base would report up-to-date pull
+          # requests as behind, and skip genuinely behind ones as up to date
+          master_sha="$(gh api "repos/$REPOSITORY/commits/master" --jq '.sha')"
+
           # Draft pull requests are skipped. They are not waiting to be merged,
           # and several of them live in forks where an unasked-for merge commit
           # after each push to master would be noise rather than help.
@@ -135,16 +145,24 @@ jobs:
               --limit 100 \
               --json number,isDraft
           )"
+          open_count="$(jq 'length' <<< "$open_pull_requests")"
           mapfile -t pull_requests < <(
             jq --raw-output '.[] | select(.isDraft | not) | .number' <<< "$open_pull_requests"
           )
 
+          # Told apart, because an empty list after the draft filter is not the
+          # same thing as an empty repository and saying so would be untrue
           if [ "${#pull_requests[@]}" -eq 0 ]; then
-            echo "No open pull request targets master."
+            if [ "$open_count" -eq 0 ]; then
+              echo "No open pull request targets master."
+            else
+              echo "The $open_count open pull request(s) targeting master are all drafts, which this workflow leaves alone."
+            fi
+            echo "Updated 0 pull request(s)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          echo "Considering ${#pull_requests[@]} open pull request(s) against master $MASTER_SHA."
+          echo "Considering ${#pull_requests[@]} open pull request(s) against master $master_sha."
 
           updated=0
           for number in "${pull_requests[@]}"; do
@@ -183,13 +201,12 @@ jobs:
               continue
             fi
 
-            # An open pull request has its head commit mirrored into this
-            # repository as refs/pull/<number>/head, so comparing by SHA works
-            # for a pull request opened from a fork too, and avoids having to
-            # put a branch name holding slashes in the URL.
+            # Comparing by SHA is what lets this work for a pull request opened
+            # from a fork : its branch names nothing in this repository, but its
+            # head commit is mirrored here as refs/pull/<number>/head.
             # In "A...B", behind_by counts the commits A has and B does not :
             # exactly how far behind master this pull request is
-            if ! behind_by="$(gh api "repos/$REPOSITORY/compare/$MASTER_SHA...$head_sha" --jq '.behind_by')" ||
+            if ! behind_by="$(gh api "repos/$REPOSITORY/compare/$master_sha...$head_sha" --jq '.behind_by')" ||
                ! [[ "$behind_by" =~ ^[0-9]+$ ]]; then
               echo "::warning::Pull request #$number could not be compared with master, skipping it."
               continue
