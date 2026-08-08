@@ -627,34 +627,34 @@ function is_server_powered_on() {
   [[ "$POWER_STATUS" == *"is on"* ]]
 }
 
-# /!\ Use this function only for Gen 13 and older generation servers /!\
-# In monitoring only mode, this is a no-op
+# Ask the server to apply Dell's default cooling response to third-party PCIe cards.
+# In monitoring only mode, this is a no-op.
+#
+# Returns the server's own verdict : 0 if it took the command, non-zero if it refused it, and leaves
+# what ipmitool said in THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR for
+# does_the_server_lack_this_command() to read.
+#
+# stderr is captured rather than printed : on a server that doesn't have this Dell OEM command it fails
+# the exact same way on every single cycle forever, and this setting is a non-safety-critical cosmetic
+# cooling response rather than core CPU fan control, so surfacing it every cycle would just recreate the
+# original log-spam problem for no benefit. It is read, not shown
 function enable_third_party_PCIe_card_Dell_default_cooling_response() {
   if "$MONITORING_ONLY_MODE"; then
-    return
+    return 0
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  # Unlike the fan speed control commands, stderr IS unconditionally discarded here: on hardware/firmware
-  # that doesn't support this Dell OEM command at all, it fails the exact same way ("Invalid command") on
-  # every single cycle forever. That's a deterministic, permanent, non-actionable failure (not a transient
-  # glitch), and this setting is a non-safety-critical cosmetic cooling response, not core CPU fan control
-  # -- so surfacing it every cycle would just recreate the original log-spam problem for no benefit
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 > /dev/null 2>&1
+  THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00 2>&1 >/dev/null)
 }
 
-# /!\ Use this function only for Gen 13 and older generation servers /!\
-# In monitoring only mode, this is a no-op
+# Ask the server to stop applying Dell's default cooling response to third-party PCIe cards.
+# In monitoring only mode, this is a no-op.
+# Returns the server's own verdict, exactly like its enable_ counterpart above
 function disable_third_party_PCIe_card_Dell_default_cooling_response() {
   if "$MONITORING_ONLY_MODE"; then
-    return
+    return 0
   fi
   # We could check the current cooling response before applying but it's not very useful so let's skip the test and apply directly
-  # Unlike the fan speed control commands, stderr IS unconditionally discarded here: on hardware/firmware
-  # that doesn't support this Dell OEM command at all, it fails the exact same way ("Invalid command") on
-  # every single cycle forever. That's a deterministic, permanent, non-actionable failure (not a transient
-  # glitch), and this setting is a non-safety-critical cosmetic cooling response, not core CPU fan control
-  # -- so surfacing it every cycle would just recreate the original log-spam problem for no benefit
-  ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 > /dev/null 2>&1
+  THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x01 0x00 0x00 2>&1 >/dev/null)
 }
 
 # Returns :
@@ -674,6 +674,26 @@ function disable_third_party_PCIe_card_Dell_default_cooling_response() {
 #   fi
 # }
 
+# Whether the given ipmitool stderr says the BMC itself answered and does not have the command, as
+# opposed to ipmitool never having reached it.
+# Usage : does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"
+#
+# ipmitool exits non-zero for both, which is exactly why the text is needed. A BMC that answered reports
+# an IPMI completion code :
+#   Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command
+# while one that was never reached produces no completion code at all :
+#   Error: Unable to establish IPMI v2 / RMCP+ session
+#
+# Only the two codes that mean "this command is not there" count : 0xc1 (invalid command) and 0xd5 (not
+# supported in present state). Every other answer -- 0xc0 node busy, a timeout, an unreachable host, a
+# message this function does not recognize -- is deliberately NOT a verdict, so the command keeps being
+# retried rather than a conclusion being drawn from something that was never understood
+function does_the_server_lack_this_command() {
+  local -r IPMITOOL_STDERR="$1"
+
+  [[ "$IPMITOOL_STDERR" == *"rsp=0xc1"* || "$IPMITOOL_STDERR" == *"rsp=0xd5"* ]]
+}
+
 # Prepare traps in case of container exit
 function graceful_exit() {
   if "$MONITORING_ONLY_MODE"; then
@@ -682,7 +702,12 @@ function graceful_exit() {
 
   apply_Dell_default_fan_control_profile
 
-  # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at startup
+  # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at
+  # startup. This is deliberately NOT gated on whether the server was seen to accept the command
+  # earlier : the controller gives up on a command refused several cycles in a row, and if it gave up
+  # for the wrong reason — an iDRAC that was being reset, a network outage — skipping the reset here
+  # would leave the server on the user's setting for good. One refused command on the way out costs
+  # nothing; a setting left behind on a server nothing is monitoring any more does
   if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then
     enable_third_party_PCIe_card_Dell_default_cooling_response
   fi
