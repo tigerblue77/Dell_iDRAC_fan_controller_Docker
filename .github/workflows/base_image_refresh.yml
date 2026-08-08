@@ -101,20 +101,40 @@ jobs:
           # The publishing step below records the base digest as a label, which
           # is what makes this comparison possible without keeping state
           # anywhere else
-          PUBLISHED="$(docker buildx imagetools inspect \
-            "ghcr.io/${{ steps.image-name.outputs.value }}:latest" \
-            --format '{{json .Image}}' 2>/dev/null \
-            | jq -r 'if has("config") then [.] else [.[]] end
-                     | map(.config.Labels["org.opencontainers.image.base.digest"] // empty)
-                     | first // ""' || true)"
+          IMAGE="ghcr.io/${{ steps.image-name.outputs.value }}:latest"
+          ERRORS="$RUNNER_TEMP/imagetools-error.txt"
+
+          if CONFIG="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Image}}' 2>"$ERRORS")"; then
+            PUBLISHED="$(printf '%s' "$CONFIG" \
+              | jq -r 'if has("config") then [.] else [.[]] end
+                       | map(.config.Labels["org.opencontainers.image.base.digest"] // empty)
+                       | first // ""')"
+          elif grep -qiE 'not found|manifest unknown|name unknown' "$ERRORS"; then
+            # Nothing published under that tag yet, so there is nothing to
+            # compare against and everything to build
+            PUBLISHED=""
+          else
+            # Credentials, rate limit, registry outage : none of these are an
+            # answer to "did the base move ?". Failing here is deliberate.
+            # Treating an unreadable image as "changed" is what would turn this
+            # workflow into an unconditional daily republication of "latest",
+            # green run after green run, with nobody noticing
+            echo "::error::Could not read $IMAGE, giving up rather than assuming the base moved"
+            cat "$ERRORS"
+            exit 1
+          fi
 
           CURRENT="${{ steps.base.outputs.digest }}"
           if [ "$PUBLISHED" = "$CURRENT" ]; then
             CHANGED=false
           else
-            # Covers the first run too, where the published image predates the
-            # label and reads back empty : it rebuilds once to record it
             CHANGED=true
+            if [ -z "$PUBLISHED" ]; then
+              # Expected exactly once, the first time this runs against an image
+              # published before the label existed. Twice in a row means the
+              # publishing step is not recording it and every run rebuilds
+              echo "::warning::No base digest recorded on $IMAGE, rebuilding to record it"
+            fi
           fi
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
 
@@ -146,11 +166,32 @@ jobs:
         with:
           ref: ${{ needs.check.outputs.release-tag }}
 
+      # Set up before the test build and not just before the publishing one, so
+      # that both builds go through the same Buildx builder : the amd64 layers
+      # the suite runs on are then the very layers that get pushed, taken from
+      # that builder's cache, rather than an independently rebuilt lookalike
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       # Nothing is published before the suite has run on the image the new base
-      # produced. This mirrors the "Tests" workflow's Docker job : same image,
-      # same entrypoint override, same reports
-      - name: Build the image the test run uses
-        run: docker build --pull --tag dell_idrac_fan_controller:test .
+      # produced. Only amd64 is loaded and exercised : "load" cannot take a
+      # multi-platform build, and the suite mocks ipmitool so it exercises no
+      # architecture-specific code anyway. What arm64 gets out of this run is
+      # the guarantee that the same source still builds on the new base
+      - name: Build the image the test suite runs on
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          # Resolve the base from the registry rather than reuse whatever the
+          # runner already had : that resolution is the whole point of the run
+          pull: true
+          tags: dell_idrac_fan_controller:test
 
       - name: Run the test suite inside the image
         run: |
@@ -188,12 +229,6 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -227,10 +262,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           file: ./Dockerfile
           push: true
-          # The base resolved a few minutes ago in the "check" job, pull it
-          # again so the build cannot silently use a cached older one. Should
-          # the base move in between, the recorded label is one digest behind
-          # and the next run picks it up
-          pull: true
+          # Deliberately no "pull" here, unlike the test build above : the base
+          # was resolved there, and re-resolving it would miss the builder cache
+          # and rebuild amd64 into something the suite never ran on. Should the
+          # base move between the two, the label records the digest the check
+          # job saw, one behind, and the next run picks the difference up
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
