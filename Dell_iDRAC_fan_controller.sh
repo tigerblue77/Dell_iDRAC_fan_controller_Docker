@@ -170,27 +170,24 @@ ACTIVE_FAN_CONTROL_PROFILE="Dell"
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
 
-# Check present sensors
-IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
-
 # Start timer in background
 sleep "$CHECK_INTERVAL" &
 SLEEP_PROCESS_PID=$!
 
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+retrieve_temperatures
 
 echo "$NUMBER_OF_DETECTED_CPUS CPU temperature sensor(s) detected."
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
-  IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
-  # This reading was taken before the sensor was known to be absent, so it holds an empty string where
-  # every later cycle will hold the "-" placeholder. Backfilling it here keeps the first printed line
-  # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
-  EXHAUST_TEMPERATURE="-"
 fi
 echo ""
 
-readonly HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
+# The header describes the current sensor set, so it is rebuilt whenever that set changes rather than
+# frozen from the first reading. A frozen header outlives what it describes: a CPU that stops
+# answering removes a column from the rows while the header still advertises it, shifting every
+# following value one column left, and a sensor that only appears later never gets a column at all
+HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
+NUMBER_OF_CPUS_IN_HEADER=$NUMBER_OF_DETECTED_CPUS
 
 # Start monitoring
 while true; do
@@ -225,7 +222,7 @@ while true; do
   # before/during the outage (could be the initial pre-loop reading, or readings from before it powered off)
   if $IS_TARGET_SERVER_POWERED_OFF; then
     IS_TARGET_SERVER_POWERED_OFF=false
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+    retrieve_temperatures
   fi
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
@@ -289,6 +286,14 @@ while true; do
     fi
   fi
 
+  # Rebuild the header if the machine stopped or started answering for a socket, and reprint it right
+  # away so the change is visible instead of silently shifting the columns
+  if [ "$NUMBER_OF_DETECTED_CPUS" -ne "$NUMBER_OF_CPUS_IN_HEADER" ]; then
+    HEADER=$(build_header $NUMBER_OF_DETECTED_CPUS)
+    NUMBER_OF_CPUS_IN_HEADER=$NUMBER_OF_DETECTED_CPUS
+    TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
+  fi
+
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
   if [ $TABLE_HEADER_PRINT_COUNTER -eq $TABLE_HEADER_PRINT_INTERVAL ]; then
     printf "%s\n" "$HEADER"
@@ -303,5 +308,5 @@ while true; do
   sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures
 done
