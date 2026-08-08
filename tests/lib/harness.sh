@@ -81,12 +81,6 @@ function capture_output() {
   return "$EXIT_CODE"
 }
 
-# Make "local" mode runnable : set_iDRAC_login_string() refuses to start the
-# controller without the Docker host's IPMI device, so a test that needs local
-# mode has to have one. /dev is only writable when the suite runs as root (in the
-# Docker image, or in a CI container), hence the graceful failure : the caller
-# skips rather than reporting a failure about something it never got to test.
-#
 # Make run_controller() start the whole controller in "local" mode, on a machine
 # that has no IPMI device of its own.
 #
@@ -99,7 +93,7 @@ function capture_output() {
 #
 # The controller sources "functions.sh" by a relative path, so the directory it
 # runs from is the seam that is left. A throwaway one is built here, holding
-# symbolic links to the real scripts and, in place of functions.sh, three lines
+# symbolic links to the real scripts and, in place of functions.sh, two lines
 # that source the real one and then point the lookup at a file of this run's own
 # temporary directory. Nothing is written outside it, and no root is needed, so
 # these cases run on the CI runner as well as in the Docker image rather than

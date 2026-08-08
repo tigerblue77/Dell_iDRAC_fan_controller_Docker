@@ -200,10 +200,32 @@ function test_only_the_processor_rows_of_the_idrac_are_replaced() {
   assert_not_contains "$MERGED" "60 degrees C" "the iDRAC's own CPU rows must be gone, not kept alongside"
 }
 
-function test_a_socket_the_idrac_reports_as_disabled_cannot_shadow_its_replacement() {
-  # Dell keeps the row of an unreadable socket and marks it "Disabled". Left in the
-  # data it would still match entity 3.2, and the per-entity lookup stops at the
-  # first match : the lm-sensors reading meant to replace it would never be seen
+function test_a_processor_row_the_idrac_still_carries_cannot_shadow_its_replacement() {
+  # The lm-sensors rows are appended after the iDRAC's, and the per-entity lookup
+  # stops at the first match : a processor row the iDRAC still reports would be the
+  # one answering, and the reading meant to replace it would never be seen.
+  #
+  # The data is filtered exactly as retrieve_sdr_temperature_data() filters it, so
+  # this exercises the shape the real path produces and not a richer one : a socket
+  # the iDRAC lists as "Disabled" carries no "degrees" and is already gone by here,
+  # which is why the readable row, not that one, is what has to be covered
+  simulate_readable_CPUs_in_lm_sensors 45.000 47.000
+  local -r IDRAC_DATA=$(make_sdr_output --cpus 2 --cpu-temperatures "60 61" --cpu2-disabled --inlet 23 | grep degrees)
+
+  assert_contains "$IDRAC_DATA" "60 degrees C" "the iDRAC still reports its first socket"
+  assert_not_contains "$IDRAC_DATA" "Disabled" "and its second one never reaches the merge"
+
+  local -r MERGED=$(merge_lm_sensors_CPU_temperatures_into_temperature_data "$IDRAC_DATA")
+
+  assert_equals "45" "$(retrieve_temperature_by_entity_id "$MERGED" "3.1")" "the reading must be lm-sensors', not the iDRAC's 60"
+  assert_equals "47" "$(retrieve_temperature_by_entity_id "$MERGED" "3.2")"
+}
+
+function test_a_disabled_row_reaching_the_merge_is_dropped_all_the_same() {
+  # Belt and braces : retrieve_sdr_temperature_data() removes it first, so this
+  # shape does not occur today. The whole entity is dropped rather than only the
+  # rows holding a reading, so the replacement holds whichever of the two it was,
+  # and this pins that rather than the filter upstream staying where it is
   simulate_readable_CPUs_in_lm_sensors 45.000 47.000
   local -r IDRAC_DATA=$(make_sdr_output --cpus 2 --cpu2-disabled --inlet 23)
 

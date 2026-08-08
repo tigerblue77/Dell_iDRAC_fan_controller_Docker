@@ -444,9 +444,16 @@ function build_CPU_temperature_sdr_lines_from_lm_sensors() {
 # fallback therefore fills the one hole the iDRAC leaves instead of blinding the controller to
 # everything else it can still read.
 #
-# The iDRAC's own processor rows are dropped rather than kept alongside : a socket it lists as
-# "Disabled" carries no reading but still matches its entity, and retrieve_temperature_by_entity_id()
-# stops at the first match, so leaving it in would shadow the lm-sensors reading meant to replace it
+# The iDRAC's own processor rows are dropped rather than kept alongside : the lm-sensors rows are
+# appended after them, and retrieve_temperature_by_entity_id() stops at the first match, so any
+# processor row the iDRAC still carries would shadow the reading meant to replace it. That is not a
+# hypothetical : the fallback only engages once no processor entity was *readable*, which a socket the
+# iDRAC reports for another CPU, or one that becomes readable again later, does not preclude.
+#
+# A socket the iDRAC lists as "Disabled" is not the case at issue, contrary to what one might expect :
+# it carries no "degrees", so retrieve_sdr_temperature_data()'s own filter has already removed it long
+# before this function sees the data. Dropping the whole entity rather than only the rows holding a
+# reading is what makes the replacement hold whichever of the two it was
 function merge_lm_sensors_CPU_temperatures_into_temperature_data() {
   local -r SDR_DATA="$1"
 
