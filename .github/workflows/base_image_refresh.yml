@@ -254,9 +254,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
+          # The two entries below are docker.io/tigerblue77/dell_idrac_fan_controller
+          # and ghcr.io/tigerblue77/dell_idrac_fan_controller. Said here rather than
+          # at the end of each line : from v6 on the action only strips a "#" that
+          # starts a line, so a trailing note would be read as part of the image name
           images: |
-            ${{ needs.check.outputs.image-name }} # docker.io/tigerblue77/dell_idrac_fan_controller
-            ghcr.io/${{ needs.check.outputs.image-name }} # ghcr.io/tigerblue77/dell_idrac_fan_controller
+            ${{ needs.check.outputs.image-name }}
+            ghcr.io/${{ needs.check.outputs.image-name }}
           # Only "latest" moves : the version tags stay on the image that was
           # actually published for that release
           tags: |

@@ -117,9 +117,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
+          # The two entries below are docker.io/tigerblue77/dell_idrac_fan_controller
+          # and ghcr.io/tigerblue77/dell_idrac_fan_controller. Said here rather than
+          # at the end of each line : from v6 on the action only strips a "#" that
+          # starts a line, so a trailing note would be read as part of the image name
           images: |
-            ${{ steps.docker_image_name.outputs.value }} # docker.io/tigerblue77/dell_idrac_fan_controller
-            ghcr.io/${{ steps.docker_image_name.outputs.value }} # ghcr.io/tigerblue77/dell_idrac_fan_controller
+            ${{ steps.docker_image_name.outputs.value }}
+            ghcr.io/${{ steps.docker_image_name.outputs.value }}
           # github.ref_name is the tag name on both the push and the workflow_dispatch
           # paths, whereas "type=ref,event=tag" only resolves on a push tag event and
           # would leave a dispatched run with no tag at all
