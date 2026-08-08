@@ -133,13 +133,14 @@ function validate_fan_speed_parameter() {
 # taking a working setup away.
 #
 # This function must be called as a statement, never through a command substitution : the exit inside
-# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+# print_configuration_error_and_exit would otherwise only leave the subshell and the container would
+# keep running
 function validate_boolean_parameter() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
 
   if [ "$VALUE" != "true" ] && [ "$VALUE" != "false" ]; then
-    print_error_and_exit "$PARAMETER_NAME must be exactly \"true\" or \"false\", but is \"$VALUE\". Spellings such as \"True\", \"1\", \"yes\" or \"on\" are not accepted : this parameter is dispatched by running its value, so anything else is either read as false without a word or run as whatever command it names"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "exactly \"true\" or \"false\". Spellings such as \"True\", \"1\", \"yes\" or \"on\" are not accepted : this parameter is dispatched by running its value, so anything else is either read as false without a word or run as whatever command it names"
   fi
 }
 
@@ -165,14 +166,15 @@ function validate_boolean_parameter() {
 # keeps the strictest reading, fan control being the assumption that fails safe.
 #
 # This function must be called as a statement, never through a command substitution : the exit inside
-# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+# print_configuration_error_and_exit would otherwise only leave the subshell and the container would
+# keep running
 function validate_check_interval_parameter() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
   local -r IS_MONITORING_ONLY_MODE="${3:-false}"
 
   if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
-    print_error_and_exit "$PARAMETER_NAME must be a number of seconds, optionally suffixed with s, m, h or d, but is \"$VALUE\""
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a number of seconds, optionally suffixed with s, m, h or d (for example 60, 90s, 5m or 1h)"
   fi
 
   local -r VALUE_IN_SECONDS=$(convert_check_interval_to_seconds "$VALUE")
@@ -181,7 +183,7 @@ function validate_check_interval_parameter() {
   # immediately, and spins the loop just like an unparseable value. It is therefore rejected on its own
   # terms rather than on its format
   if [ "$VALUE_IN_SECONDS" -eq 0 ]; then
-    print_error_and_exit "$PARAMETER_NAME must be greater than zero, but is \"$VALUE\""
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a duration greater than zero, otherwise the monitoring loop would never pause between two readings"
   fi
 
   if [ "$IS_MONITORING_ONLY_MODE" == "true" ]; then
@@ -189,7 +191,7 @@ function validate_check_interval_parameter() {
   fi
 
   if [ "$VALUE_IN_SECONDS" -gt "$MAXIMUM_CHECK_INTERVAL_IN_SECONDS" ]; then
-    print_error_and_exit "$PARAMETER_NAME must not exceed $((MAXIMUM_CHECK_INTERVAL_IN_SECONDS / 60)) minutes when this container drives the fans, but is \"$VALUE\". Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the server would be left heating up unattended for that long. Use a shorter interval, or set MONITORING_ONLY_MODE=true if all you want is temperature logging"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at most $((MAXIMUM_CHECK_INTERVAL_IN_SECONDS / 60)) minutes when this container drives the fans. Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the server would be left heating up unattended for that long. Use a shorter interval, or set MONITORING_ONLY_MODE=true if all you want is temperature logging"
   fi
 
   if [ "$VALUE_IN_SECONDS" -gt "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" ]; then
@@ -528,14 +530,14 @@ function resolve_CPU_temperature_source() {
       # container that silently supervises the wrong CPUs is the failure this whole parameter exists
       # to make impossible
       if [ "$IS_NETWORK_MODE" == "true" ]; then
-        print_error_and_exit "CPU_TEMPERATURE_SOURCE is \"lm-sensors\", which reads the CPUs of the machine this container runs on. In network mode that machine is not the server whose fans are being controlled, so those readings would describe the wrong hardware. Set IDRAC_HOST to \"local\", or leave CPU_TEMPERATURE_SOURCE to its default"
+        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that can describe the controlled server. lm-sensors reads the CPUs of the machine this container runs on, and in network mode that machine is not the server whose fans are being controlled, so those readings would describe the wrong hardware. Set IDRAC_HOST to \"local\", or leave CPU_TEMPERATURE_SOURCE to its default"
       fi
 
       # Checked now rather than discovered in the monitoring loop : with no reading at all, every cycle
       # would hand the fans back to Dell's profile forever, which looks exactly like a container doing
       # its job and is the hardest possible way to find out that a kernel module is missing
       if ! is_lm_sensors_reporting_CPU_temperatures; then
-        print_error_and_exit "CPU_TEMPERATURE_SOURCE is \"lm-sensors\", but no CPU temperature could be read from it. Check that your Docker host exposes them through /sys (the \"coretemp\" kernel module) and that \"sensors\" reports a \"Package id\" temperature. Note that only Intel CPUs are supported here: AMD's \"k10temp\" driver reports \"Tctl\", which is not the physical temperature the iDRAC reports"
+        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that actually reports something : no CPU temperature could be read from lm-sensors. Check that your Docker host exposes them through /sys (the \"coretemp\" kernel module) and that \"sensors\" reports a \"Package id\" temperature. Note that only Intel CPUs are supported here: AMD's \"k10temp\" driver reports \"Tctl\", which is not the physical temperature the iDRAC reports"
       fi
 
       CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
@@ -544,7 +546,7 @@ function resolve_CPU_temperature_source() {
     *)
       # Left in place, an unrecognized value would silently mean "auto" : the user would believe one
       # source is being read while another one is
-      print_error_and_exit "CPU_TEMPERATURE_SOURCE must be \"auto\", \"ipmi\" or \"lm-sensors\", but is \"$REQUESTED_SOURCE\""
+      print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "exactly \"auto\", \"ipmi\" or \"lm-sensors\""
       ;;
   esac
 }
@@ -998,11 +1000,26 @@ function retrieve_temperatures() {
   EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
 }
 
-# Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
+# Report the target server's power state
+# Returns : 0 if it is powered on, 1 if it is powered off, 2 if the iDRAC could not be reached
+#
 # Only meaningful in network mode: in local mode the container runs on the target server itself,
 # so it cannot be observed powered off while the container is running
-function is_server_powered_on() {
-  local -r POWER_STATUS=$(ipmitool -I $IDRAC_LOGIN_STRING chassis power status 2>/dev/null)
+#
+# The three outcomes used to be two. stderr and the exit code were both discarded and the verdict came
+# from a substring, so a failed call produced empty output, didn't contain "is on", and was reported as
+# a powered-off chassis -- indistinguishable from the real thing. A dropped session, rotated
+# credentials, an iDRAC reboot and a LAN flap all landed in the same branch, and the caller skipped the
+# cycle without reading temperatures or applying any profile, leaving the fans frozen at the user's
+# static speed on a running, loaded server while the log called it benign
+function get_server_power_state() {
+  local POWER_STATUS
+  POWER_STATUS=$(ipmitool -I $IDRAC_LOGIN_STRING chassis power status 2>&1)
+  if [ $? -ne 0 ]; then
+    IPMI_UNREACHABLE_REASON="$POWER_STATUS"
+    return 2
+  fi
+
   [[ "$POWER_STATUS" == *"is on"* ]]
 }
 

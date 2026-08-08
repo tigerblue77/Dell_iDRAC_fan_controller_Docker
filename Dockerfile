@@ -11,8 +11,9 @@ ADD functions.sh /app/functions.sh
 ADD constants.sh /app/constants.sh
 ADD healthcheck.sh /app/healthcheck.sh
 ADD Dell_iDRAC_fan_controller.sh /app/Dell_iDRAC_fan_controller.sh
+ADD supervisor.sh /app/supervisor.sh
 
-RUN chmod 0777 /app/functions.sh /app/healthcheck.sh /app/Dell_iDRAC_fan_controller.sh
+RUN chmod 0777 /app/functions.sh /app/healthcheck.sh /app/Dell_iDRAC_fan_controller.sh /app/supervisor.sh
 
 WORKDIR /app
 
@@ -31,4 +32,4 @@ ENV DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
 ENV KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
 ENV MONITORING_ONLY_MODE=false
 
-ENTRYPOINT ["./Dell_iDRAC_fan_controller.sh"]
+ENTRYPOINT ["./supervisor.sh"]

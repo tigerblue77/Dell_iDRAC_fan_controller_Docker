@@ -426,3 +426,33 @@ function test_a_removed_cpu_is_reported_as_removed_and_not_merely_as_silent() {
     "and the entities, so the line can be matched against an ipmitool output"
   assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)."
 }
+
+function test_an_unreachable_idrac_does_not_open_the_cpu_removal_window() {
+  # A CPU can only be added or removed while the server is off, which is why a
+  # confirmed power cycle is what allows one to leave the monitored set. An iDRAC
+  # we merely failed to reach is not that event : the machine kept running, so its
+  # sockets cannot have changed. Treating the outage as a power cycle would let a
+  # socket that goes quiet afterwards be dropped, and a dropped column is a heat
+  # source nobody is watching.
+  simulate_server "PowerEdge R930" --cpus 4 --cpu-temperatures "41 40 39 38"
+
+  # Reachable, then an unreachable iDRAC for two cycles, then answering again --
+  # the same shape as the power cycle in the test above, but without the server
+  # ever reporting itself off
+  export MOCK_IPMITOOL_POWER_EXIT_CODE_SEQUENCE MOCK_IPMITOOL_SDR_SECOND_OUTPUT MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS
+  MOCK_IPMITOOL_POWER_EXIT_CODE_SEQUENCE="0 1 1 0"
+  # Two sockets go quiet from the moment the iDRAC answers again, and keep quiet,
+  # so a wrongly opened window has every reading it needs to confirm a removal
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "41 40")
+  MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  # Far more cycles than CPU_REMOVAL_CONFIRMING_READINGS, so absence is a verdict
+  local -r OUTPUT=$(run_controller "$CONTROLLER_TEMPERATURE_LINE_PATTERN" 12)
+
+  assert_contains "$OUTPUT" "Cannot reach the iDRAC" \
+    "the unreachable iDRAC must be reported as such"
+  assert_not_contains "$OUTPUT" "Target server is powered off" \
+    "a query that failed is not an observation that the server is off"
+  assert_not_contains "$OUTPUT" "considered removed" \
+    "no CPU may be dropped : the server never powered off, so none can have left"
+}

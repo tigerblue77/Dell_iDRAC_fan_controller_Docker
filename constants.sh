@@ -44,3 +44,7 @@ readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5
 # slow to become readable after POST, and monitoring one heat source less until it shows up again
 readonly CPU_REMOVAL_CONFIRMING_READINGS=5
 
+# How long the supervisor gives the monitoring process to stop on its own after forwarding it the signal,
+# before killing it outright. Docker's own grace period is 10 seconds by default, so this has to stay
+# comfortably inside it or the container is SIGKILLed as a whole before the supervisor gets to act
+readonly SUPERVISOR_GRACE_PERIOD_IN_SECONDS=3
