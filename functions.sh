@@ -196,7 +196,6 @@ function validate_check_interval_parameter() {
 
   if [ "$VALUE_IN_SECONDS" -gt "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" ]; then
     print_warning "$PARAMETER_NAME is \"$VALUE\", over $CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS seconds. Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the controller will take up to that long to react to a temperature spike"
-    printf "\n"
   fi
 }
 
@@ -924,8 +923,6 @@ function warn_if_unexpected_number_of_CPUs() {
   fi
 
   print_warning "${#DETECTED_CPU_ENTITY_IDS[@]} CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command"
-  # print_warning() emits no trailing newline
-  echo ""
 }
 
 # The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), which every label
@@ -1366,26 +1363,30 @@ function print_configuration_error_and_exit() {
   exit 1
 }
 
+# Each of these terminates its own line. print_error() and print_warning() used not to, which was
+# deliberate only for the " Exiting." suffix of their _and_exit() variants : every standalone call left
+# the message unterminated, so it fused with the next thing printed. The realistic case is an iDRAC
+# rejecting the fan speed command, which errors on every cycle and prefixes every table row with ~180
+# characters, moving the timestamp out of column 1 and breaking any log parser keyed on it. The exit
+# variants print their line in full rather than depend on that omission, and keep their exact wording
 function print_error() {
   local -r ERROR_MESSAGE="$1"
-  printf "/!\ Error /!\ %s." "$ERROR_MESSAGE" >&2
+  printf "/!\ Error /!\ %s.\n" "$ERROR_MESSAGE" >&2
 }
 
 function print_error_and_exit() {
   local -r ERROR_MESSAGE="$1"
-  print_error "$ERROR_MESSAGE"
-  printf " Exiting.\n" >&2
+  printf "/!\ Error /!\ %s. Exiting.\n" "$ERROR_MESSAGE" >&2
   exit 1
 }
 
 function print_warning() {
   local -r WARNING_MESSAGE="$1"
-  printf "/!\ Warning /!\ %s." "$WARNING_MESSAGE"
+  printf "/!\ Warning /!\ %s.\n" "$WARNING_MESSAGE"
 }
 
 function print_warning_and_exit() {
   local -r WARNING_MESSAGE="$1"
-  print_warning "$WARNING_MESSAGE"
-  printf " Exiting.\n"
+  printf "/!\ Warning /!\ %s. Exiting.\n" "$WARNING_MESSAGE"
   exit 0
 }
