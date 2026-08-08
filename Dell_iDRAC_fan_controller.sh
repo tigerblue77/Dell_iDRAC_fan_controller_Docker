@@ -23,6 +23,38 @@ else
   readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
+# These three parameters get their default value from the Dockerfile, but the script can also be run
+# directly (see the "Run without Docker" section of the README). Default them here too: an unset
+# ENABLE_LINE_INTERPOLATION would expand to an empty command, which bash considers successful, silently
+# enabling interpolation with an unset (hence 0) HIGH_FAN_SPEED -- which inverts the ramp and slows the
+# fans down as the CPU heats up
+readonly ENABLE_LINE_INTERPOLATION="${ENABLE_LINE_INTERPOLATION:-false}"
+readonly HIGH_FAN_SPEED="${HIGH_FAN_SPEED:-50}"
+readonly CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION="${CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION:-30}"
+
+if [ "$ENABLE_LINE_INTERPOLATION" != "true" ] && [ "$ENABLE_LINE_INTERPOLATION" != "false" ]; then
+  print_error_and_exit "ENABLE_LINE_INTERPOLATION must be \"true\" or \"false\" (got \"$ENABLE_LINE_INTERPOLATION\")"
+fi
+
+if $ENABLE_LINE_INTERPOLATION; then
+  # Validate before comparing: a non-numeric value makes the [ -ge ] / [ -le ] tests below fail with
+  # "integer expression expected" and, that failure being non-zero, silently skip the very check it
+  # guards. Leading zeros are rejected too, as bash would then read the value as octal
+  for VARIABLE_NAME in DECIMAL_FAN_SPEED HIGH_FAN_SPEED CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION CPU_TEMPERATURE_THRESHOLD; do
+    if [[ ! "${!VARIABLE_NAME}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+      # DECIMAL_FAN_SPEED is internal, report it under the name the user actually sets
+      print_error_and_exit "${VARIABLE_NAME/DECIMAL_FAN_SPEED/FAN_SPEED} must be a decimal integer without leading zeros to use line interpolation (got \"${!VARIABLE_NAME}\")"
+    fi
+  done
+
+  if [ "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    print_error_and_exit "CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION ($CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION°C) must be lower than CPU_TEMPERATURE_THRESHOLD ($CPU_TEMPERATURE_THRESHOLD°C)"
+  fi
+  if [ "$HIGH_FAN_SPEED" -le "$DECIMAL_FAN_SPEED" ]; then
+    print_error_and_exit "HIGH_FAN_SPEED ($HIGH_FAN_SPEED%) must be higher than FAN_SPEED ($DECIMAL_FAN_SPEED%)"
+  fi
+fi
+
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 
 get_Dell_server_model
@@ -57,6 +89,11 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
 echo "Check interval: ${CHECK_INTERVAL}s"
+if $ENABLE_LINE_INTERPOLATION; then
+  echo "Line interpolation: Enabled (fan speed ramps from $DECIMAL_FAN_SPEED% at ${CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION}°C up to $HIGH_FAN_SPEED% at ${CPU_TEMPERATURE_THRESHOLD}°C)"
+else
+  echo "Line interpolation: Disabled"
+fi
 if $MONITORING_ONLY_MODE; then
   echo "Monitoring only mode: Enabled (no fan control profile will be applied, temperatures will only be logged)"
 else
@@ -147,7 +184,16 @@ while true; do
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
   else
-    apply_user_fan_control_profile
+    if $ENABLE_LINE_INTERPOLATION; then
+      # Use the highest CPU temperature among detected sensors as the interpolation input
+      MAX_CPU_TEMPERATURE=$CPU1_TEMPERATURE
+      if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]] && { [[ ! "$MAX_CPU_TEMPERATURE" =~ ^[0-9]+$ ]] || [ "$CPU2_TEMPERATURE" -gt "$MAX_CPU_TEMPERATURE" ]; }; then
+        MAX_CPU_TEMPERATURE=$CPU2_TEMPERATURE
+      fi
+      apply_interpolated_fan_control_profile "$(compute_interpolated_fan_speed "$MAX_CPU_TEMPERATURE")"
+    else
+      apply_user_fan_control_profile
+    fi
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
