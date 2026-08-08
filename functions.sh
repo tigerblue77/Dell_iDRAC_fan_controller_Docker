@@ -133,13 +133,14 @@ function validate_fan_speed_parameter() {
 # taking a working setup away.
 #
 # This function must be called as a statement, never through a command substitution : the exit inside
-# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+# print_configuration_error_and_exit would otherwise only leave the subshell and the container would
+# keep running
 function validate_boolean_parameter() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
 
   if [ "$VALUE" != "true" ] && [ "$VALUE" != "false" ]; then
-    print_error_and_exit "$PARAMETER_NAME must be exactly \"true\" or \"false\", but is \"$VALUE\". Spellings such as \"True\", \"1\", \"yes\" or \"on\" are not accepted : this parameter is dispatched by running its value, so anything else is either read as false without a word or run as whatever command it names"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "exactly \"true\" or \"false\". Spellings such as \"True\", \"1\", \"yes\" or \"on\" are not accepted : this parameter is dispatched by running its value, so anything else is either read as false without a word or run as whatever command it names"
   fi
 }
 
@@ -165,14 +166,15 @@ function validate_boolean_parameter() {
 # keeps the strictest reading, fan control being the assumption that fails safe.
 #
 # This function must be called as a statement, never through a command substitution : the exit inside
-# print_error_and_exit would otherwise only leave the subshell and the container would keep running
+# print_configuration_error_and_exit would otherwise only leave the subshell and the container would
+# keep running
 function validate_check_interval_parameter() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
   local -r IS_MONITORING_ONLY_MODE="${3:-false}"
 
   if [[ ! "$VALUE" =~ ^[0-9]+[smhd]?$ ]]; then
-    print_error_and_exit "$PARAMETER_NAME must be a number of seconds, optionally suffixed with s, m, h or d, but is \"$VALUE\""
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a number of seconds, optionally suffixed with s, m, h or d (for example 60, 90s, 5m or 1h)"
   fi
 
   local -r VALUE_IN_SECONDS=$(convert_check_interval_to_seconds "$VALUE")
@@ -181,7 +183,7 @@ function validate_check_interval_parameter() {
   # immediately, and spins the loop just like an unparseable value. It is therefore rejected on its own
   # terms rather than on its format
   if [ "$VALUE_IN_SECONDS" -eq 0 ]; then
-    print_error_and_exit "$PARAMETER_NAME must be greater than zero, but is \"$VALUE\""
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a duration greater than zero, otherwise the monitoring loop would never pause between two readings"
   fi
 
   if [ "$IS_MONITORING_ONLY_MODE" == "true" ]; then
@@ -189,7 +191,7 @@ function validate_check_interval_parameter() {
   fi
 
   if [ "$VALUE_IN_SECONDS" -gt "$MAXIMUM_CHECK_INTERVAL_IN_SECONDS" ]; then
-    print_error_and_exit "$PARAMETER_NAME must not exceed $((MAXIMUM_CHECK_INTERVAL_IN_SECONDS / 60)) minutes when this container drives the fans, but is \"$VALUE\". Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the server would be left heating up unattended for that long. Use a shorter interval, or set MONITORING_ONLY_MODE=true if all you want is temperature logging"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at most $((MAXIMUM_CHECK_INTERVAL_IN_SECONDS / 60)) minutes when this container drives the fans. Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the server would be left heating up unattended for that long. Use a shorter interval, or set MONITORING_ONLY_MODE=true if all you want is temperature logging"
   fi
 
   if [ "$VALUE_IN_SECONDS" -gt "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" ]; then

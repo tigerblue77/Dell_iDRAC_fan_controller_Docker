@@ -96,12 +96,12 @@ elif [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]{1,3}$ ]]; then
   # such as "500" (or a Fahrenheit value) is otherwise accepted silently and no CPU ever reaches it, so
   # the Dell default profile is never restored and the fans stay low for the life of the container
   if [ "$CPU_TEMPERATURE_THRESHOLD" -lt "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -gt "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
-    print_error_and_exit "CPU_TEMPERATURE_THRESHOLD must be between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C, but is ${CPU_TEMPERATURE_THRESHOLD}°C"
+    print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "${CPU_TEMPERATURE_THRESHOLD}°C" "a temperature between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C, no CPU throttling below the first nor tolerating more than the second"
   fi
 else
   # Reject an unusable threshold right away : every temperature comparison would fail against it, which
   # silently keeps the user's (low) fan speed applied instead of ever triggering the Dell default profile
-  print_error_and_exit "CPU_TEMPERATURE_THRESHOLD must be a positive integer number of degrees Celsius or \"auto\", but is \"$CPU_TEMPERATURE_THRESHOLD\""
+  print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "$CPU_TEMPERATURE_THRESHOLD" "a positive integer number of degrees Celsius, or \"auto\" to take the CPUs' own \"high\" temperature as reported by lm-sensors"
 fi
 readonly CPU_TEMPERATURE_THRESHOLD
 
