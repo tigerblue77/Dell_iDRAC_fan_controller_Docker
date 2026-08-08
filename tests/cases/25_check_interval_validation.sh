@@ -75,6 +75,16 @@ function test_a_zero_check_interval_stops_the_controller() {
   done
 }
 
+function test_a_fractional_value_is_refused_although_sleep_accepts_it() {
+  # sleep waits for "0.5" happily, so this is a decision rather than an oversight :
+  # a sub-second cycle would send the 4 to 5 IPMI commands a cycle costs more than
+  # once a second, which is the hammering this validation exists to prevent
+  local VALUE
+  for VALUE in "0.5" ".5" "1.5" "0.5s" "2.5m"; do
+    assert_check_interval_is_refused "$VALUE" "\"$VALUE\" is refused on purpose, despite sleep accepting it"
+  done
+}
+
 function test_the_error_tells_the_user_what_is_wrong_and_what_is_accepted() {
   local OUTPUT
   OUTPUT=$(validate_check_interval_parameter "CHECK_INTERVAL" "abc" 2>&1)

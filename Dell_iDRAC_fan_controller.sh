@@ -15,9 +15,9 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 # readonly DELL_FRESH_AIR_COMPLIANCE=45
 
 # CHECK_INTERVAL paces the whole monitoring loop and is handed straight to sleep, whose exit status the
-# loop discards, so an unusable value doesn't stop anything : it makes every cycle return at once and
-# turns the loop into a busy loop hammering the iDRAC. Validate it here, before the first IPMI command,
-# and refuse to start rather than fail silently once running
+# loop never looks at, so an unusable value doesn't stop anything : it makes every cycle return at once
+# and turns the loop into a busy loop hammering the iDRAC. Validate it here, before the first IPMI
+# command, and refuse to start rather than fail silently once running
 validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL"
 
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
@@ -62,8 +62,8 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
-# The unit is only appended when the value doesn't already carry one, "60s" and "5m" being accepted
-# forms that would otherwise be logged as "60ss" and "5ms"
+# The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
+# forms that would otherwise be logged as "90ss" and "5ms"
 if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
   echo "Check interval: ${CHECK_INTERVAL}s"
 else
