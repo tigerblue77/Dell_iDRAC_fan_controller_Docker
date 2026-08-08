@@ -315,11 +315,6 @@ function retrieve_CPU_high_temperature_from_lm_sensors() {
 # "lm-sensors" once the iDRAC has proven it reports no CPU temperature at all
 CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
 
-# Number of consecutive checks the iDRAC answered without exposing a single readable CPU temperature
-# sensor. Reset is deliberately absent : the count only ever grows before the first reading is
-# obtained, and the controller leaves that loop as soon as one is
-CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR=0
-
 # Normalize a CPU_TEMPERATURE_SOURCE value into one of "auto", "ipmi" or "lm-sensors"
 # Usage : normalize_CPU_temperature_source "$CPU_TEMPERATURE_SOURCE"
 # Returns : the normalized value, or the input itself when it is none of them, so that the caller can
@@ -526,17 +521,17 @@ function resolve_CPU_temperature_source() {
   esac
 }
 
-# Record a check the iDRAC answered without exposing a single readable CPU temperature sensor, and
-# switch the controller over to lm-sensors once enough of them have agreed
-# Usage : note_check_without_readable_CPU_temperature_sensor
-# Returns : 0 (true) if this call switched the source, 1 otherwise
+# Switch the controller over to reading its CPUs from lm-sensors, if that is allowed and possible
+# Usage : engage_lm_sensors_CPU_temperature_fallback
+# Returns : 0 (true) if the source was switched, 1 if it was not and the caller must give up on the
+#           iDRAC's own verdict
 #
-# The switch takes effect on the next reading rather than on this one, which costs a single check
-# interval and keeps the caller a plain loop : the fans are on the Dell default profile meanwhile,
-# which is where they already were for every check that got here
-function note_check_without_readable_CPU_temperature_sensor() {
-  ((CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR++))
-
+# Called on the single check that found the iDRAC answering and reporting no readable CPU temperature
+# sensor. One such check is enough to conclude, and that is not this function's claim to make : it is
+# the reason the caller exits rather than retries, an iDRAC exposing no processor entity doing so on
+# every check rather than on that one. Waiting for several agreeing checks would therefore only delay
+# a container that is about to stop
+function engage_lm_sensors_CPU_temperature_fallback() {
   # Only the automatic mode ever switches on its own : "ipmi" is the user asking for no surprise, and
   # "lm-sensors" has already been resolved at startup
   if [ "$CPU_TEMPERATURE_SOURCE" != "auto" ] || [ "$CPU_TEMPERATURE_SOURCE_IN_USE" != "ipmi" ]; then
@@ -549,17 +544,16 @@ function note_check_without_readable_CPU_temperature_sensor() {
     return 1
   fi
 
-  if (( CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR < LM_SENSORS_FALLBACK_CONFIRMING_READINGS )); then
-    return 1
-  fi
-
-  # Nothing to switch to : the controller keeps waiting for the iDRAC, which is what it does today
+  # Nothing to switch to : the caller reports the iDRAC's verdict, which is what it did before this
+  # fallback existed
   if ! is_lm_sensors_reporting_CPU_temperatures; then
     return 1
   fi
 
   CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
-  printf "%19s  The iDRAC reported no readable CPU temperature sensor on %s consecutive checks, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.\n" "$(date +"%d-%m-%Y %T")" "$CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR"
+  local TIMESTAMP
+  set_log_timestamp TIMESTAMP
+  printf "%19s  The iDRAC reports no readable CPU temperature sensor, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.\n" "$TIMESTAMP"
   return 0
 }
 
@@ -911,21 +905,20 @@ function compute_CPU_column_content_width() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT ["$SDR_DATA"]
+# Usage : retrieve_temperatures ["$SDR_DATA"]
 #
 # The sensor data can be handed over by a caller that has just read it, so that detecting the CPUs and
 # taking their first readings cost a single IPMI round-trip and describe the very same instant
 function retrieve_temperatures() {
-  if (( $# < 1 || $# > 2 )); then
-    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT [\"\$SDR_DATA\"]"
+  if (( $# > 1 )); then
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures [\"\$SDR_DATA\"]"
     return 1
   fi
-  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
 
   # Kept in a global so that refresh_CPU_temperature_sensors() can look for a newly readable CPU in the
   # very same data, without spending another IPMI round-trip on it
-  if (( $# == 2 )); then
-    SDR_TEMPERATURE_DATA="$2"
+  if (( $# == 1 )); then
+    SDR_TEMPERATURE_DATA="$1"
   else
     SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
   fi
@@ -954,12 +947,15 @@ function retrieve_temperatures() {
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
-  # If exhaust temperature sensor is present, parse its temperature data
-  if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
-  else
-    EXHAUST_TEMPERATURE="-"
-  fi
+  # Parse exhaust temperature data, the sensor being located by its name like the inlet one.
+  # It is read on every cycle rather than once, an empty value meaning "nothing on this cycle" rather
+  # than "no such sensor" : the presence flag this used to consult was decided from a single pre-loop
+  # reading and only ever set to false, so one partial SDR response -- or chassis sensors not yet
+  # initialised while the CPU entities already were -- dropped the column for the container's lifetime
+  # even though the sensor answered a second later. The display layer already renders an unreadable
+  # value as the "-" placeholder, so a server that genuinely has no exhaust sensor still shows the
+  # same column it did before, on every line
+  EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
 }
 
 # Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
@@ -1138,7 +1134,10 @@ function print_temperature_array_line() {
   # Creating an array from the string
   local -r CPUs_temperatures_array=(${LOCAL_CPUS_TEMPERATURES//;/ })
 
-  printf "%19s  %s°C " "$(date +"%d-%m-%Y %T")" "$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")"
+  local TIMESTAMP FORMATTED_TEMPERATURE
+  set_log_timestamp TIMESTAMP
+  FORMATTED_TEMPERATURE=$(format_temperature_for_display "$LOCAL_INLET_TEMPERATURE")
+  printf "%19s  %s°C " "$TIMESTAMP" "$FORMATTED_TEMPERATURE"
   # Itération sur les températures dans le tableau.
   # Only the number is padded, never the assembled "NNN°C" string : the container runs in the POSIX
   # locale (the Dockerfile sets no LANG), where "°" is two bytes, so printf-padding the whole cell would
@@ -1150,6 +1149,17 @@ function print_temperature_array_line() {
   # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
   # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
   printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+}
+
+# Stamp the current local time into the named variable, in the format every logged line starts with.
+# Usage : set_log_timestamp TIMESTAMP
+#
+# bash's own strftime rather than $(date ...). A command substitution expanded alongside another one in
+# the same statement is what lets a SIGTERM delivered at that instant leave bash's parser mid-expansion:
+# the trap command string is then parsed with that state still open, fails, and graceful_exit never runs,
+# leaving the fans on the user's static speed (issue #188). It also saves a fork per logged line
+function set_log_timestamp() {
+  printf -v "$1" '%(%d-%m-%Y %T)T' -1
 }
 
 # Formats a temperature reading as a right-aligned decimal number of the given width (3 by default).

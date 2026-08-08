@@ -36,16 +36,6 @@ readonly MAXIMUM_NUMBER_OF_CPUS_IN_A_DELL_SERVER=4
 # and therefore only a mis-parse can produce
 readonly MINIMUM_CPU_COLUMN_CONTENT_WIDTH=5
 
-# How many consecutive checks must come back without a single readable CPU temperature sensor before
-# the iDRAC is considered unable to report any, and the CPUs are read from lm-sensors instead.
-# Some older iDRACs accept Dell's raw fan control commands but answer nothing usable to a temperature
-# query (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216) : that is a
-# firmware property, so it shows on every single check, while a busy or briefly unreachable BMC
-# recovers. Requiring several agreeing checks is what tells the two apart, and the cost of waiting is
-# a few more cycles of the Dell default fan control profile, which is where the controller already
-# parks the fans while it has nothing to supervise
-readonly LM_SENSORS_FALLBACK_CONFIRMING_READINGS=3
-
 # How many consecutive readings must agree before a CPU that stopped reporting its temperature is
 # considered removed. They are only counted after the target server has been switched off and back on,
 # a CPU being unable to leave a running machine.

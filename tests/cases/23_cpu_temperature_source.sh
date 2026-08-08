@@ -311,35 +311,23 @@ function test_an_unknown_source_stops_the_controller() {
 
 # --- Deciding to fall back ----------------------------------------------------
 
-function assert_falls_back_after_confirming_readings() {
-  local -r MESSAGE="$1"
-
-  local CHECK
-  for ((CHECK = 1; CHECK < LM_SENSORS_FALLBACK_CONFIRMING_READINGS; CHECK++)); do
-    if note_check_without_readable_CPU_temperature_sensor > /dev/null; then
-      fail "check $CHECK should not have been enough to switch source"
-      return 1
-    fi
-  done
-
-  if note_check_without_readable_CPU_temperature_sensor > /dev/null; then
-    pass
-  else
-    fail "$MESSAGE"
-    return 1
-  fi
-
-  assert_equals "lm-sensors" "$CPU_TEMPERATURE_SOURCE_IN_USE"
-}
-
-function test_the_fallback_engages_once_enough_checks_agree() {
-  # A single empty answer is a busy or briefly unreachable BMC. An iDRAC that
-  # reports no CPU at all says so on every single check
+function test_the_fallback_engages_on_the_check_that_found_no_sensor() {
+  # One check is enough to conclude, and that is not this function's call to make :
+  # it is why the controller exits rather than retries, an iDRAC exposing no
+  # processor entity doing so on every check rather than on that one. Waiting for
+  # several agreeing checks would only delay a container about to stop
   NETWORK_MODE=false
   CPU_TEMPERATURE_SOURCE=auto
   simulate_readable_CPUs_in_lm_sensors
 
-  assert_falls_back_after_confirming_readings "the fallback should engage once the checks agree"
+  if engage_lm_sensors_CPU_temperature_fallback > /dev/null; then
+    pass
+  else
+    fail "the fallback should engage on the check that found no readable sensor"
+    return 1
+  fi
+
+  assert_equals "lm-sensors" "$CPU_TEMPERATURE_SOURCE_IN_USE"
 }
 
 function test_the_fallback_engages_only_once() {
@@ -347,9 +335,9 @@ function test_the_fallback_engages_only_once() {
   CPU_TEMPERATURE_SOURCE=auto
   simulate_readable_CPUs_in_lm_sensors
 
-  assert_falls_back_after_confirming_readings "the fallback should engage" || return 1
+  engage_lm_sensors_CPU_temperature_fallback > /dev/null || return 1
 
-  if note_check_without_readable_CPU_temperature_sensor > /dev/null; then
+  if engage_lm_sensors_CPU_temperature_fallback > /dev/null; then
     fail "the source is already lm-sensors, there is nothing left to switch"
   else
     pass
@@ -361,12 +349,13 @@ function test_the_fallback_never_engages_in_network_mode() {
   CPU_TEMPERATURE_SOURCE=auto
   simulate_readable_CPUs_in_lm_sensors
 
-  local CHECK
-  for ((CHECK = 1; CHECK <= LM_SENSORS_FALLBACK_CONFIRMING_READINGS + 5; CHECK++)); do
-    note_check_without_readable_CPU_temperature_sensor > /dev/null
-  done
+  if engage_lm_sensors_CPU_temperature_fallback > /dev/null; then
+    fail "lm-sensors describes the wrong machine in network mode"
+  else
+    pass
+  fi
 
-  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE" "lm-sensors describes the wrong machine in network mode"
+  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
 }
 
 function test_the_fallback_never_engages_on_the_explicit_ipmi_source() {
@@ -374,26 +363,28 @@ function test_the_fallback_never_engages_on_the_explicit_ipmi_source() {
   CPU_TEMPERATURE_SOURCE=ipmi
   simulate_readable_CPUs_in_lm_sensors
 
-  local CHECK
-  for ((CHECK = 1; CHECK <= LM_SENSORS_FALLBACK_CONFIRMING_READINGS + 5; CHECK++)); do
-    note_check_without_readable_CPU_temperature_sensor > /dev/null
-  done
+  if engage_lm_sensors_CPU_temperature_fallback > /dev/null; then
+    fail "the user asked for the iDRAC and nothing else"
+  else
+    pass
+  fi
 
-  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE" "the user asked for the iDRAC and nothing else"
+  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
 }
 
 function test_the_fallback_does_not_engage_when_lm_sensors_reads_nothing() {
-  # Nothing to fall back on : the controller keeps waiting for the iDRAC, which is
-  # what it did before this fallback existed
+  # Nothing to fall back on : the caller reports the iDRAC's verdict, which is what
+  # it did before this fallback existed
   NETWORK_MODE=false
   CPU_TEMPERATURE_SOURCE=auto
   export MOCK_SENSORS_EXIT_CODE=1
   export MOCK_SENSORS_OUTPUT=""
 
-  local CHECK
-  for ((CHECK = 1; CHECK <= LM_SENSORS_FALLBACK_CONFIRMING_READINGS + 5; CHECK++)); do
-    note_check_without_readable_CPU_temperature_sensor > /dev/null
-  done
+  if engage_lm_sensors_CPU_temperature_fallback > /dev/null; then
+    fail "there is no readable CPU to switch to"
+  else
+    pass
+  fi
 
   assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
 }
@@ -403,15 +394,12 @@ function test_the_switch_is_logged_with_what_led_to_it() {
   CPU_TEMPERATURE_SOURCE=auto
   simulate_readable_CPUs_in_lm_sensors
 
-  local CHECK OUTPUT
-  for ((CHECK = 1; CHECK < LM_SENSORS_FALLBACK_CONFIRMING_READINGS; CHECK++)); do
-    note_check_without_readable_CPU_temperature_sensor > /dev/null
-  done
-  OUTPUT=$(note_check_without_readable_CPU_temperature_sensor)
+  local -r OUTPUT=$(engage_lm_sensors_CPU_temperature_fallback)
 
-  assert_contains "$OUTPUT" "no readable CPU temperature sensor on $LM_SENSORS_FALLBACK_CONFIRMING_READINGS consecutive checks"
+  assert_contains "$OUTPUT" "The iDRAC reports no readable CPU temperature sensor, reading the CPUs from lm-sensors instead"
   assert_contains "$OUTPUT" "Fan control keeps going through the iDRAC" \
     "the log must not let the user believe the fans are being driven by something else"
+  assert_matches "$OUTPUT" "^$CONTROLLER_TIMESTAMP_PATTERN " "the line must carry a timestamp like every other one"
 }
 
 # --- What the startup log says ------------------------------------------------
@@ -512,9 +500,10 @@ function test_an_overheating_cpu_read_from_lm_sensors_falls_back_on_dells_profil
   assert_contains "$OUTPUT" "CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
 }
 
-function test_the_controller_keeps_waiting_when_the_idrac_and_lm_sensors_both_report_nothing() {
-  # Neither source has a CPU to offer. The controller must keep Dell's own profile
-  # applied and say why, rather than print a table it can never fill
+function test_the_controller_still_refuses_when_the_idrac_and_lm_sensors_both_report_nothing() {
+  # Neither source has a CPU to offer. The fallback changes nothing here : the
+  # controller hands the fans back to Dell and refuses to run, exactly as it does
+  # without this feature, rather than supervise a table it can never fill
   provide_local_ipmi_device
 
   export IDRAC_HOST="local"
@@ -526,14 +515,16 @@ function test_the_controller_keeps_waiting_when_the_idrac_and_lm_sensors_both_re
   local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
 
   assert_contains "$OUTPUT" "No CPU temperature sensor could be read"
+  assert_contains "$OUTPUT" "Dell default dynamic fan control profile applied for safety before exiting"
   assert_not_contains "$OUTPUT" "reading the CPUs from lm-sensors instead"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
     "manual fan control must never be enabled on readings the controller never got"
 }
 
-function test_a_network_mode_server_reporting_no_cpu_keeps_waiting_for_its_idrac() {
-  # lm-sensors would describe the machine running the container. The negative
-  # control of the case above : same iDRAC, same readable CPUs, other mode
+function test_a_network_mode_server_reporting_no_cpu_is_refused_rather_than_read_locally() {
+  # lm-sensors would describe the machine running the container, not the server
+  # being cooled. The negative control of the case above : same iDRAC, same readable
+  # CPUs on this machine, other mode -- and the refusal stands
   simulate_iDRAC_reporting_no_CPU
   simulate_readable_CPUs_in_lm_sensors 45.000 47.000
 

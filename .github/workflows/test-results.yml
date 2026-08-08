@@ -35,9 +35,29 @@ jobs:
       pull-requests: write
       actions: read
     steps:
-      - name: Download the test results of the run that just finished
-        uses: actions/download-artifact@v4
+      # Asked for by name, and downloaded on its own, because from v5 on a
+      # download that resolves to a single artifact no longer creates the
+      # directory named after it. Taking the whole run at once, where the event
+      # file is one artifact among the test results, would make its path depend
+      # on how many artifacts the run happened to produce : three on a normal
+      # run, but only this one when both test jobs are cancelled or time out
+      # before uploading theirs, which is exactly the run worth reporting on.
+      # A download asked for by name always lands straight in "path"
+      - name: Download the event file of the run that just finished
+        uses: actions/download-artifact@v8
         with:
+          name: Event File
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: event
+
+      # A pattern, so this one stays about the test results only. It keeps the
+      # directory per artifact while there are several, and drops it when a
+      # single job managed to upload, which the glob below reads either way
+      - name: Download the test results of the run that just finished
+        uses: actions/download-artifact@v8
+        with:
+          pattern: Test Results (*)
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
           path: artifacts
@@ -48,7 +68,7 @@ jobs:
           # The run this one reports on is not the one it belongs to, so what to
           # comment on has to be spelled out
           commit: ${{ github.event.workflow_run.head_sha }}
-          event_file: artifacts/Event File/event.json
+          event_file: event/event.json
           event_name: ${{ github.event.workflow_run.event }}
           files: artifacts/**/*.xml
           check_name: Test results

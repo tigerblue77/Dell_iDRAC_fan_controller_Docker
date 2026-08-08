@@ -161,9 +161,6 @@ IS_FIRST_MONITORING_CYCLE=true
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
 
-# Check present sensors
-IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
-
 # Start timer in background
 sleep "$CHECK_INTERVAL" &
 SLEEP_PROCESS_PID=$!
@@ -171,10 +168,11 @@ SLEEP_PROCESS_PID=$!
 # Detect the CPU temperature sensors before entering the monitoring loop, the table header being built
 # from them. The loop then keeps watching for CPUs showing up later, so a partial set read here is not
 # final.
-# The target server may be powered off, or its iDRAC may not be answering yet, when the container starts.
-# No sensor can be read then, so keep waiting instead of giving up : this container is expected to
-# outlive its target server being powered off, and exiting here would just make it restart in a loop
-IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=false
+# The target server may be powered off when the container starts. No sensor can be read then, so keep
+# waiting instead of giving up : this container is expected to outlive its target server being powered
+# off, and exiting there would just make it restart in a loop.
+# A server that does answer is a different matter, and is handled inside the loop : it has CPUs, so
+# reporting none of them is a fault to report rather than a state to wait out
 while true; do
   IS_TARGET_SERVER_ANSWERING=true
   if $NETWORK_MODE && ! is_server_powered_on; then
@@ -190,42 +188,43 @@ while true; do
       break
     fi
 
-    # This is the check that decides whether the iDRAC is merely slow to answer or reports no CPU
-    # temperature at all. Several agreeing ones hand the CPUs over to lm-sensors, from the next reading
-    # on, rather than waiting here forever on a firmware that will never answer
-    note_check_without_readable_CPU_temperature_sensor
+    # The server answers, and answers that it has no readable CPU temperature sensor. Every PowerEdge
+    # has at least one CPU, so this is not a state to sit and wait out : an iDRAC that exposes no
+    # processor entity does so on every check, not on this one.
+    #
+    # That very conclusion is what makes the fallback safe to engage on this single check rather than on
+    # several agreeing ones : the answer will not change. In local mode this machine is the server, so
+    # its own CPUs can be read instead of the ones its iDRAC refuses to report, which is the whole point
+    # of issue #216. Tried before giving up, and only ever reached once the iDRAC has failed to supply
+    # the one thing the controller cannot do without
+    if engage_lm_sensors_CPU_temperature_fallback; then
+      SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
+      detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
+      if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
+        break
+      fi
+    fi
 
-    # The server answers but exposes no readable CPU temperature, so nothing can be supervised. Hand the
-    # fans back to Dell rather than leave them wherever they were: a previous run of this container may
-    # have left the BMC in manual mode, in which case they would stay pinned at the user's low speed
-    # with nobody watching the temperatures
+    # Neither source has a CPU to offer. Retrying forever would leave a container that looks alive and
+    # supervises nothing.
+    #
+    # Hand the fans back to Dell before leaving, rather than leave them wherever they were : a previous
+    # run of this container may have left the BMC in manual mode, in which case they would stay pinned
+    # at the user's low speed with nobody watching the temperatures. graceful_exit is not reached here,
+    # the trap only covering the termination signals
     apply_Dell_default_fan_control_profile
+
+    print_error_and_exit "No CPU temperature sensor could be read from $SERVER_MANUFACTURER $SERVER_MODEL, and every PowerEdge has at least one CPU.
+ If IDRAC_HOST points at a chassis management controller (VRTX, FX2, M1000e, MX7000), point it at a node's own iDRAC instead : the chassis hosts no CPU, and its CMC drives the enclosure fans rather than a node's.
+ Otherwise, run \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type temperature\" (drop the connection options in local mode) and look for lines whose 4th column is an entity \"3.<something>\" and whose reading ends in \"degrees C\".
+ If some are listed and the container still reports none, or if none is listed at all, please open an issue with your server model and that output : https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues
+ Dell default dynamic fan control profile applied for safety before exiting"
   fi
 
-  if ! $IS_TARGET_SERVER_ANSWERING; then
-    # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
-    # same powered-off server, only observed before the first reading rather than after
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
-  elif ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
-    # The server answers but exposes nothing readable. Logged once only, to say why the container isn't
-    # printing temperatures yet without flooding the logs every cycle
-    IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=true
-
-    if $NETWORK_MODE; then
-      WAITING_REASON="is the target server still starting up ?"
-    else
-      # In local mode the server is by definition powered on, so pointing at its power state would send
-      # the user looking in the wrong direction: the sensors are there, they just can't be parsed
-      WAITING_REASON="see the troubleshooting section of the README"
-    fi
-
-    # The profile is only claimed when it was really sent : applying it is a no-op in monitoring only mode
-    if $MONITORING_ONLY_MODE; then
-      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
-    else
-      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
-    fi
-  fi
+  # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
+  # same powered-off server, only observed before the first reading rather than after
+  set_log_timestamp TIMESTAMP
+  printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
 
   wait $SLEEP_PROCESS_PID
 
@@ -241,15 +240,15 @@ echo "$(format_detected_CPU_temperature_sensors)."
 
 warn_if_unexpected_number_of_CPUs
 
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
+retrieve_temperatures "$SDR_TEMPERATURE_DATA"
 
+# Reported for information only. Most servers printing this line genuinely have no exhaust sensor --
+# blades and enclosure-housed sleds never do -- so the wording stays as it was ; what changed is that
+# the line no longer decides anything. The sensor is read again on every cycle, so a chassis whose
+# sensors were merely not readable at this instant starts showing its temperature as soon as they
+# answer, instead of being written off for the container's lifetime
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
-  IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
-  # This reading was taken before the sensor was known to be absent, so it holds an empty string where
-  # every later cycle will hold the "-" placeholder. Backfilling it here keeps the first printed line
-  # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
-  EXHAUST_TEMPERATURE="-"
 fi
 # Output new line to beautify output
 echo ""
@@ -265,7 +264,8 @@ while true; do
   # temperatures (they would be meaningless) and don't apply any fan control profile
   if $NETWORK_MODE && ! is_server_powered_on; then
     IS_TARGET_SERVER_POWERED_OFF=true
-    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+    set_log_timestamp TIMESTAMP
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
 
     wait $SLEEP_PROCESS_PID
 
@@ -284,7 +284,7 @@ while true; do
     IS_CPU_REMOVAL_ALLOWED=true
     PENDING_CPU_REMOVAL_SIGNATURE=""
     PENDING_CPU_REMOVAL_READINGS=0
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+    retrieve_temperatures
   fi
 
   # Follow the CPUs the server exposes : one may have been added while it was powered off, one may have
@@ -316,12 +316,16 @@ while true; do
     # count : it is the only trace left that the server used to have it. The line states the conclusion
     # the controller drew and the rule it applied to draw it, rather than the symptom alone : a sensor
     # that went quiet is not a reason to stop watching a CPU, a CPU that is gone is
+    set_log_timestamp TIMESTAMP
+    DETECTED_CPU_TEMPERATURE_SENSORS=$(format_detected_CPU_temperature_sensors)
     if [ "${#REMOVED_CPU_LABELS[@]}" -eq 1 ]; then
-      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s is considered removed from the server: its temperature sensor (entity %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$TIMESTAMP" "${REMOVED_CPU_LABELS[0]}" "${REMOVED_CPU_ENTITY_IDS[0]}" "$CPU_REMOVAL_CONFIRMING_READINGS" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     elif [ "${#REMOVED_CPU_LABELS[@]}" -gt 1 ]; then
-      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$(date +"%d-%m-%Y %T")" "$(join_with_and "${REMOVED_CPU_LABELS[@]}")" "$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")" "$CPU_REMOVAL_CONFIRMING_READINGS" "$(format_detected_CPU_temperature_sensors)"
+      REMOVED_CPU_LABELS_ENUMERATION=$(join_with_and "${REMOVED_CPU_LABELS[@]}")
+      REMOVED_CPU_ENTITY_IDS_ENUMERATION=$(join_with_and "${REMOVED_CPU_ENTITY_IDS[@]}")
+      printf "%19s  %s are considered removed from the server: their temperature sensors (entities %s) reported nothing on the %s readings that followed the server powering back on. %s.\n" "$TIMESTAMP" "$REMOVED_CPU_LABELS_ENUMERATION" "$REMOVED_CPU_ENTITY_IDS_ENUMERATION" "$CPU_REMOVAL_CONFIRMING_READINGS" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     else
-      printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
+      printf "%19s  %s.\n" "$TIMESTAMP" "$DETECTED_CPU_TEMPERATURE_SENSORS"
     fi
 
     # Checked again here and not only at startup : a mis-parse can just as well show up mid-run
@@ -331,7 +335,7 @@ while true; do
     # entity list rather than reused from before it changed. The same data is handed back rather than
     # fetched again : following the CPUs then costs no IPMI round-trip at all, and the readings keep
     # describing the very instant the set was detected on
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
+    retrieve_temperatures "$SDR_TEMPERATURE_DATA"
   fi
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
@@ -425,5 +429,5 @@ while true; do
   sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures
 done

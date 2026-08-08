@@ -29,7 +29,6 @@ function setup_test_context() {
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -E"
   NETWORK_MODE=true
   CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
-  CHECKS_WITHOUT_READABLE_CPU_TEMPERATURE_SENSOR=0
   # The repository itself : only provide_local_ipmi_device() moves it
   CONTROLLER_WORKING_DIRECTORY="$REPO_ROOT"
   # Set before the trap by the controller, so graceful_exit can read it whenever a signal lands
@@ -45,11 +44,15 @@ function setup_test_context() {
   export MOCK_IPMITOOL_POWER_STATUS="Chassis Power is on"
   export MOCK_SENSORS_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/sensors_calls.log"
   : > "$MOCK_SENSORS_CALL_LOG"
-  export MOCK_DATE_OUTPUT="01-01-2024 00:00:00"
   # Short enough to keep the suite fast, long enough for run_controller to stop
   # the controller while it is idle between two cycles rather than mid-cycle
   export MOCK_SLEEP_SECONDS="0.25"
 }
+
+# The timestamp the controller stamps every printed line with. It is formatted by
+# bash itself rather than read from `date`, so it cannot be frozen from the
+# outside : a test asserts its shape rather than a particular instant
+readonly CONTROLLER_TIMESTAMP_PATTERN='[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}'
 
 # Every ipmitool invocation recorded so far by the mock
 function recorded_ipmitool_calls() {

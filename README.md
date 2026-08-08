@@ -209,7 +209,7 @@ All parameters are optional as they have default values (including default iDRAC
   - Whenever the threshold can't be detected, the container falls back to 50(°C) and logs why at startup.
   - :warning: **This default changed.** Previous versions used a fixed 50°C. On Intel servers in "local" mode, "auto" typically resolves to a **higher** value (roughly 62 to 96°C depending on the CPU model — read the exact one from the startup log), so the fans stay at `FAN_SPEED` longer than they used to before Dell's profile takes over. This matches what your CPU actually asks for, but it also means the whole chassis runs at `FAN_SPEED` for longer, and the CPU is the only component this container watches. If you were relying on the old behaviour, set `CPU_TEMPERATURE_THRESHOLD=50` explicitly.
 - `CPU_TEMPERATURE_SOURCE` parameter selects where the CPU temperatures the container supervises are read from. **Default** value is "auto".
-  - `auto` reads them from your iDRAC, and falls back to [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) only if your iDRAC turns out to report no CPU temperature **at all**. Some older iDRACs accept Dell's raw fan control commands but answer nothing usable to a temperature query ([issue #216](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)) : on those, the container used to be able to do nothing but hand the fans back to Dell's own profile forever. The fallback only engages after 3 consecutive checks have all come back without a single readable CPU temperature sensor, so a busy or briefly unreachable iDRAC does not trigger it, and it is logged when it does. Once engaged it stays for the life of the container: an iDRAC that reports no processor entity does so because of its firmware, not because of a passing condition, and changing the meaning of the table's numbers mid-run would be worse than keeping a source that works.
+  - `auto` reads them from your iDRAC, and falls back to [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) only if your iDRAC turns out to report no CPU temperature **at all**. Some older iDRACs accept Dell's raw fan control commands but answer nothing usable to a temperature query ([issue #216](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)) : on those, the container used to be able to do nothing but hand the fans back to Dell's own profile forever. The fallback is tried on the check that found no sensor, just before the container would otherwise refuse to run over it, and it is logged when it engages. One check is enough to conclude: an iDRAC that exposes no processor entity does so on every check rather than on that one, which is the same reason the container refuses instead of retrying. Once engaged it stays for the life of the container, that being a property of the firmware rather than a passing condition, and changing the meaning of the table's numbers mid-run would be worse than keeping a source that works.
   - `ipmi` never reads `lm-sensors`, whatever your iDRAC reports. Set it if you want the source to be the iDRAC and nothing else.
   - `lm-sensors` reads them from `lm-sensors` from the start, without waiting for your iDRAC to prove it cannot report them. The container refuses to start if `lm-sensors` reports no CPU temperature, rather than silently supervising nothing.
   - Whatever the source, **fan control still goes through your iDRAC** : `lm-sensors` replaces the readings, not the IPMI commands. A server whose iDRAC rejects `raw 0x30 0x30` cannot be cooled by this container at all, and this parameter changes nothing for it.
@@ -268,16 +268,16 @@ Note that on chassis products (VRTX, FX2, M1000e, MX7000) each server node has i
 
 ### None of your CPUs appears in the temperatures table
 
-If your iDRAC reports **no** readable CPU temperature sensor at all, the container has nothing to supervise: it keeps Dell's own dynamic fan control profile applied and logs, once, why it isn't printing temperatures yet.
+If your iDRAC reports **no** readable CPU temperature sensor at all, the container has nothing to supervise. Every PowerEdge has at least one CPU, so rather than sit and wait it hands the fans back to Dell's own dynamic profile and refuses to run, naming what to check:
 
 ```
-No CPU temperature sensor could be read (see the troubleshooting section of the README), Dell default dynamic fan control profile applied for safety while waiting...
+/!\ Error /!\ No CPU temperature sensor could be read from DELL PowerEdge R730xd, and every PowerEdge has at least one CPU.
 ```
 
-Some older iDRACs are in that state permanently: they accept Dell's raw fan control commands but answer nothing usable to a temperature query. In "local" mode, the machine running the container **is** the server, so its CPUs can be read directly instead, through `lm-sensors`. That is what `CPU_TEMPERATURE_SOURCE=auto` (the default) does after 3 consecutive checks have all come back without a single readable sensor:
+Some older iDRACs are in that state permanently: they accept Dell's raw fan control commands but answer nothing usable to a temperature query. In "local" mode, the machine running the container **is** the server, so its CPUs can be read directly instead, through `lm-sensors`. That is what `CPU_TEMPERATURE_SOURCE=auto` (the default) does, on the check that found no sensor and before the container would otherwise refuse to run:
 
 ```
-08-08-2026 15:04:31  The iDRAC reported no readable CPU temperature sensor on 3 consecutive checks, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.
+08-08-2026 15:04:31  The iDRAC reports no readable CPU temperature sensor, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.
 2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 coretemp-isa-0001).
 ```
 
