@@ -14,6 +14,15 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # readonly DELL_FRESH_AIR_COMPLIANCE=45
 
+# The boolean parameters are dispatched by running their value as a command ("if $MONITORING_ONLY_MODE"),
+# an idiom that is only safe once the value is known to be one of the two literals it expects : anything
+# else is read as false without a word, or run as whatever command it happens to name. Validate them
+# first, before the first IPMI command and before anything reads them. MONITORING_ONLY_MODE especially,
+# since it decides how the check interval just below is bounded and what graceful_exit does on the way out
+validate_boolean_parameter "MONITORING_ONLY_MODE" "$MONITORING_ONLY_MODE"
+validate_boolean_parameter "DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"
+validate_boolean_parameter "KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT" "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"
+
 # CHECK_INTERVAL paces the whole monitoring loop and is handed straight to sleep, whose exit status the
 # loop never looks at, so an unusable value doesn't stop anything : it makes every cycle return at once
 # and turns the loop into a busy loop hammering the iDRAC. It is also the controller's reaction time,
@@ -124,7 +133,7 @@ if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
 else
   echo "Check interval: $CHECK_INTERVAL"
 fi
-if $MONITORING_ONLY_MODE; then
+if "$MONITORING_ONLY_MODE"; then
   echo "Monitoring only mode: Enabled (no fan control profile will be applied, temperatures will only be logged)"
 else
   echo "Monitoring only mode: Disabled"
@@ -353,7 +362,7 @@ while true; do
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
     fi
 
-    if $MONITORING_ONLY_MODE; then
+    if "$MONITORING_ONLY_MODE"; then
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
     fi
   fi
