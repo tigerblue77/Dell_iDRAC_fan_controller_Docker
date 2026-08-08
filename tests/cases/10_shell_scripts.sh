@@ -56,8 +56,35 @@ function test_every_file_sourced_at_runtime_is_shipped_in_the_docker_image() {
     assert_matches "$DOCKERFILE_CONTENT" "(ADD|COPY) $SOURCED_FILE " \
       "$SOURCED_FILE is sourced at runtime, the Dockerfile must copy it into the image"
   done < <(grep -hoE '^source [A-Za-z0-9_.-]+\.sh' \
-    "$REPO_ROOT/Dell_iDRAC_fan_controller.sh" "$REPO_ROOT/healthcheck.sh" |
+    "$REPO_ROOT/Dell_iDRAC_fan_controller.sh" "$REPO_ROOT/healthcheck.sh" "$REPO_ROOT/supervisor.sh" |
     awk '{print $2}' | sort -u)
+}
+
+function test_the_docker_images_entrypoint_is_shipped_in_it() {
+  # The entrypoint is the one file whose absence makes the image start nothing at
+  # all, and it is the only script not reached by the "sourced at runtime" scan
+  # above : nothing sources it, the container execs it
+  if [ ! -f "$REPO_ROOT/Dockerfile" ]; then
+    skip_test "no Dockerfile next to the scripts"
+    return 0
+  fi
+
+  local -r DOCKERFILE_CONTENT=$(cat "$REPO_ROOT/Dockerfile")
+  local -r ENTRYPOINT_SCRIPT=$(grep -oE '^ENTRYPOINT \["\./[A-Za-z0-9_.-]+\.sh"' "$REPO_ROOT/Dockerfile" |
+    grep -oE '[A-Za-z0-9_.-]+\.sh')
+
+  assert_not_empty "$ENTRYPOINT_SCRIPT" "the Dockerfile must declare a script as its ENTRYPOINT" || return 1
+
+  if [ -f "$REPO_ROOT/$ENTRYPOINT_SCRIPT" ]; then
+    pass
+  else
+    fail "$ENTRYPOINT_SCRIPT is the image's ENTRYPOINT but does not exist"
+  fi
+
+  assert_matches "$DOCKERFILE_CONTENT" "(ADD|COPY) $ENTRYPOINT_SCRIPT " \
+    "$ENTRYPOINT_SCRIPT is the image's ENTRYPOINT, the Dockerfile must copy it into the image"
+  assert_matches "$DOCKERFILE_CONTENT" "chmod [0-7]+ .*/$ENTRYPOINT_SCRIPT" \
+    "$ENTRYPOINT_SCRIPT is exec'd by the container, the image must make it executable"
 }
 
 function test_the_test_context_starts_from_the_docker_images_defaults() {

@@ -34,6 +34,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/80_temperature_thresholds.sh` | The overheating decision, including its fail-safe behavior |
 | `cases/85_power_state.sh` | Skipping the cycle when the target server is powered off |
 | `cases/90_integration.sh` | The whole controller, started like its Docker image does |
+| `cases/95_supervisor.sh` | The supervisor, and the fan handover it guarantees when the controller cannot do it itself |
 
 Server generations are covered from the catalogue in
 `lib/dell_server_catalogue.sh`, which lists more than a hundred PowerEdge models
