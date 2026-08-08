@@ -250,6 +250,21 @@ chmod +x Dell_iDRAC_fan_controller.sh
 ./Dell_iDRAC_fan_controller.sh
 ```
 
+### Automated tests
+
+The repository ships an automated test suite that runs the controller against a mocked `ipmitool`, so it needs **no Dell hardware, no iDRAC and no network** : `bash`, `coreutils`, GNU `grep` and `awk` are enough.
+
+```bash
+./tests/run_tests.sh                 # run everything
+./tests/run_tests.sh --list          # list the test cases without running them
+./tests/run_tests.sh -f temperature  # only run the test cases whose name matches
+./tests/run_tests.sh --tap           # emit TAP output for a CI parser
+```
+
+It covers every PowerEdge generation from the 9th (2006) to the 17th (2024) — including the recent ones whose firmware no longer accepts Dell's IPMI raw fan control commands — in their single, dual and quad socket variants, plus the sensor layouts they report (missing exhaust sensor, empty second socket, unreadable reading, two-digit sensor IDs...).
+
+The suite also runs on every push and pull request through the [`Tests`](.github/workflows/tests.yml) workflow, both directly and inside the built Docker image. See [`tests/README.md`](./tests/README.md) for the layout and for how to add a test case.
+
 <p align="right">(<a href="#top">back to top</a>)</p>
 
 <!-- LICENSE -->

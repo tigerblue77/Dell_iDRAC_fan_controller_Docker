@@ -1,0 +1,45 @@
+name: Tests
+
+on:
+  push:
+    paths-ignore:
+      - "**/README.md"
+  pull_request:
+    paths-ignore:
+      - "**/README.md"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run the test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run the test suite
+        run: ./tests/run_tests.sh
+
+  test-in-docker-image:
+    name: Run the test suite inside the Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the Docker image
+        run: docker build --tag dell_idrac_fan_controller:test .
+
+      # Running the suite inside the image checks the published runtime itself
+      # (its bash, its GNU grep and awk) on top of the controller's behavior, and
+      # runs as root, which the few test cases needing a fake /dev/ipmi device
+      # skip on the runner
+      - name: Run the test suite inside the image
+        run: |
+          docker run --rm \
+            --entrypoint /bin/bash \
+            --volume "$PWD/tests:/app/tests:ro" \
+            dell_idrac_fan_controller:test \
+            /app/tests/run_tests.sh
