@@ -78,8 +78,9 @@ IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 sleep "$CHECK_INTERVAL" &
 SLEEP_PROCESS_PID=$!
 
-# Detect the CPU temperature sensors once, before entering the monitoring loop : the number of sockets
-# doesn't change while the server is running, and the table header is built from it.
+# Detect the CPU temperature sensors before entering the monitoring loop, the table header being built
+# from them. The loop then keeps watching for CPUs showing up later, so a partial set read here is not
+# final.
 # The target server may be powered off, or its iDRAC may not be answering yet, when the container starts.
 # No sensor can be read then, so keep waiting instead of giving up : this container is expected to
 # outlive its target server being powered off, and exiting here would just make it restart in a loop
@@ -90,12 +91,24 @@ while true; do
     if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
       break
     fi
+
+    # The server answers but exposes no readable CPU temperature, so nothing can be supervised. Hand the
+    # fans back to Dell rather than leave them wherever they were: a previous run of this container may
+    # have left the BMC in manual mode, in which case they would stay pinned at the user's low speed
+    # with nobody watching the temperatures
+    apply_Dell_default_fan_control_profile
   fi
 
   # Only logged once, to say why the container isn't printing temperatures yet without flooding the logs
   if ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
     IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=true
-    printf "%19s  No CPU temperature sensor could be read yet (is the target server powered off ?), waiting...\n" "$(date +"%d-%m-%Y %T")"
+    if $NETWORK_MODE; then
+      printf "%19s  No CPU temperature sensor could be read yet (is the target server powered off ?), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")"
+    else
+      # In local mode the server is by definition powered on, so pointing at its power state would send
+      # the user looking in the wrong direction: the sensors are there, they just can't be parsed
+      printf "%19s  No CPU temperature sensor could be read, see the troubleshooting section of the README. Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")"
+    fi
   fi
 
   wait $SLEEP_PROCESS_PID
@@ -105,20 +118,18 @@ while true; do
   SLEEP_PROCESS_PID=$!
 done
 
-readonly NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
+# Not readonly : the monitoring loop grows this set when a CPU shows up, the server having possibly been
+# powered off to add one
+NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
 
-# The entity IDs are logged along with the count : they are what the README asks users to correlate with
-# their own "ipmitool sdr type temperature" output when a CPU seems to be missing
-if [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
-  echo "1 CPU temperature sensor detected (entity ${DETECTED_CPU_ENTITY_IDS[0]})."
-else
-  echo "$NUMBER_OF_DETECTED_CPUS CPU temperature sensors detected (entities ${DETECTED_CPU_ENTITY_IDS[*]})."
-fi
+echo "$(format_detected_CPU_temperature_sensors)."
 
 # Nothing is dropped when this triggers, every detected CPU is monitored : it only flags a count that no
 # Dell hardware can produce, which most likely means the sensors were mis-parsed
 if [ "$NUMBER_OF_DETECTED_CPUS" -gt "$UNEXPECTED_NUMBER_OF_CPUS_WARNING_THRESHOLD" ]; then
-  print_warning "$NUMBER_OF_DETECTED_CPUS CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command\n"
+  # print_warning() emits no trailing newline, hence the echo
+  print_warning "$NUMBER_OF_DETECTED_CPUS CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command"
+  echo ""
 fi
 
 retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
@@ -130,11 +141,10 @@ fi
 # Output new line to beautify output
 echo ""
 
-readonly CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
+CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
 if ! HEADER=$(build_header "$CPU_COLUMN_CONTENT_WIDTH" "${DETECTED_CPU_LABELS[@]}"); then
   print_error_and_exit "Could not build the temperatures table header"
 fi
-readonly HEADER
 
 # Start monitoring
 while true; do
@@ -159,6 +169,22 @@ while true; do
     retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
   fi
 
+  # Pick up any CPU that has become readable since the last cycle. The server may have been powered off
+  # precisely to add one, but it may also simply have finished POSTing, so this is checked every cycle
+  # rather than only when it powers back on. It reuses the data retrieve_temperatures() just fetched, so
+  # it costs no extra IPMI round-trip
+  if refresh_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"; then
+    NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
+    CPU_COLUMN_CONTENT_WIDTH=$(compute_CPU_column_content_width "${DETECTED_CPU_LABELS[@]}")
+    HEADER=$(build_header "$CPU_COLUMN_CONTENT_WIDTH" "${DETECTED_CPU_LABELS[@]}")
+    # The table just changed shape, so its header is reprinted before the next line
+    TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
+    printf "%19s  %s.\n" "$(date +"%d-%m-%Y %T")" "$(format_detected_CPU_temperature_sensors)"
+    # A new CPU can sort before the known ones, so the readings must be taken again against the new
+    # entity list rather than reused from before it changed
+    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+  fi
+
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
   # Check if any of the detected CPUs is overheating then apply Dell default dynamic fan control profile if true
@@ -177,11 +203,14 @@ while true; do
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=false
-      # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included
+      # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included.
+      # It says the temperatures are OK rather than that they decreased, because the Dell default profile
+      # is also applied when a reading can't be parsed : claiming a temperature dropped would contradict
+      # the "could not be read" comment printed when that happened
       if [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
-        COMMENT="CPU temperature decreased and is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+        COMMENT="CPU temperature is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
       else
-        COMMENT="All CPU temperatures decreased and are now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+        COMMENT="All CPU temperatures are now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
       fi
     fi
   fi

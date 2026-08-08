@@ -121,7 +121,7 @@ function retrieve_sdr_temperature_data() {
   ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature 2>/dev/null | grep degrees
 }
 
-# Detect the CPU temperature sensors the server exposes, once, at startup
+# Detect the CPU temperature sensors the server exposes
 # Usage : detect_CPU_temperature_sensors "$SDR_DATA"
 # Returns : populates the DETECTED_CPU_ENTITY_IDS and DETECTED_CPU_LABELS global arrays, index-aligned,
 #           in socket order
@@ -171,6 +171,50 @@ function detect_CPU_temperature_sensors() {
   done
 }
 
+# Runs the detection again on already-fetched sensor data and reports whether a CPU showed up.
+# Usage : refresh_CPU_temperature_sensors "$SDR_DATA"
+# Returns : 0 (true) if a CPU was added, the DETECTED_CPU_* arrays then describing the new set
+#
+# The point is the server being powered off to add a CPU : keeping the set detected before the outage
+# would leave that CPU both invisible in the table and, far worse, never compared to the threshold.
+#
+# The monitored set only ever grows, and the new one is adopted only when it still contains every CPU
+# already being monitored. A server answering as powered on can still be POSTing, exposing part of its
+# sockets as "Disabled", and Dell reports a depopulated socket in exactly the same way : the two cannot
+# be told apart from the SDR, so shrinking on that basis would silently stop watching CPUs that are
+# merely not readable yet. A CPU that really was removed keeps its column, reading "-", which fails safe
+# to the Dell default profile until the container is restarted
+function refresh_CPU_temperature_sensors() {
+  local -r SDR_DATA="$1"
+  local -r -a PREVIOUS_CPU_ENTITY_IDS=("${DETECTED_CPU_ENTITY_IDS[@]}")
+  local -r -a PREVIOUS_CPU_LABELS=("${DETECTED_CPU_LABELS[@]}")
+
+  detect_CPU_temperature_sensors "$SDR_DATA"
+
+  # Entity IDs hold no space, so the padded-join membership test is unambiguous
+  local PREVIOUS_CPU_ENTITY_ID
+  for PREVIOUS_CPU_ENTITY_ID in "${PREVIOUS_CPU_ENTITY_IDS[@]}"; do
+    if [[ " ${DETECTED_CPU_ENTITY_IDS[*]} " != *" $PREVIOUS_CPU_ENTITY_ID "* ]]; then
+      DETECTED_CPU_ENTITY_IDS=("${PREVIOUS_CPU_ENTITY_IDS[@]}")
+      DETECTED_CPU_LABELS=("${PREVIOUS_CPU_LABELS[@]}")
+      return 1
+    fi
+  done
+
+  [ "${DETECTED_CPU_ENTITY_IDS[*]}" != "${PREVIOUS_CPU_ENTITY_IDS[*]}" ]
+}
+
+# Describes the detected CPU temperature sensors, along with the IPMI entities they are read from : that
+# is what the README asks users to correlate with their own "ipmitool sdr type temperature" output
+# Usage : format_detected_CPU_temperature_sensors
+function format_detected_CPU_temperature_sensors() {
+  if (( ${#DETECTED_CPU_ENTITY_IDS[@]} == 1 )); then
+    printf '1 CPU temperature sensor detected (entity %s)' "${DETECTED_CPU_ENTITY_IDS[0]}"
+  else
+    printf '%d CPU temperature sensors detected (entities %s)' "${#DETECTED_CPU_ENTITY_IDS[@]}" "${DETECTED_CPU_ENTITY_IDS[*]}"
+  fi
+}
+
 # The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), but a label such
 # as "CPU 10" is wider and would otherwise push every column on its right by one
 # Usage : compute_CPU_column_content_width "CPU 1" "CPU 2" ...
@@ -196,7 +240,10 @@ function retrieve_temperatures() {
   fi
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
 
-  local -r DATA=$(retrieve_sdr_temperature_data)
+  # Kept in a global so that refresh_CPU_temperature_sensors() can look for a newly readable CPU in the
+  # very same data, without spending another IPMI round-trip on it
+  SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+  local -r DATA="$SDR_TEMPERATURE_DATA"
 
   # Parse every CPU detected at startup, each one being located by its IPMI entity ID.
   # CPU_TEMPERATURES holds the raw readings, indexed by CPU number minus one, and is what
