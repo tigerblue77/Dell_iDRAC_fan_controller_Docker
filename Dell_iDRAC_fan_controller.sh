@@ -70,9 +70,6 @@ IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 # Tracks whether the target server was powered off on the previous cycle, so temperatures can be
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
-# When each monitored CPU temperature sensor was last readable, keyed by IPMI entity ID, so that a CPU
-# staying silent longer than CPU_TEMPERATURE_SENSOR_EXPIRY can be told from one that is merely rebooting
-declare -A CPU_LAST_READABLE_AT
 
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
@@ -95,7 +92,10 @@ while true; do
   fi
 
   if $IS_TARGET_SERVER_ANSWERING; then
-    detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+    # Kept for the first retrieve_temperatures() below, so that detecting the CPUs and taking their
+    # first readings cost a single IPMI round-trip and describe the very same instant
+    SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+    detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
     if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
       break
     fi
@@ -107,27 +107,29 @@ while true; do
     apply_Dell_default_fan_control_profile
   fi
 
-  # Only logged once, to say why the container isn't printing temperatures yet without flooding the logs
-  if ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
+  if ! $IS_TARGET_SERVER_ANSWERING; then
+    # Worded and repeated exactly like the monitoring loop does for the same situation : this is the
+    # same powered-off server, only observed before the first reading rather than after
+    printf "%19s  Target server is powered off, no fan control profile applied.\n" "$(date +"%d-%m-%Y %T")"
+  elif ! $IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED; then
+    # The server answers but exposes nothing readable. Logged once only, to say why the container isn't
+    # printing temperatures yet without flooding the logs every cycle
     IS_WAITING_FOR_CPU_TEMPERATURE_SENSORS_LOGGED=true
 
-    if ! $IS_TARGET_SERVER_ANSWERING; then
-      WAITING_REASON="the target server is powered off"
-    elif $NETWORK_MODE; then
-      WAITING_REASON="no CPU temperature sensor could be read (is the target server still starting up ?)"
+    if $NETWORK_MODE; then
+      WAITING_REASON="is the target server still starting up ?"
     else
       # In local mode the server is by definition powered on, so pointing at its power state would send
       # the user looking in the wrong direction: the sensors are there, they just can't be parsed
-      WAITING_REASON="no CPU temperature sensor could be read, see the troubleshooting section of the README"
+      WAITING_REASON="see the troubleshooting section of the README"
     fi
 
-    # Only claimed when it actually happened : the profile is not applied on a server that isn't
-    # answering, and applying it is a no-op in monitoring only mode
-    if $IS_TARGET_SERVER_ANSWERING && ! $MONITORING_ONLY_MODE; then
-      WAITING_REASON+=". Dell default dynamic fan control profile applied for safety"
+    # The profile is only claimed when it was really sent : applying it is a no-op in monitoring only mode
+    if $MONITORING_ONLY_MODE; then
+      printf "%19s  No CPU temperature sensor could be read (%s), waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
+    else
+      printf "%19s  No CPU temperature sensor could be read (%s), Dell default dynamic fan control profile applied for safety while waiting...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
     fi
-
-    printf "%19s  Waiting, %s...\n" "$(date +"%d-%m-%Y %T")" "$WAITING_REASON"
   fi
 
   wait $SLEEP_PROCESS_PID
@@ -148,7 +150,7 @@ echo "$(format_detected_CPU_temperature_sensors)."
 
 warn_if_unexpected_number_of_CPUs
 
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
 
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."

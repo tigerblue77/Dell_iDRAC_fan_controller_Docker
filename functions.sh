@@ -97,10 +97,37 @@ function set_iDRAC_login_string() {
 # The value is matched on its "degrees" suffix rather than on a fixed two-digit width, so that its
 # width stops mattering : "100 degrees C" used to be truncated to 10°C, and "9 degrees C" used to
 # match nothing at all, which callers cannot tell apart from a missing sensor
+#
+# The sign is part of the match : "\d+" alone silently returned sub-zero readings as their absolute
+# value, turning a -40°C CPU sensor (what a disconnected sensor reports on some iDRACs) into a 40°C
+# one hot enough to trip the overheating branch, and making the sub-zero inlet temperatures this
+# container is expected to react to indistinguishable from mild ones
 function extract_temperature_from_sdr_line() {
   local -r SDR_LINE="$1"
 
-  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '\d+(?=[[:space:]]*degrees)'
+  # The sign is written as a character class rather than as a bare "-?" so the pattern doesn't start
+  # with a dash, which grep would otherwise try to parse as one of its own options
+  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '[-]?\d+(?=[[:space:]]*degrees)'
+}
+
+# Convert a temperature reading into a plain base 10 integer, usable in arithmetic and comparisons
+# Usage : normalize_decimal_value "$VALUE"
+# Returns : the value as a base 10 integer
+#
+# Readings reach us as text and carry two traps that have to be defused together. A leading zero makes
+# bash read the value as octal, where "09" is not a valid number, which is what the "10#" prefix is
+# for. But "10#" cannot itself accept a sign : "10#-5" is an "invalid integer constant" and aborts the
+# arithmetic. The sign is therefore split off, the digits forced to base 10, and the sign re-applied
+function normalize_decimal_value() {
+  local VALUE="$1"
+  local SIGN=1
+
+  if [[ "$VALUE" == -* ]]; then
+    SIGN=-1
+    VALUE="${VALUE#-}"
+  fi
+
+  echo $((SIGN * 10#$VALUE))
 }
 
 # Extract a single temperature reading from ipmitool sdr output, located by its IPMI entity ID
@@ -213,6 +240,13 @@ function set_detected_CPU_temperature_sensors() {
     ((CPU_NUMBER++))
   done
 }
+
+# When each monitored CPU temperature sensor was last readable, keyed by IPMI entity ID, so that a CPU
+# staying silent longer than CPU_TEMPERATURE_SENSOR_EXPIRY can be told from one that is merely rebooting.
+# Declared here rather than in the entrypoint because the functions below are the ones that depend on it
+# being associative : subscripting it with an entity ID such as "3.1" is an arithmetic error otherwise,
+# which anything sourcing this file on its own would hit
+declare -A CPU_LAST_READABLE_AT
 
 # Runs the detection again on already-fetched sensor data and reports whether the monitored set changed.
 # Usage : refresh_CPU_temperature_sensors "$SDR_DATA" $NOW
@@ -333,32 +367,39 @@ function compute_CPU_column_content_width() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT ["$SDR_DATA"]
+#
+# The sensor data can be handed over by a caller that has just read it, so that detecting the CPUs and
+# taking their first readings cost a single IPMI round-trip and describe the very same instant
 function retrieve_temperatures() {
-  if (( $# != 1 )); then
-    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
+  if (( $# < 1 || $# > 2 )); then
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT [\"\$SDR_DATA\"]"
     return 1
   fi
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
 
   # Kept in a global so that refresh_CPU_temperature_sensors() can look for a newly readable CPU in the
   # very same data, without spending another IPMI round-trip on it
-  SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+  if (( $# == 2 )); then
+    SDR_TEMPERATURE_DATA="$2"
+  else
+    SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+  fi
   local -r DATA="$SDR_TEMPERATURE_DATA"
 
   # Parse every CPU detected at startup, each one being located by its IPMI entity ID.
-  # CPU_TEMPERATURES holds the raw readings, indexed by CPU number minus one, and is what
+  # DETECTED_CPU_TEMPERATURES holds the raw readings, indexed by CPU number minus one, and is what
   # is_any_CPU_overheating() evaluates : a reading left empty by a transient IPMI glitch must reach it
   # untouched so it can fail safe on it.
   # CPUS_TEMPERATURES is the display string, in which an unreadable reading falls back to the "-"
   # placeholder so that it still takes up its column when the line is printed : it is split to build the
   # display array, so an empty value would be dropped and shift every following column to the left
-  CPU_TEMPERATURES=()
+  DETECTED_CPU_TEMPERATURES=()
   CPUS_TEMPERATURES=""
   local ENTITY_ID CPU_TEMPERATURE
   for ENTITY_ID in "${DETECTED_CPU_ENTITY_IDS[@]}"; do
     CPU_TEMPERATURE=$(retrieve_temperature_by_entity_id "$DATA" "$ENTITY_ID")
-    CPU_TEMPERATURES+=("$CPU_TEMPERATURE")
+    DETECTED_CPU_TEMPERATURES+=("$CPU_TEMPERATURE")
 
     if [ -n "$CPUS_TEMPERATURES" ]; then
       CPUS_TEMPERATURES+=";"
@@ -537,28 +578,34 @@ function print_temperature_array_line() {
     printf " %s°C " "$(format_temperature_for_display "$temperature" "$((LOCAL_CPU_COLUMN_CONTENT_WIDTH - 2))")"
   done
 
-  printf " %5s°C  %40s  %51s  %s\n" "$LOCAL_EXHAUST_TEMPERATURE" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
+  # Exhaust goes through the same formatter as the other three temperature columns, so that a reading
+  # that failed on this cycle shows the "-" placeholder rather than an empty column reading as "°C"
+  printf " %5s°C  %40s  %51s  %s\n" "$(format_temperature_for_display "$LOCAL_EXHAUST_TEMPERATURE")" "$LOCAL_CURRENT_FAN_CONTROL_PROFILE" "$LOCAL_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$LOCAL_COMMENT"
 }
 
 # Formats a temperature reading as a right-aligned decimal number of the given width (3 by default).
 # Falls back to "-" instead of letting printf %d crash when the reading is empty, a placeholder ("-"),
-# or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09")
+# or has a leading zero that would otherwise be misinterpreted as an invalid octal number (e.g. "09").
+# Sub-zero readings are values in their own right, not invalid ones, so they keep their sign
 # Usage : format_temperature_for_display "$VALUE" [$WIDTH]
 function format_temperature_for_display() {
   local -r VALUE="$1"
   local -r WIDTH="${2:-3}"
-  if [[ "$VALUE" =~ ^[0-9]+$ ]]; then
-    printf '%*d' "$WIDTH" "$((10#$VALUE))"
+  if is_temperature_reading_valid "$VALUE"; then
+    printf '%*d' "$WIDTH" "$(normalize_decimal_value "$VALUE")"
   else
     printf '%*s' "$WIDTH" "-"
   fi
 }
 
-# Returns 0 (true) if the given temperature reading is usable, i.e. a plain non-negative integer.
+# Returns 0 (true) if the given temperature reading is usable, i.e. an integer.
 # A missing sensor, a transient IPMI parsing glitch or an "ns"/"Disabled" sensor all yield something
-# that isn't
+# that isn't.
+#
+# A sub-zero reading is a value in its own right rather than an unusable one : Dell rates the PowerEdge
+# line down to -5°C, so an unheated room produces one in normal operation
 function is_temperature_reading_valid() {
-  [[ "$1" =~ ^[0-9]+$ ]]
+  [[ "$1" =~ ^-?[0-9]+$ ]]
 }
 
 # Checks whether any of the detected CPUs needs the Dell default fan control profile.
@@ -578,9 +625,9 @@ function is_any_CPU_overheating() {
   OVERHEATING_CPUS_AND_TEMPERATURES=()
 
   local INDEX CPU_TEMPERATURE
-  for INDEX in "${!CPU_TEMPERATURES[@]}"; do
-    CPU_TEMPERATURE="${CPU_TEMPERATURES[INDEX]}"
-    if ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$((10#$CPU_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
+  for INDEX in "${!DETECTED_CPU_TEMPERATURES[@]}"; do
+    CPU_TEMPERATURE="${DETECTED_CPU_TEMPERATURES[INDEX]}"
+    if ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$CPU_TEMPERATURE_THRESHOLD" ]; then
       # The label is taken from the table's own labels rather than rebuilt here, so that the CPU named
       # in the comment is always the one whose column shows the reading that triggered it. It falls back
       # to the position rather than to an empty string, so that a comment naming no CPU at all can never
@@ -592,7 +639,7 @@ function is_any_CPU_overheating() {
   # Not being able to read a single CPU means nothing can be verified, so fail safe rather than trust
   # the absence of data. refresh_CPU_temperature_sensors() keeps the set from ever emptying, so this
   # only guards against a caller reaching here before any detection ran
-  if (( ${#CPU_TEMPERATURES[@]} == 0 )); then
+  if (( ${#DETECTED_CPU_TEMPERATURES[@]} == 0 )); then
     return 0
   fi
 
