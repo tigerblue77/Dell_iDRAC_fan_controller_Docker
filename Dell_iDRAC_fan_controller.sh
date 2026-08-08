@@ -28,22 +28,21 @@ validate_boolean_parameter "MONITORING_ONLY_MODE" "$MONITORING_ONLY_MODE"
 validate_boolean_parameter "DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"
 validate_boolean_parameter "KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT" "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"
 
+# FAN_SPEED is unchecked text until here and fails silently rather than loudly when malformed : it goes
+# through printf's base detection and converts to 0x00, the documented Dell command for 0% fan duty.
+# Only one stderr line at startup says so, and every temperature table row afterwards keeps naming the
+# speed the user asked for while the fans sit at zero. Refuse to start rather than fail silently
+validate_fan_speed_parameter "FAN_SPEED" "$FAN_SPEED"
 # CHECK_INTERVAL paces the whole monitoring loop and is handed straight to sleep, whose exit status the
-# loop never looks at, so an unusable value doesn't stop anything : it makes every cycle return at once
-# and turns the loop into a busy loop hammering the iDRAC. It is also the controller's reaction time,
-# the fans being pinned between two checks, so an excessively long one is refused as well. Validate it
-# here, before the first IPMI command, and refuse to start rather than fail silently once running.
-# The monitoring only mode is passed along because it decides whether that reaction time exists at all
+# loop never looks at. It is also the controller's reaction time, the fans being pinned between two
+# checks, so an excessively long one is refused as well. The monitoring only mode is passed along
+# because it decides whether that reaction time exists at all
 validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL" "$MONITORING_ONLY_MODE"
 
-# Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
-if [[ "$FAN_SPEED" == 0x* ]]; then
-  readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
-  readonly HEXADECIMAL_FAN_SPEED="$FAN_SPEED"
-else
-  readonly DECIMAL_FAN_SPEED="$FAN_SPEED"
-  readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
-fi
+# Express FAN_SPEED in both notations, whichever one the user gave it in
+convert_fan_speed_parameter "$FAN_SPEED"
+readonly DECIMAL_FAN_SPEED="$DECIMAL_SPEED"
+readonly HEXADECIMAL_FAN_SPEED="$HEXADECIMAL_SPEED"
 
 # In local mode, the container runs on the target server itself. Two things depend on that : lm-sensors
 # can only describe the controlled server's CPUs in that mode, and the server can never be observed
