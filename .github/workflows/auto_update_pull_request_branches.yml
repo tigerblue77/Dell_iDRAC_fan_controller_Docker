@@ -36,12 +36,24 @@ name: Auto-update pull request branches
 #
 # That identity is the PULL_REQUESTS_UPDATE_TOKEN secret : a fine-grained
 # personal access token, whose resource owner is this account and whose
-# repository access covers this repository, granting the "Contents : read and
-# write" and "Pull requests : read and write" repository permissions. Create it
-# in Settings > Developer settings > Personal access tokens > Fine-grained
-# tokens, then store it in Settings > Secrets and variables > Actions > New
-# repository secret. A GitHub App installation token works here too and never
-# expires, at the cost of creating and installing the App
+# repository access covers this repository, granting three repository
+# permissions : "Contents : read and write", "Pull requests : read and write"
+# and "Workflows : read and write". Create it in Settings > Developer settings >
+# Personal access tokens > Fine-grained tokens, then store it in Settings >
+# Secrets and variables > Actions > New repository secret.
+#
+# The third one is not optional here, and it is the one easily forgotten :
+# rebasing replays the branch's commits, and a branch that adds or edits
+# anything under .github/workflows is refused without it, with "refusing to
+# allow [...] to create or update workflow [...] without workflow scope
+# (updatePullRequestBranch)". This repository merges such pull requests
+# regularly, so a token missing it would work until precisely the pull request
+# that needed it most.
+#
+# A GitHub App installation token is the other identity that works, with the
+# same three permissions, and nothing about it expires : the private key is
+# permanent and the token is minted per run. It is what GitHub itself points to
+# for this case. The cost is registering and installing the App once
 
 on:
   push:
@@ -235,11 +247,15 @@ jobs:
               echo "::notice::Pull request #$number could not be rebased ($rebase_error), so it has been updated with a merge commit instead."
               updated=$((updated + 1))
             else
-              # A pull request opened from a fork can only be updated from here
-              # if its author left "Allow edits by maintainers" ticked, and the
-              # token has to be allowed to write to the fork as well. Neither is
-              # something this repository can decide, so a refusal is reported
-              # and the run carries on with the next pull request
+              # A pull request opened from a fork is expected to land here : the
+              # update writes to the fork, and neither of the two identities
+              # this workflow can use reaches one. A fine-grained token only
+              # ever addresses resources owned by its own resource owner, and an
+              # App installation only the repositories it is installed on, so
+              # "Allow edits by maintainers" does not rescue either of them : it
+              # grants the maintainer, and only a classic token acts with that
+              # breadth. Those pull requests keep being updated by hand ; the
+              # refusal is reported and the run carries on with the next one
               echo "::warning::Pull request #$number is $behind_by commit(s) behind master but could not be updated, neither by rebase ($rebase_error) nor by merge ($update_error). If it comes from a fork, its author has to tick \"Allow edits by maintainers\" ; otherwise it has to be updated by hand."
             fi
           done
