@@ -15,6 +15,11 @@ function apply_Dell_default_fan_control_profile() {
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x01 2>&1 >/dev/null)
   if [ $? -ne 0 ]; then
     print_error "Failed to apply Dell default fan control profile. ipmitool said: $ipmitool_stderr"
+    # The command never reached the server, so the table must not claim the profile is active : this is
+    # the safety fallback, and an operator reading "applied for safety" on a cooking server would have
+    # no reason to look further
+    CURRENT_FAN_CONTROL_PROFILE="Dell default profile FAILED TO APPLY"
+    return 1
   fi
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
@@ -46,10 +51,19 @@ function apply_static_fan_control_profile() {
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
   if [ $? -ne 0 ]; then
     print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
+    # Returning early rather than sending a speed anyway : without manual control the speed command is
+    # meaningless, and iDRAC is still managing the fans, which is the safe state to leave the server in
+    CURRENT_FAN_CONTROL_PROFILE="Manual fan control FAILED TO ENABLE"
+    return 1
   fi
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_SPEED 2>&1 >/dev/null)
   if [ $? -ne 0 ]; then
     print_error "Failed to set fan speed to $DECIMAL_SPEED%. ipmitool said: $ipmitool_stderr"
+    # The worst of the three states and the one that most needs naming: manual control is now ON, so
+    # iDRAC has stopped managing the fans, and the speed that was supposed to replace it never arrived.
+    # The fans are sitting at whatever value was last set, under nobody's control
+    CURRENT_FAN_CONTROL_PROFILE="Fan speed FAILED TO APPLY ($DECIMAL_SPEED% requested)"
+    return 1
   fi
   CURRENT_FAN_CONTROL_PROFILE="$PROFILE_NAME ($DECIMAL_SPEED%)"
 }
@@ -423,11 +437,19 @@ function graceful_exit() {
     print_warning_and_exit "Container stopped (monitoring only mode, no fan control profile was ever applied)"
   fi
 
-  apply_Dell_default_fan_control_profile
+  local restored=true
+  apply_Dell_default_fan_control_profile || restored=false
 
   # Reset third-party PCIe card cooling response to Dell default depending on the user's choice at startup
   if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then
     enable_third_party_PCIe_card_Dell_default_cooling_response
+  fi
+
+  # The goodbye message is the last thing an operator sees, and it used to assert the fans were safe
+  # whether or not the command had actually reached the server. On failure the container is exiting and
+  # leaving the fans under nobody's control, which is worth a non-zero exit code as well as a mention
+  if ! $restored; then
+    print_error_and_exit "Container stopped but the Dell default dynamic fan control profile could NOT be restored, the fans are still under this container's last setting"
   fi
 
   print_warning_and_exit "Container stopped, Dell default dynamic fan control profile applied for safety"
