@@ -77,7 +77,7 @@ function test_a_blade_reports_no_exhaust_temperature_sensor() {
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "43 45" --inlet 24 --no-exhaust)
 
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}"
   assert_equals "24" "$INLET_TEMPERATURE"
@@ -92,7 +92,7 @@ function test_a_sled_whose_enclosure_owns_the_airflow_reports_no_temperature_aro
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "47 48" --no-inlet --no-exhaust)
 
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_equals "47" "${DETECTED_CPU_TEMPERATURES[0]}"
   assert_equals "48" "${DETECTED_CPU_TEMPERATURES[1]}"

@@ -568,21 +568,20 @@ function compute_CPU_column_content_width() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT ["$SDR_DATA"]
+# Usage : retrieve_temperatures ["$SDR_DATA"]
 #
 # The sensor data can be handed over by a caller that has just read it, so that detecting the CPUs and
 # taking their first readings cost a single IPMI round-trip and describe the very same instant
 function retrieve_temperatures() {
-  if (( $# < 1 || $# > 2 )); then
-    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT [\"\$SDR_DATA\"]"
+  if (( $# > 1 )); then
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures [\"\$SDR_DATA\"]"
     return 1
   fi
-  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
 
   # Kept in a global so that refresh_CPU_temperature_sensors() can look for a newly readable CPU in the
   # very same data, without spending another IPMI round-trip on it
-  if (( $# == 2 )); then
-    SDR_TEMPERATURE_DATA="$2"
+  if (( $# == 1 )); then
+    SDR_TEMPERATURE_DATA="$1"
   else
     SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
   fi
@@ -611,12 +610,15 @@ function retrieve_temperatures() {
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
-  # If exhaust temperature sensor is present, parse its temperature data
-  if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
-  else
-    EXHAUST_TEMPERATURE="-"
-  fi
+  # Parse exhaust temperature data, the sensor being located by its name like the inlet one.
+  # It is read on every cycle rather than once, an empty value meaning "nothing on this cycle" rather
+  # than "no such sensor" : the presence flag this used to consult was decided from a single pre-loop
+  # reading and only ever set to false, so one partial SDR response -- or chassis sensors not yet
+  # initialised while the CPU entities already were -- dropped the column for the container's lifetime
+  # even though the sensor answered a second later. The display layer already renders an unreadable
+  # value as the "-" placeholder, so a server that genuinely has no exhaust sensor still shows the
+  # same column it did before, on every line
+  EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
 }
 
 # Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
