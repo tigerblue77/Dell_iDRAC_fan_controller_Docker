@@ -116,6 +116,10 @@ retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATUR
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
+  # This reading was taken before the sensor was known to be absent, so it holds an empty string where
+  # every later cycle will hold the "-" placeholder. Backfilling it here keeps the first printed line
+  # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
+  EXHAUST_TEMPERATURE="-"
 fi
 if [ -z "$CPU2_TEMPERATURE" ]; then
   echo "No CPU2 temperature sensor detected."
@@ -165,9 +169,9 @@ while true; do
       # If CPU 2 temperature sensor is present, check if it is overheating too.
       # Do not apply Dell default dynamic fan control profile as it has already been applied before
       if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_OVERHEATING; then
-        COMMENT="CPU 1 and CPU 2 temperatures are too high, Dell default dynamic fan control profile applied for safety"
+        COMMENT=$(build_fan_control_fallback_comment "CPU 1" "$CPU1_TEMPERATURE" "CPU 2" "$CPU2_TEMPERATURE")
       else
-        COMMENT="CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
+        COMMENT=$(build_fan_control_fallback_comment "CPU 1" "$CPU1_TEMPERATURE")
       fi
     fi
   # If CPU 2 temperature sensor is present, check if it is overheating then apply Dell default dynamic fan control profile if true
@@ -176,7 +180,7 @@ while true; do
 
     if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
-      COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
+      COMMENT=$(build_fan_control_fallback_comment "CPU 2" "$CPU2_TEMPERATURE")
     fi
   else
     apply_user_fan_control_profile

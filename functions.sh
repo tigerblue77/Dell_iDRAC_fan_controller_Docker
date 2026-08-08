@@ -127,12 +127,29 @@ function retrieve_CPU_high_temperature_from_lm_sensors() {
   fi
 }
 
+# Extract the temperature reading carried by a single ipmitool sdr line
+# Usage : extract_temperature_from_sdr_line "$SDR_LINE"
+# Returns : the temperature in degrees Celsius, or an empty string if that line carries no reading
+#
+# An sdr line looks like "Temp             | 09h | ok  |  3.1 | 45 degrees C", the reading being its
+# 5th pipe-delimited column. Isolating that column first keeps the other ones (most notably the
+# sensor's hexadecimal ID) from contributing digits of their own.
+#
+# The value is matched on its "degrees" suffix rather than on a fixed two-digit width, so that its
+# width stops mattering : "100 degrees C" used to be truncated to 10°C, and "9 degrees C" used to
+# match nothing at all, which callers cannot tell apart from a missing sensor
+function extract_temperature_from_sdr_line() {
+  local -r SDR_LINE="$1"
+
+  echo "$SDR_LINE" | cut -d'|' -f5 | grep -Po '\d+(?=[[:space:]]*degrees)'
+}
+
 # Extract a single temperature reading from ipmitool sdr output, located by its IPMI entity ID
 # Usage : retrieve_temperature_by_entity_id "$SDR_DATA" $ENTITY_ID
 # Returns : the temperature in degrees Celsius, or an empty string if that entity has no reading
 #
-# An sdr line looks like "Temp             | 09h | ok  |  3.1 | 45 degrees C", the 4th pipe-delimited
-# column being the entity ID. Entity 3 is the processor, so 3.1 is CPU 1, 3.2 is CPU 2, and so on.
+# The entity ID is the 4th pipe-delimited column of an sdr line. Entity 3 is the processor, so 3.1 is
+# CPU 1, 3.2 is CPU 2, and so on.
 #
 # Locating a CPU by its entity rather than by counting values makes the parsing independent from the
 # sensors' hexadecimal IDs, from the order iDRAC returns them in, and therefore from the server
@@ -144,12 +161,31 @@ function retrieve_temperature_by_entity_id() {
   local -r SDR_DATA="$1"
   local -r ENTITY_ID="$2"
 
-  # The reading is matched on the "degrees" suffix rather than on a fixed two-digit width, so that an
-  # overheating CPU reporting three digits isn't truncated : "100 degrees C" used to be read as 10°C,
-  # silently keeping the user's low fan speed on a CPU that needed the Dell default profile
-  echo "$SDR_DATA" | awk -F'|' -v entity="$ENTITY_ID" '
-    { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4) }
-    $4 == entity { print $5; exit }' | grep -Po '\d+(?=[[:space:]]*degrees)'
+  # The entity ID is trimmed through a copy rather than in place, so that the line is printed
+  # untouched : assigning to a field makes awk rebuild the whole record with OFS (a space) as its
+  # separator, which would strip the pipe delimiters the extraction relies on
+  local -r SDR_LINE=$(echo "$SDR_DATA" | awk -F'|' -v entity="$ENTITY_ID" '
+    { entity_id = $4; gsub(/^[[:space:]]+|[[:space:]]+$/, "", entity_id) }
+    entity_id == entity { print; exit }')
+
+  extract_temperature_from_sdr_line "$SDR_LINE"
+}
+
+# Extract a single temperature reading from ipmitool sdr output, located by its sensor name
+# Usage : retrieve_temperature_by_sensor_name "$SDR_DATA" "$SENSOR_NAME"
+# Returns : the temperature in degrees Celsius, or an empty string if no such sensor has a reading
+#
+# Inlet and exhaust are both reported as entity 7.1 on Dell servers, so their name is the only thing
+# telling them apart and they cannot use retrieve_temperature_by_entity_id()
+function retrieve_temperature_by_sensor_name() {
+  local -r SDR_DATA="$1"
+  local -r SENSOR_NAME="$2"
+
+  # On the (unexpected) event of several sensors matching the name, the last one wins, as it did when
+  # the reading was picked with "grep -Po ... | tail -1"
+  local -r SDR_LINE=$(echo "$SDR_DATA" | grep "$SENSOR_NAME" | tail -1)
+
+  extract_temperature_from_sdr_line "$SDR_LINE"
 }
 
 # Retrieve temperature sensors data using ipmitool
@@ -190,12 +226,12 @@ function retrieve_temperatures() {
     ((NUMBER_OF_DETECTED_CPUS++))
   fi
 
-  # Parse inlet temperature data
-  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
+  # Parse inlet temperature data, the sensor being located by its name
+  INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
   # If exhaust temperature sensor is present, parse its temperature data
   if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | cut -d'|' -f5 | grep -Po '\d{2}' | tail -1)
+    EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
   else
     EXHAUST_TEMPERATURE="-"
   fi
@@ -372,18 +408,79 @@ function format_temperature_for_display() {
   fi
 }
 
+# Returns 0 (true) if the given temperature reading is usable, i.e. a plain non-negative integer.
+# A missing sensor, a transient IPMI parsing glitch or an "ns"/"Disabled" sensor all yield something
+# that isn't
+function is_temperature_reading_valid() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold.
-# If a reading isn't a valid number (missing sensor, transient IPMI parsing glitch, etc.), fail safe and
-# report overheating so the Dell default fan control profile kicks in, instead of crashing (bash's "-gt"
-# throws "unary operator expected" on empty/non-numeric input) or silently running the low user fan speed
-# on unverified data
+# If a reading isn't valid, fail safe and report overheating so the Dell default fan control profile
+# kicks in, instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric
+# input) or silently running the low user fan speed on unverified data
 function CPU1_OVERHEATING() {
-  [[ "$CPU1_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
+  is_temperature_reading_valid "$CPU1_TEMPERATURE" || return 0
   [ "$((10#$CPU1_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
 }
 function CPU2_OVERHEATING() {
-  [[ "$CPU2_TEMPERATURE" =~ ^[0-9]+$ ]] || return 0
+  is_temperature_reading_valid "$CPU2_TEMPERATURE" || return 0
   [ "$((10#$CPU2_TEMPERATURE))" -gt "$CPU_TEMPERATURE_THRESHOLD" ]
+}
+
+# Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
+# Usage : join_with_and $ITEM...
+function join_with_and() {
+  local result=""
+  local i
+
+  for (( i = 1; i <= $#; i++ )); do
+    if (( i == 1 )); then
+      result="${!i}"
+    elif (( i == $# )); then
+      result+=" and ${!i}"
+    else
+      result+=", ${!i}"
+    fi
+  done
+
+  echo "$result"
+}
+
+# Build the comment explaining why the Dell default fan control profile was applied.
+# Usage : build_fan_control_fallback_comment $CPU_NAME $CPU_TEMPERATURE [$CPU_NAME $CPU_TEMPERATURE]...
+#
+# CPU1_OVERHEATING()/CPU2_OVERHEATING() deliberately return true both when a CPU is genuinely too hot
+# and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile.
+# The comment has to tell the two apart : reporting "temperature is too high" on a reading that was
+# never obtained sends the user chasing a cooling problem instead of the sensor problem they have
+function build_fan_control_fallback_comment() {
+  local -a too_hot=()
+  local -a unreadable=()
+  local -a reasons=()
+
+  while (( $# >= 2 )); do
+    if is_temperature_reading_valid "$2"; then
+      too_hot+=("$1")
+    else
+      unreadable+=("$1")
+    fi
+    shift 2
+  done
+
+  if (( ${#too_hot[@]} == 1 )); then
+    reasons+=("${too_hot[0]} temperature is too high")
+  elif (( ${#too_hot[@]} > 1 )); then
+    reasons+=("$(join_with_and "${too_hot[@]}") temperatures are too high")
+  fi
+
+  if (( ${#unreadable[@]} == 1 )); then
+    reasons+=("${unreadable[0]} temperature could not be read")
+  elif (( ${#unreadable[@]} > 1 )); then
+    reasons+=("$(join_with_and "${unreadable[@]}") temperatures could not be read")
+  fi
+
+  echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
 }
 
 function print_error() {
