@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# Fake date used by the test suite, so that the timestamp column of the
+# temperature table is reproducible and can be asserted on.
+#
+# The controller only ever calls `date +"%d-%m-%Y %T"`, so the requested format
+# is deliberately ignored and the frozen timestamp is printed instead.
+
+printf '%s\n' "${MOCK_DATE_OUTPUT:-01-01-2024 00:00:00}"
