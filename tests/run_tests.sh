@@ -130,16 +130,16 @@ if [ "${#TEST_FILES[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# A case file is sourced into this shell, so an "exit" reached while it is read
-# - a stray one, or a guard clause written at the top level by mistake - ends
-# the runner right here, with that file's own exit code and nothing printed. It
-# would look exactly like a successful run that happened to be quiet. The trap
-# is what turns that silence into a failure
 # The runner and the libraries have helpers of their own whose name starts with
 # "test_" ; only the functions the case files add count as test cases
 TEST_CASE_FUNCTIONS_BEFORE_SOURCING="$(declare -F | sed -n 's/^declare -f \(test_[A-Za-z0-9_]*\)$/\1/p')"
 readonly TEST_CASE_FUNCTIONS_BEFORE_SOURCING
 
+# A case file is sourced into this shell, so an "exit" reached while it is read
+# - a stray one, or a guard clause written at the top level by mistake - ends
+# the runner right here, with that file's own exit code and nothing printed. It
+# would look exactly like a successful run that happened to be quiet. The trap
+# is what turns that silence into a failure
 SOURCING_TEST_FILE=""
 function report_interrupted_sourcing() {
   [ -n "$SOURCING_TEST_FILE" ] || return 0
