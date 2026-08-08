@@ -18,12 +18,12 @@ name: Base image refresh
 
 on:
   schedule:
-    # 00:17 UTC, so 01:17 in Paris in winter and 02:17 in summer : cron is UTC
-    # and does not follow daylight saving. The small hours locally either way,
-    # and a failure lands in the morning's notifications.
-    # Off the hour on purpose : GitHub delays scheduled runs under load, and the
-    # load peaks at :00 because that is where everyone schedules theirs
-    - cron: "17 0 * * *"
+    # 00:00 UTC, so 01:00 in Paris in winter and 02:00 in summer : cron is UTC
+    # here and does not follow daylight saving. The small hours locally either
+    # way, and a failure lands in the morning's notifications.
+    # GitHub runs the queue late when it is loaded, and the load peaks on the
+    # hour ; a nightly refresh does not care whether it starts at 00:00 or 00:30
+    - cron: "0 0 * * *"
   workflow_dispatch:
 
 permissions:
