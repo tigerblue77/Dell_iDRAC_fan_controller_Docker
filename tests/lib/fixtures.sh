@@ -18,9 +18,11 @@
 # fields at all and only expose "Board Mfg" / "Board Product", which
 # get_Dell_server_model() falls back on
 #
-# --with-unreadable-devices appends the empty drive backplane and PSU bays that a
-# populated server reports as unreadable. They are what makes the real "ipmitool fru"
-# exit non-zero on hardware that is nonetheless perfectly healthy
+# --with-unreadable-devices appends the empty drive backplane, PERC and PSU bays that
+# a partially populated server reports as unreadable. They are what makes the real
+# "ipmitool fru" exit non-zero on hardware that is nonetheless perfectly healthy, and
+# they belong to the inventory rather than to the transport, so they show up in local
+# and network mode alike (issue #193)
 function make_fru_output() {
   local MANUFACTURER="DELL"
   local MODEL="PowerEdge R730xd"
@@ -69,7 +71,8 @@ function make_fru_output() {
   fi
 }
 
-# The empty bays of a populated server, as "ipmitool fru" reports them
+# The empty bays of a partially populated server, as "ipmitool fru" lists them once it
+# has walked past the builtin FRU device (ID 0) that identified the server
 function make_unreadable_fru_devices() {
   printf '\n'
   printf 'FRU Device Description : BP0 (ID 12)\n'
@@ -80,6 +83,22 @@ function make_unreadable_fru_devices() {
   printf '\n'
   printf 'FRU Device Description : PERC2 (ID 11)\n'
   printf ' Device not present (Parameter out of range)\n'
+}
+
+# The stderr the real "ipmitool fru" leaves behind when it walked the bus but some of its
+# devices did not answer
+readonly UNREADABLE_FRU_DEVICES_STDERR="Get Device ID command failed: 0xc9 Parameter out of range"
+
+# Point the mocked ipmitool at a server whose FRU inventory is only partially readable :
+# the builtin FRU device (ID 0) identifies it, its empty bays answer nothing, and the walk
+# therefore exits non-zero while the inventory still reaches stdout. This is what healthy,
+# partially populated hardware returns, and taking it for a connection failure is issue #193
+# Usage : simulate_partially_readable_fru_inventory [make_fru_output option ...]
+function simulate_partially_readable_fru_inventory() {
+  export MOCK_IPMITOOL_FRU_OUTPUT MOCK_IPMITOOL_FRU_STDERR MOCK_IPMITOOL_FRU_EXIT_CODE
+  MOCK_IPMITOOL_FRU_OUTPUT="$(make_fru_output --with-unreadable-devices "$@")"
+  MOCK_IPMITOOL_FRU_STDERR="$UNREADABLE_FRU_DEVICES_STDERR"
+  MOCK_IPMITOOL_FRU_EXIT_CODE=1
 }
 
 # Build a single "ipmitool sdr type temperature" line

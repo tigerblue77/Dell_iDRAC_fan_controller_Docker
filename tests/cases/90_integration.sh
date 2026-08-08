@@ -324,6 +324,26 @@ function test_the_controller_refuses_to_run_on_a_server_that_is_not_a_dell() {
     "no fan control command must ever reach a non-Dell server"
 }
 
+function test_the_controller_starts_on_a_server_whose_fru_inventory_is_partially_unreadable() {
+  # The symptom issue #193 describes, end to end : an R740xd with two empty backplane bays and no
+  # second PERC makes "ipmitool fru" exit 1, and the container used to stop right there, before it
+  # ever applied a fan control profile -- leaving the fans wherever the BMC's own profile put them.
+  # The unit cases in 50_server_model_detection.sh hold the identification itself ; this one holds
+  # what the user actually sees, which is a container that starts and reaches its monitoring loop
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd"
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output --cpus 2 --cpu-temperatures "42 44" --inlet 21 --exhaust 34)"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "Server model: DELL PowerEdge R740xd" "the server identified itself despite the unreadable bays"
+  assert_not_contains "$OUTPUT" "the container will not start" "empty bays are not a configuration error"
+  assert_contains "$OUTPUT" "User static fan control profile (5%)" \
+    "the controller should reach its monitoring loop and drive the fans"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0xff")" \
+    "the user's fan speed should have been applied, which is what never happened"
+}
+
 function test_the_controller_stops_when_the_ipmi_connection_cannot_be_established() {
   export MOCK_IPMITOOL_FRU_EXIT_CODE=1
   export MOCK_IPMITOOL_FRU_OUTPUT="Error: Unable to establish IPMI v2 / RMCP+ session"

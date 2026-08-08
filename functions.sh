@@ -1271,9 +1271,36 @@ function get_Dell_server_model() {
   # An unpopulated drive backplane or PSU bay answers "Device not present (Timeout)"
   # while the builtin FRU device (ID 0) still returns the manufacturer and the model, so
   # exiting on the exit code alone refused to start on servers that were perfectly fine.
-  if [ -z "$SERVER_MANUFACTURER" ] && [ -z "$SERVER_MODEL" ]; then
-    print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. ipmitool exited with code $ipmitool_exit_code and said: $IPMI_FRU_content"
+  # The FRU walk is a property of the inventory and not of the transport, so "-I open"
+  # and "-I lanplus" were refused alike.
+  #
+  # The failure #103 asked to catch is total rather than partial, so gating on the
+  # identification keeps catching it : a session that cannot be opened returns no
+  # inventory at all, both fields above stay empty and the error below still fires
+  if [ -n "$SERVER_MANUFACTURER" ] || [ -n "$SERVER_MODEL" ]; then
+    return 0
   fi
+
+  # Only mention the exit code when there is one to report : an inventory that came back
+  # empty from a call that succeeded is not a failed call, and "exited with code 0" inside
+  # a connection error would contradict itself
+  local IPMITOOL_REPORT="ipmitool said: $IPMI_FRU_content"
+  if [ $ipmitool_exit_code -ne 0 ]; then
+    IPMITOOL_REPORT="ipmitool exited with code $ipmitool_exit_code and said: $IPMI_FRU_content"
+  fi
+
+  # Local mode never sends a username nor a password -- it talks to the Docker host's own
+  # BMC through the exposed IPMI device -- so naming those two parameters there would send
+  # the user to correct something the connection does not even use
+  if [[ "$IDRAC_HOST" == "local" ]]; then
+    print_configuration_error_and_exit "IDRAC_HOST" "$IDRAC_HOST" \
+      "an IPMI device the host's own BMC answers on. Nothing could be read from it, so the server could not be identified. IDRAC_USERNAME and IDRAC_PASSWORD are not used in local mode, so they are not what to check here. $IPMITOOL_REPORT" \
+      "Check that the device exposed with \"--device=\" is your server's IPMI device and that its
+kernel modules (\"ipmi_devintf\", \"ipmi_si\") are loaded on the Docker host, then start the
+container again. Alternatively, set IDRAC_HOST to your iDRAC's address to use network mode instead."
+  fi
+
+  print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. $IPMITOOL_REPORT"
 }
 
 # Settle the width of the "Active fan speed profile" column, which the header and the rows both lay
