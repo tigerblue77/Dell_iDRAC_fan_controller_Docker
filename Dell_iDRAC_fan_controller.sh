@@ -23,7 +23,10 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 validate_fan_speed_parameter "FAN_SPEED" "$FAN_SPEED"
 # IPMI reports temperatures as a signed byte, so no threshold outside that range can ever be crossed
 validate_integer_parameter "CPU_TEMPERATURE_THRESHOLD" "$CPU_TEMPERATURE_THRESHOLD" -128 127
-validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL"
+# CHECK_INTERVAL is also the controller's reaction time, the fans being pinned between two checks, so
+# an excessively long one is refused as well. The monitoring only mode is passed along because it
+# decides whether that reaction time exists at all
+validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL" "$MONITORING_ONLY_MODE"
 
 # Leading zeros are stripped so that the value used in comparisons is the one the user meant, "09"
 # being read as an invalid octal number everywhere else
@@ -69,9 +72,8 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: "$CPU_TEMPERATURE_THRESHOLD"°C"
 # The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
-# forms that would otherwise be logged as "90ss" and "5ms". The fractional forms sleep accepts ("0.5")
-# carry no unit either, so they take the "s" just the same
-if [[ "$CHECK_INTERVAL" =~ ^[0-9.]+$ ]]; then
+# forms that would otherwise be logged as "90ss" and "5ms"
+if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
   echo "Check interval: ${CHECK_INTERVAL}s"
 else
   echo "Check interval: $CHECK_INTERVAL"
