@@ -67,6 +67,62 @@ function test_the_sign_survives_the_whole_read_not_just_the_extraction() {
   assert_equals "-40;-5" "$CPUS_TEMPERATURES"
 }
 
+function test_the_intake_sensor_is_found_under_its_eleventh_generation_name() {
+  # iDRAC6 (11G : R610, R710, R510, T610...) calls the chassis intake "Ambient Temp". "Inlet Temp"
+  # only exists from 12G on, so looking for that name alone left the intake column showing "-" on
+  # every 11G server -- all of which the catalogue lists as supported
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --eleventh-generation-sensor-names --inlet 21)
+
+  retrieve_temperatures
+
+  assert_equals "21" "$INLET_TEMPERATURE" "an 11G intake reading must be found under the name iDRAC6 gives it"
+}
+
+function test_the_system_board_sensor_is_never_reported_as_the_exhaust() {
+  # 11G reports "Planar Temp" on entity 7.1, the same entity the intake uses, and it is the only
+  # other temperature the chassis exposes -- which makes it the obvious thing to mistake for an
+  # exhaust reading. It is the system board's own temperature, not the air leaving the chassis, so
+  # the empty value the display layer renders as "-" is the honest answer here
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --eleventh-generation-sensor-names --inlet 21)
+
+  retrieve_temperatures
+
+  assert_empty "$EXHAUST_TEMPERATURE" "11G has no exhaust sensor, and its system board sensor is not one"
+  assert_not_equals "36" "$INLET_TEMPERATURE" "the system board reading must not answer for the intake either"
+}
+
+function test_the_twelfth_generation_intake_still_wins_over_the_fallback() {
+  # The fallback must not become the answer on a server that has both names -- the intake column
+  # has to keep showing the sensor Dell means by "Inlet" wherever one exists
+  local -r SDR_DATA=$(printf '%s\n%s\n' \
+    "$(make_sdr_line "Inlet Temp" "04h" "ok" "7.1" "23 degrees C")" \
+    "$(make_sdr_line "Ambient Temp" "0Eh" "ok" "7.1" "18 degrees C")")
+
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT="$SDR_DATA"
+
+  retrieve_temperatures
+
+  assert_equals "23" "$INLET_TEMPERATURE" "\"Inlet Temp\" is what Dell means by the intake when it exists"
+}
+
+function test_a_power_supply_intake_never_answers_for_the_chassis_intake() {
+  # The name is matched at the start of the line for this reason (issue #231), and the 11G fallback
+  # must not reopen the hole : 11G reports two power supply sensors of its own on entity 10.x
+  local -r SDR_DATA=$(printf '%s\n%s\n' \
+    "$(make_sdr_line "PSU1 Inlet Temp" "68h" "ok" "10.1" "29 degrees C")" \
+    "$(make_sdr_line "PSU2 Inlet Temp" "69h" "ok" "10.2" "30 degrees C")")
+
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT="$SDR_DATA"
+
+  retrieve_temperatures
+
+  assert_empty "$INLET_TEMPERATURE" "a power supply's own intake is not the chassis air intake"
+}
+
 function test_the_hexadecimal_sensor_id_is_not_mistaken_for_a_temperature() {
   # An R930 numbers its CPU sensors 09h, 0Ah... : the "09" used to be picked up
   # as a reading of its own (issue #91)

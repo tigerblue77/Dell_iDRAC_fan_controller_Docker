@@ -75,6 +75,12 @@ function make_sdr_line() {
 #                              like a second socket left empty
 #   --with-extra-sensors       add the non-CPU, non-inlet, non-exhaust temperature
 #                              sensors bigger servers report (board, PCIe risers)
+#   --eleventh-generation-sensor-names
+#                              name the chassis sensors the way iDRAC6 does on 11G
+#                              servers (R610, R710, R510, T610...) : "Ambient Temp"
+#                              for the intake, a "Planar Temp" system board sensor on
+#                              the same entity 7.1, and no exhaust sensor at all.
+#                              "Inlet Temp" and "Exhaust Temp" only exist from 12G on
 function make_sdr_output() {
   local CPU_COUNT=2
   local CPU_TEMPERATURES=""
@@ -85,6 +91,7 @@ function make_sdr_output() {
   local WITH_EXHAUST=true
   local CPU2_DISABLED=false
   local WITH_EXTRA_SENSORS=false
+  local ELEVENTH_GENERATION_SENSOR_NAMES=false
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -97,16 +104,28 @@ function make_sdr_output() {
       --no-exhaust) WITH_EXHAUST=false; shift ;;
       --cpu2-disabled) CPU2_DISABLED=true; shift ;;
       --with-extra-sensors) WITH_EXTRA_SENSORS=true; shift ;;
+      --eleventh-generation-sensor-names) ELEVENTH_GENERATION_SENSOR_NAMES=true; shift ;;
       *) printf 'make_sdr_output: unknown option "%s"\n' "$1" >&2; return 1 ;;
     esac
   done
 
   # Inlet and exhaust are both reported as entity 7.1: only their name tells them apart
-  if $WITH_INLET; then
-    make_sdr_line "Inlet Temp" "04h" "ok" "7.1" "$INLET_TEMPERATURE degrees C"
-  fi
-  if $WITH_EXHAUST; then
-    make_sdr_line "Exhaust Temp" "01h" "ok" "7.1" "$EXHAUST_TEMPERATURE degrees C"
+  if $ELEVENTH_GENERATION_SENSOR_NAMES; then
+    # Sensor names and hexadecimal IDs taken from a real R710 "ipmitool sdr elist". iDRAC6 reports
+    # no exhaust sensor at all: "Planar Temp" shares entity 7.1 with the intake but is the system
+    # board, not the air leaving the chassis, so it is emitted here precisely so that anything
+    # tempted to read it as an exhaust reading is caught by a test
+    if $WITH_INLET; then
+      make_sdr_line "Ambient Temp" "0Eh" "ok" "7.1" "$INLET_TEMPERATURE degrees C"
+    fi
+    make_sdr_line "Planar Temp" "0Fh" "ok" "7.1" "36 degrees C"
+  else
+    if $WITH_INLET; then
+      make_sdr_line "Inlet Temp" "04h" "ok" "7.1" "$INLET_TEMPERATURE degrees C"
+    fi
+    if $WITH_EXHAUST; then
+      make_sdr_line "Exhaust Temp" "01h" "ok" "7.1" "$EXHAUST_TEMPERATURE degrees C"
+    fi
   fi
 
   local -a REQUESTED_CPU_TEMPERATURES=($CPU_TEMPERATURES)
