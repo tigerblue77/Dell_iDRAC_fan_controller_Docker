@@ -155,9 +155,6 @@ IS_FIRST_MONITORING_CYCLE=true
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
 
-# Check present sensors
-IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
-
 # Start timer in background
 sleep "$CHECK_INTERVAL" &
 SLEEP_PROCESS_PID=$!
@@ -230,15 +227,13 @@ echo "$(format_detected_CPU_temperature_sensors)."
 
 warn_if_unexpected_number_of_CPUs
 
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
+retrieve_temperatures "$SDR_TEMPERATURE_DATA"
 
+# Said once, at startup, so that a server that has no exhaust sensor at all is diagnosable from the log.
+# It reports what this reading found rather than a verdict for the whole run : the sensor is looked up
+# again on every cycle, so one that was merely slow to answer still gets its column filled later
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
-  IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
-  # This reading was taken before the sensor was known to be absent, so it holds an empty string where
-  # every later cycle will hold the "-" placeholder. Backfilling it here keeps the first printed line
-  # consistent with the rest, instead of leaving a blank under the "Exhaust" heading
-  EXHAUST_TEMPERATURE="-"
 fi
 # Output new line to beautify output
 echo ""
@@ -273,7 +268,7 @@ while true; do
     IS_CPU_REMOVAL_ALLOWED=true
     PENDING_CPU_REMOVAL_SIGNATURE=""
     PENDING_CPU_REMOVAL_READINGS=0
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+    retrieve_temperatures
   fi
 
   # Follow the CPUs the server exposes : one may have been added while it was powered off, one may have
@@ -320,7 +315,7 @@ while true; do
     # entity list rather than reused from before it changed. The same data is handed back rather than
     # fetched again : following the CPUs then costs no IPMI round-trip at all, and the readings keep
     # describing the very instant the set was detected on
-    retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT "$SDR_TEMPERATURE_DATA"
+    retrieve_temperatures "$SDR_TEMPERATURE_DATA"
   fi
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
@@ -390,5 +385,5 @@ while true; do
   sleep "$CHECK_INTERVAL" &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures
 done

@@ -12,10 +12,8 @@
 # come from, so a test drives the pair the way the controller does.
 
 function detect_then_retrieve_temperatures() {
-  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT="${1:-true}"
-
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
-  retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT"
+  retrieve_temperatures
 }
 
 function test_a_single_cpu_server_reports_one_cpu() {
@@ -96,17 +94,36 @@ function test_a_gap_between_two_readable_sockets_does_not_truncate_the_list() {
   assert_equals "41;39;38" "$CPUS_TEMPERATURES"
 }
 
-function test_the_sensors_known_to_be_absent_are_replaced_by_placeholders() {
+function test_a_missing_exhaust_sensor_leaves_an_empty_reading_and_the_cpus_alone() {
   export MOCK_IPMITOOL_SDR_OUTPUT
-  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --exhaust 36)
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --no-exhaust)
 
-  # Once the controller has detected that the exhaust sensor is missing, it stops
-  # reading it and prints a placeholder in its place
-  detect_then_retrieve_temperatures false
+  detect_then_retrieve_temperatures
 
-  assert_equals "-" "$EXHAUST_TEMPERATURE"
+  assert_equals "" "$EXHAUST_TEMPERATURE" "nothing was read, which the display turns into a placeholder"
+  assert_equals "  -" "$(format_temperature_for_display "$EXHAUST_TEMPERATURE")"
   assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}" "a missing exhaust sensor must not change the CPU count"
   assert_equals "44;46" "$CPUS_TEMPERATURES"
+}
+
+function test_an_exhaust_sensor_that_answers_late_is_read_on_the_cycle_it_comes_back() {
+  # Presence is an output of each reading rather than a verdict taken once. A
+  # sensor missing from the first sdr response -- a partial response, or chassis
+  # sensors not yet initialised while the CPU entities already were -- used to
+  # lose its column for the whole life of the container. Its own reading is not
+  # what the fans are driven from, so this costs a column in the log rather than
+  # an unmonitored heat source, but it is the same defect the CPU set was fixed for
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --no-exhaust)
+
+  detect_then_retrieve_temperatures
+  assert_equals "" "$EXHAUST_TEMPERATURE" "nothing to read on the first cycle"
+
+  # The sensor starts answering, without the container being restarted
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "44 46" --exhaust 36)
+  retrieve_temperatures
+
+  assert_equals "36" "$EXHAUST_TEMPERATURE" "the sensor must be looked up again, not written off"
 }
 
 function test_a_server_without_an_inlet_or_exhaust_sensor_reports_no_reading() {
@@ -131,7 +148,7 @@ function test_an_unreadable_cpu1_temperature_keeps_its_column() {
   assert_equals "2" "${#DETECTED_CPU_ENTITY_IDS[@]}"
 
   MOCK_IPMITOOL_SDR_OUTPUT=$(printf '%s\n' "$MOCK_IPMITOOL_SDR_OUTPUT" | grep -v ' 3\.2 ')
-  retrieve_temperatures true
+  retrieve_temperatures
 
   assert_empty "${DETECTED_CPU_TEMPERATURES[1]}" "the raw reading stays empty for the overheating check"
   assert_equals "44;-" "$CPUS_TEMPERATURES" "the printed value falls back on a placeholder"
@@ -140,7 +157,7 @@ function test_an_unreadable_cpu1_temperature_keeps_its_column() {
 function test_the_internal_functions_reject_a_wrong_number_of_parameters() {
   local RETRIEVE_OUTPUT BUILD_HEADER_OUTPUT
 
-  RETRIEVE_OUTPUT=$(retrieve_temperatures true true true 2>&1)
+  RETRIEVE_OUTPUT=$(retrieve_temperatures "one" "two" 2>&1)
   local -r RETRIEVE_EXIT_CODE=$?
   BUILD_HEADER_OUTPUT=$(build_header 5 2>&1)
   local -r BUILD_HEADER_EXIT_CODE=$?
@@ -263,7 +280,7 @@ function test_a_cpu_going_silent_on_a_running_server_keeps_its_column() {
   for ((READING = 1; READING <= CPU_REMOVAL_CONFIRMING_READINGS + 2; READING++)); do
     refresh_CPU_temperature_sensors "$SDR_DATA"
   done
-  retrieve_temperatures true "$SDR_DATA"
+  retrieve_temperatures "$SDR_DATA"
 
   assert_equals "3.1 3.2 3.3 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "no power cycle, no removal"
   assert_equals "40;41;-;-" "$CPUS_TEMPERATURES" "the silent CPUs keep their column, reading as a placeholder"

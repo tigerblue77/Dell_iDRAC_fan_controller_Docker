@@ -568,21 +568,20 @@ function compute_CPU_column_content_width() {
 }
 
 # Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT ["$SDR_DATA"]
+# Usage : retrieve_temperatures ["$SDR_DATA"]
 #
 # The sensor data can be handed over by a caller that has just read it, so that detecting the CPUs and
 # taking their first readings cost a single IPMI round-trip and describe the very same instant
 function retrieve_temperatures() {
-  if (( $# < 1 || $# > 2 )); then
-    print_error "Illegal number of parameters. Usage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT [\"\$SDR_DATA\"]"
+  if (( $# > 1 )); then
+    print_error "Illegal number of parameters. Usage: retrieve_temperatures [\"\$SDR_DATA\"]"
     return 1
   fi
-  local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
 
   # Kept in a global so that refresh_CPU_temperature_sensors() can look for a newly readable CPU in the
   # very same data, without spending another IPMI round-trip on it
-  if (( $# == 2 )); then
-    SDR_TEMPERATURE_DATA="$2"
+  if (( $# == 1 )); then
+    SDR_TEMPERATURE_DATA="$1"
   else
     SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
   fi
@@ -611,12 +610,17 @@ function retrieve_temperatures() {
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
-  # If exhaust temperature sensor is present, parse its temperature data
-  if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
-  else
-    EXHAUST_TEMPERATURE="-"
-  fi
+  # Parse exhaust temperature data, the sensor being located by its name like the inlet one.
+  # It is looked up on every cycle rather than gated on what the first reading found, for the same
+  # reason the CPU set is re-detected on every cycle : one reading cannot tell a sensor that is absent
+  # from a sensor that did not answer this time. Latching "absent" on the startup reading meant a
+  # partial sdr response, or chassis sensors not yet initialised while the CPU entities already were,
+  # dropped the exhaust column for the whole life of the container even though the sensor answered a
+  # second later. An empty reading means "nothing on this cycle" and prints as the "-" placeholder,
+  # which leaves a later cycle free to read it successfully.
+  # This costs no IPMI round-trip : the exhaust row is parsed out of the sdr data this cycle already
+  # holds, so a server genuinely without the sensor only pays a failed text match
+  EXHAUST_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Exhaust")
 }
 
 # Returns 0 (true) if the target server is currently powered on, 1 (false) otherwise
