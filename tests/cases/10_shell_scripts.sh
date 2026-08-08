@@ -23,6 +23,41 @@ function test_every_shell_script_has_a_valid_syntax() {
   done
 }
 
+function test_no_statement_expands_two_command_substitutions() {
+  # Bash re-parses the text of every $( ) at expansion time, and it runs pending
+  # trap handlers from inside that same reader loop. A SIGTERM landing there gets
+  # its handler parsed with the substitution's state still open, so the trap
+  # string fails to parse, graceful_exit never runs, and the container dies
+  # leaving the fans on the user's static speed (issue #188).
+  #
+  # The risk is not linear in the number of substitutions, it jumps as soon as two
+  # of them are expanded in the same pass. Measured on 250 SIGTERM'd runs per
+  # variant, on tiny scripts doing nothing else :
+  #
+  #   no command substitution at all ......................   0
+  #   two of them, in two separate statements ............   0
+  #   one of them ........................................   2
+  #   two of them in the same expansion .................. 61 to 182
+  #
+  # So the invariant the shipped scripts hold is one substitution per statement.
+  # Compute each value into a variable and use the variable. That does not make
+  # bash safe -- a single substitution still measured 2 runs in 250, and no amount
+  # of hoisting removes the last one -- but it is what took the controller itself
+  # from 11 stops in 400 down to none.
+  #
+  # Arithmetic expansion, $(( )), is deliberately not matched : it measured no
+  # worse than a single substitution
+  local SCRIPT
+  for SCRIPT in "$REPO_ROOT"/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+
+    local OFFENDING_LINES
+    OFFENDING_LINES=$(grep -nE '\$\([^(].*\$\([^(]' "$SCRIPT" || true)
+    assert_empty "$OFFENDING_LINES" \
+      "${SCRIPT#$REPO_ROOT/} expands two command substitutions in one statement"
+  done
+}
+
 function test_sourcing_functions_only_declares_functions() {
   # functions.sh is sourced by the controller, by the healthcheck and by this
   # suite : it must not run anything nor print anything on its own

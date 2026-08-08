@@ -234,7 +234,7 @@ function test_the_temperature_line_has_one_column_per_detected_cpu() {
   assert_equals "4" "$(grep -o '°C' <<< "$DUAL_CPU_LINE" | wc -l | tr -d ' ')" "inlet, CPU 1, CPU 2 and exhaust"
   assert_equals "6" "$(grep -o '°C' <<< "$QUAD_CPU_LINE" | wc -l | tr -d ' ')" "inlet, four CPUs and exhaust"
 
-  assert_contains "$DUAL_CPU_LINE" "01-01-2024 00:00:00" "every line starts with its timestamp"
+  assert_matches "$DUAL_CPU_LINE" "^$CONTROLLER_TIMESTAMP_PATTERN  " "every line starts with its timestamp"
   assert_contains "$DUAL_CPU_LINE" "User static fan control profile (5%)"
 }
 
