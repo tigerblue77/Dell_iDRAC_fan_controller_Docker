@@ -15,11 +15,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    # Majors come one PR each and sit there until reviewed, so they fill the
-    # queue. The default limit is 5, and the first scan hit it exactly : five
-    # majors were raised, the rest were never mentioned again. Raising it is
-    # what keeps an action from ageing out of sight behind a full queue
-    open-pull-requests-limit: 10
+    # Opening a pull request is the only way Dependabot reports anything, and it
+    # stops opening them once this many are waiting - silently, naming nothing.
+    # The default is 5, and the first scan here hit it exactly : five majors
+    # were raised, the rest were never mentioned again. Majors come one pull
+    # request each and sit until reviewed, so the queue fills easily.
+    # 99, not 0 : zero does not mean "no limit", it disables version updates
+    # altogether and leaves only security ones. A large value is what the
+    # documentation gives as the way to effectively remove the limit
+    open-pull-requests-limit: 99
     groups:
       # Minor and patch updates are grouped into a single PR,
       # auto-merged by the dependabot-auto-merge workflow.
