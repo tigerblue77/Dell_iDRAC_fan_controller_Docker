@@ -22,9 +22,11 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # CHECK_INTERVAL paces the whole monitoring loop and is handed straight to sleep, whose exit status the
 # loop never looks at, so an unusable value doesn't stop anything : it makes every cycle return at once
-# and turns the loop into a busy loop hammering the iDRAC. Validate it here, before the first IPMI
-# command, and refuse to start rather than fail silently once running
-validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL"
+# and turns the loop into a busy loop hammering the iDRAC. It is also the controller's reaction time,
+# the fans being pinned between two checks, so an excessively long one is refused as well. Validate it
+# here, before the first IPMI command, and refuse to start rather than fail silently once running.
+# The monitoring only mode is passed along because it decides whether that reaction time exists at all
+validate_check_interval_parameter "CHECK_INTERVAL" "$CHECK_INTERVAL" "$MONITORING_ONLY_MODE"
 
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ "$FAN_SPEED" == 0x* ]]; then
