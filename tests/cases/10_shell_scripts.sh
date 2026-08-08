@@ -428,3 +428,40 @@ function test_no_boolean_parameter_is_dispatched_unquoted() {
     fi
   done
 }
+
+function test_no_call_site_terminates_a_message_line_itself() {
+  # print_error() and print_warning() close their own line (issue #169). A call
+  # site adding a second terminator prints a blank line after the message, and --
+  # worse -- hides the day the helpers lose their "\n" again : that one call site
+  # would keep looking right while every other one fused with the line printed
+  # next.
+  #
+  # This is not hypothetical, the trap caught three separate changes while #169
+  # sat open, each patching the missing newline where it was noticed rather than
+  # in the helper : validate_check_interval_parameter with a printf,
+  # warn_if_unexpected_number_of_CPUs with an echo under a comment stating the
+  # helper emitted none, and the supervisor with one printf per warning.
+  local SCRIPT CALL_LINE_NUMBER TERMINATOR_LINE OFFENDERS
+  for SCRIPT in "$REPO_ROOT"/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+
+    OFFENDERS=""
+    # The _and_exit variants are excluded by the trailing space : they close the
+    # line and leave, so nothing of theirs can be terminated twice
+    for CALL_LINE_NUMBER in $(grep -nE "^[[:space:]]*print_(error|warning) " "$SCRIPT" | cut -d: -f1); do
+      TERMINATOR_LINE=$(sed -n "$((CALL_LINE_NUMBER + 1))p" "$SCRIPT")
+      # A statement doing nothing but ending a line, whitespace removed so that
+      # indentation and the two spellings both reduce to the same few strings
+      case "$(printf '%s' "$TERMINATOR_LINE" | tr -d '[:space:]')" in
+        'printf"\n"' | "printf'\n'" | 'echo""' | "echo''" | 'echo')
+          OFFENDERS+="$((CALL_LINE_NUMBER + 1)):$TERMINATOR_LINE"$'\n' ;;
+      esac
+    done
+
+    if [ -z "$OFFENDERS" ]; then
+      pass
+    else
+      fail "${SCRIPT#$REPO_ROOT/} terminates a message line a second time" "$OFFENDERS"
+    fi
+  done
+}

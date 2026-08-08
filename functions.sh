@@ -196,7 +196,6 @@ function validate_check_interval_parameter() {
 
   if [ "$VALUE_IN_SECONDS" -gt "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" ]; then
     print_warning "$PARAMETER_NAME is \"$VALUE\", over $CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS seconds. Between two checks the fans stay pinned at the FAN_SPEED you configured, with Dell's dynamic fan control disabled, so the controller will take up to that long to react to a temperature spike"
-    printf "\n"
   fi
 }
 
@@ -257,7 +256,13 @@ function set_iDRAC_login_string() {
       # A device path holds no space, so joining on the separator is enough to enumerate them the way
       # the error always has : "/dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0"
       local -r IPMI_DEVICE_PATHS_ENUMERATION="${IPMI_DEVICE_PATHS[*]}"
-      print_error_and_exit "Could not open device at ${IPMI_DEVICE_PATHS_ENUMERATION// / or }, check that you added the device to your Docker container or stop using local mode"
+      # IDRAC_HOST is what is named, it being the parameter that makes the device mandatory : the
+      # device itself is not a parameter the user can be told to correct, only to add
+      print_configuration_error_and_exit "IDRAC_HOST" "$IDRAC_HOST" \
+        "local mode needs the host's IPMI device inside the container. Could not open device at ${IPMI_DEVICE_PATHS_ENUMERATION// / or }, none of them being visible from here" \
+        "Add \"--device=${IPMI_DEVICE_PATHS[0]}\" to your \"docker run\" command, or a \"devices:\" section to
+your docker-compose.yml, then start the container again. Alternatively, set IDRAC_HOST to
+your iDRAC's address to use network mode instead."
     fi
     IDRAC_LOGIN_STRING='open'
   else
@@ -924,8 +929,6 @@ function warn_if_unexpected_number_of_CPUs() {
   fi
 
   print_warning "${#DETECTED_CPU_ENTITY_IDS[@]} CPU temperature sensors is more than any Dell server has sockets. All of them will be monitored, but please open an issue at https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues with your server model and the output of the \"ipmitool sdr type temperature\" command"
-  # print_warning() emits no trailing newline
-  echo ""
 }
 
 # The widest content a CPU column must hold : a reading renders as "NNN°C" (5 columns), which every label
@@ -1351,41 +1354,55 @@ function build_fan_control_fallback_comment() {
 # to start is only useful if the reason survives a "docker logs" scroll, hence the block form rather
 # than one line among the startup output -- the user has to be able to see, without reading the source,
 # which parameter is wrong, what it currently is, what is accepted, and where to change it
+#
+# The closing sentence is overridable because not every configuration mistake is made in the same
+# place : almost all of them are environment variables, but exposing the host's IPMI device is a
+# "--device" argument, and sending that user to "-e" would be worse than saying nothing. It defaults
+# to the environment variable wording, which is what every parameter validator wants
 function print_configuration_error_and_exit() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
   local -r EXPECTED="$3"
+  local -r WHERE_TO_FIX_IT="${4:-Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"
+section of your docker-compose.yml, then start the container again.}"
 
   printf "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n" >&2
   printf "  Parameter : %s\n" "$PARAMETER_NAME" >&2
   printf "  Value     : \"%s\"\n" "$VALUE" >&2
   printf "  Expected  : %s\n\n" "$EXPECTED" >&2
-  printf "  Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"\n" >&2
-  printf "  section of your docker-compose.yml, then start the container again.\n\n" >&2
+  # Indented line by line so a closing sentence written across several lines keeps the block's margin
+  printf "%s\n" "$WHERE_TO_FIX_IT" | while IFS= read -r LINE; do
+    printf "  %s\n" "$LINE" >&2
+  done
+  printf "\n" >&2
 
   exit 1
 }
 
+# Each of these terminates its own line. print_error() and print_warning() used not to, which was
+# deliberate only for the " Exiting." suffix of their _and_exit() variants : every standalone call left
+# the message unterminated, so it fused with the next thing printed. The realistic case is an iDRAC
+# rejecting the fan speed command, which errors on every cycle and prefixes every table row with ~180
+# characters, moving the timestamp out of column 1 and breaking any log parser keyed on it. The exit
+# variants print their line in full rather than depend on that omission, and keep their exact wording
 function print_error() {
   local -r ERROR_MESSAGE="$1"
-  printf "/!\ Error /!\ %s." "$ERROR_MESSAGE" >&2
+  printf "/!\ Error /!\ %s.\n" "$ERROR_MESSAGE" >&2
 }
 
 function print_error_and_exit() {
   local -r ERROR_MESSAGE="$1"
-  print_error "$ERROR_MESSAGE"
-  printf " Exiting.\n" >&2
+  printf "/!\ Error /!\ %s. Exiting.\n" "$ERROR_MESSAGE" >&2
   exit 1
 }
 
 function print_warning() {
   local -r WARNING_MESSAGE="$1"
-  printf "/!\ Warning /!\ %s." "$WARNING_MESSAGE"
+  printf "/!\ Warning /!\ %s.\n" "$WARNING_MESSAGE"
 }
 
 function print_warning_and_exit() {
   local -r WARNING_MESSAGE="$1"
-  print_warning "$WARNING_MESSAGE"
-  printf " Exiting.\n"
+  printf "/!\ Warning /!\ %s. Exiting.\n" "$WARNING_MESSAGE"
   exit 0
 }
