@@ -41,6 +41,27 @@ function test_the_controller_falls_back_on_the_dell_default_profile_when_a_cpu_s
   fi
 }
 
+function test_the_controller_explains_a_fallback_caused_by_a_sensor_that_dropped_out() {
+  # The real-world case behind the fallback comment : the server is fine, one
+  # sensor simply stopped answering mid-run. The fans ramp up either way, so the
+  # log line is the only thing telling the user which of the two happened
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "42 44"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu2-disabled --cpu-temperatures "42")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  local -r OUTPUT=$(run_controller "could not be read")
+
+  assert_contains "$OUTPUT" "CPU 2 temperature could not be read, Dell default dynamic fan control profile applied for safety"
+  assert_not_contains "$OUTPUT" "CPU 2 temperature is too high" \
+    "a sensor that stopped answering is not an overheating CPU"
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" -ge 1 ]; then
+    pass
+  else
+    fail "the controller must still hand the fans back to Dell on an unreadable reading"
+  fi
+}
+
 function test_the_controller_reports_both_cpus_when_they_are_overheating_together() {
   simulate_server "PowerEdge R630" --cpus 2 --cpu-temperatures "42 44"
   export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
