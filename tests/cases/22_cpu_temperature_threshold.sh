@@ -147,12 +147,11 @@ function assert_startup_is_refused() {
 }
 
 function test_auto_is_resolved_from_lm_sensors_in_local_mode() {
-  if [ ! -e /dev/ipmi0 ] && [ ! -e /dev/ipmi/0 ] && [ ! -e /dev/ipmidev/0 ]; then
-    # Local mode needs the host's IPMI device, which the controller checks for
-    # before anything else. Detection itself is covered by the cases above
-    skip_test "no local IPMI device to run local mode against"
-    return 0
-  fi
+  # Local mode needs the host's IPMI device, which the controller checks for before
+  # anything else. This case used to skip on every machine that has none, which is
+  # every CI machine : provide_local_ipmi_device() gives the controller one inside
+  # this run's temporary directory instead, so it runs everywhere
+  provide_local_ipmi_device
 
   export IDRAC_HOST="local"
   export CPU_TEMPERATURE_THRESHOLD="auto"
@@ -184,7 +183,7 @@ function test_an_explicit_value_is_reported_without_a_provenance() {
   assert_not_contains "$OUTPUT" "CPU temperature threshold: 65°C (" "a value the user set needs no explanation"
 }
 
-function test_a_padded_value_is_read_as_decimal_not_octal() {
+function test_a_padded_threshold_is_read_as_decimal_not_octal() {
   export CPU_TEMPERATURE_THRESHOLD=050
   assert_startup_reports 'CPU temperature threshold: 50°C' "050 is 50°C, not an invalid octal number"
 }

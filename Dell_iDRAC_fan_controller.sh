@@ -53,6 +53,13 @@ else
   readonly NETWORK_MODE=true
 fi
 
+# Resolve where the CPU temperatures will be read from. The iDRAC is the source in every case where it
+# can be one; lm-sensors only ever takes over on an iDRAC that drives the fans but reports no CPU
+# temperature at all, or when the user names it explicitly
+# (see https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)
+resolve_CPU_temperature_source "$CPU_TEMPERATURE_SOURCE" "$NETWORK_MODE"
+readonly CPU_TEMPERATURE_SOURCE
+
 # Resolve the CPU temperature threshold. "auto" (the default) asks the CPUs themselves, through lm-sensors,
 # for the "high" temperature defined by their manufacturer : that value describes the actual hardware being
 # cooled, unlike a single fixed threshold shared by every CPU model
@@ -123,6 +130,7 @@ echo "iDRAC/IPMI host: $IDRAC_HOST"
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: ${CPU_TEMPERATURE_THRESHOLD}°C${CPU_TEMPERATURE_THRESHOLD_SOURCE}"
+echo "CPU temperature source: $CPU_TEMPERATURE_SOURCE_DESCRIPTION"
 # The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
 # forms that would otherwise be logged as "90ss" and "5ms"
 if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
@@ -159,6 +167,7 @@ SLEEP_PROCESS_PID=$!
 # Detect the CPU temperature sensors before entering the monitoring loop, the table header being built
 # from them. The loop then keeps watching for CPUs showing up later, so a partial set read here is not
 # final.
+WAITING_FOR_TEMPERATURE_SENSORS_CYCLES=0
 # The target server may be powered off when the container starts. No sensor can be read then, so keep
 # waiting instead of giving up : this container is expected to outlive its target server being powered
 # off, and exiting there would just make it restart in a loop.
@@ -173,16 +182,54 @@ while true; do
   if $IS_TARGET_SERVER_ANSWERING; then
     # Kept for the first retrieve_temperatures() below, so that detecting the CPUs and taking their
     # first readings cost a single IPMI round-trip and describe the very same instant
-    SDR_TEMPERATURE_DATA=$(retrieve_sdr_temperature_data)
+    SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
     detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
     if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
       break
     fi
 
+    # An empty answer is not an answer : ipmitool returned no sensor line at all, which a busy BMC, a
+    # partial response or an iDRAC still coming up all produce, and which says nothing about what the
+    # server has. It belongs with "not answering yet" below, not with the verdict underneath : the
+    # refusal is about a server that listed its sensors and had no CPU among them
+    if [ -z "$SDR_TEMPERATURE_DATA" ]; then
+      apply_Dell_default_fan_control_profile
+
+      # Repeated on the rhythm the monitoring loop reprints its table header rather than once, so a
+      # container waiting on an iDRAC that never returns anything cannot be mistaken for a hung one
+      if (( WAITING_FOR_TEMPERATURE_SENSORS_CYCLES % TABLE_HEADER_PRINT_INTERVAL == 0 )); then
+        set_log_timestamp TIMESTAMP
+        printf "%19s  No temperature sensor could be read at all, Dell default dynamic fan control profile applied for safety while waiting...\n" "$TIMESTAMP"
+      fi
+      ((WAITING_FOR_TEMPERATURE_SENSORS_CYCLES++))
+
+      wait $SLEEP_PROCESS_PID
+
+      # Start timer in background for next attempt
+      sleep "$CHECK_INTERVAL" &
+      SLEEP_PROCESS_PID=$!
+      continue
+    fi
+
     # The server answers, and answers that it has no readable CPU temperature sensor. Every PowerEdge
     # has at least one CPU, so this is not a state to sit and wait out : an iDRAC that exposes no
-    # processor entity does so on every check, not on this one. Retrying forever would leave a container
-    # that looks alive and supervises nothing.
+    # processor entity does so on every check, not on this one.
+    #
+    # That very conclusion is what makes the fallback safe to engage on this single check rather than on
+    # several agreeing ones : the answer will not change. In local mode this machine is the server, so
+    # its own CPUs can be read instead of the ones its iDRAC refuses to report, which is the whole point
+    # of issue #216. Tried before giving up, and only ever reached once the iDRAC has failed to supply
+    # the one thing the controller cannot do without
+    if engage_lm_sensors_CPU_temperature_fallback; then
+      SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
+      detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
+      if [ ${#DETECTED_CPU_ENTITY_IDS[@]} -gt 0 ]; then
+        break
+      fi
+    fi
+
+    # Neither source has a CPU to offer. Retrying forever would leave a container that looks alive and
+    # supervises nothing.
     #
     # Hand the fans back to Dell before leaving, rather than leave them wherever they were : a previous
     # run of this container may have left the BMC in manual mode, in which case they would stay pinned
