@@ -17,8 +17,6 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Prepare, format and define initial variables
 
-# readonly DELL_FRESH_AIR_COMPLIANCE=45
-
 # The boolean parameters are dispatched by running their value as a command ("if $MONITORING_ONLY_MODE"),
 # an idiom that is only safe once the value is known to be one of the two literals it expects : anything
 # else is read as false without a word, or run as whatever command it happens to name. Validate them
