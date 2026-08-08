@@ -7,12 +7,26 @@
 source functions.sh
 source constants.sh
 
+# Dell's "third-party PCIe card default cooling response" is an OEM command that not every server
+# takes, and the monitoring loop below finds out by sending it and reading the answer rather than by
+# guessing from the model name
+IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+
 # Trap the signals for container exit and run graceful_exit function
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Prepare, format and define initial variables
 
 # readonly DELL_FRESH_AIR_COMPLIANCE=45
+
+# The boolean parameters are dispatched by running their value as a command ("if $MONITORING_ONLY_MODE"),
+# an idiom that is only safe once the value is known to be one of the two literals it expects : anything
+# else is read as false without a word, or run as whatever command it happens to name. Validate them
+# first, before the first IPMI command and before anything reads them. MONITORING_ONLY_MODE especially,
+# since it decides how the check interval just below is bounded and what graceful_exit does on the way out
+validate_boolean_parameter "MONITORING_ONLY_MODE" "$MONITORING_ONLY_MODE"
+validate_boolean_parameter "DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE" "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"
+validate_boolean_parameter "KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT" "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"
 
 # CHECK_INTERVAL paces the whole monitoring loop and is handed straight to sleep, whose exit status the
 # loop never looks at, so an unusable value doesn't stop anything : it makes every cycle return at once
@@ -110,13 +124,6 @@ fi
 # CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
 # instead of counting values, which no longer depends on the server generation
 
-# If server model is Gen 14 (*40) or newer
-if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
-else
-  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
-fi
-
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
@@ -132,7 +139,7 @@ if [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]]; then
 else
   echo "Check interval: $CHECK_INTERVAL"
 fi
-if $MONITORING_ONLY_MODE; then
+if "$MONITORING_ONLY_MODE"; then
   echo "Monitoring only mode: Enabled (no fan control profile will be applied, temperatures will only be logged)"
 else
   echo "Monitoring only mode: Disabled"
@@ -142,6 +149,14 @@ echo ""
 TABLE_HEADER_PRINT_COUNTER=$TABLE_HEADER_PRINT_INTERVAL
 # Set the flag used to check if the active fan control profile has changed
 IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
+# The comment column explains a profile CHANGE, and the first cycle changes nothing:
+# it establishes the profile. Without this, whichever branch the first cycle takes
+# stays silent -- and since the flag above starts at true, the silent one is the
+# fail-safe branch, so a server whose sensors could not be read has its fans handed
+# to Dell's profile with no explanation, which is exactly when the user needs one.
+# No starting value of that flag fixes it: setting it the other way just moves the
+# silence onto the healthy path
+IS_FIRST_MONITORING_CYCLE=true
 # Tracks whether the target server was powered off on the previous cycle, so temperatures can be
 # refreshed right when it powers back on instead of reusing data read before/during the outage
 IS_TARGET_SERVER_POWERED_OFF=false
@@ -325,7 +340,7 @@ while true; do
   if is_any_CPU_overheating; then
     apply_Dell_default_fan_control_profile
 
-    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
+    if ! $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
 
       # is_any_CPU_overheating() collected every CPU concerned, however many of them there are, each
@@ -340,7 +355,7 @@ while true; do
     apply_user_fan_control_profile
 
     # Check if user fan control profile is applied then apply it if not
-    if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED; then
+    if $IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED || $IS_FIRST_MONITORING_CYCLE; then
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=false
       # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included.
       # It says the temperatures are OK rather than that they decreased, because the Dell default profile
@@ -354,20 +369,44 @@ while true; do
     fi
   fi
 
-  # If server model is not Gen 14 (*40) or newer
-  if ! $DELL_POWEREDGE_GEN_14_OR_NEWER; then
+  # The third-party PCIe card Dell default cooling response is an OEM command that not every server
+  # takes : it no longer exists from the 14th generation on, and a blade or a modular sled has no fan
+  # of its own to apply it to. Which servers those are cannot be read from the model name — Dell never
+  # named the AMD, dense and modular models to a scheme a pattern could follow, so a name-based check
+  # told an R6515 or an MX740c apart from an R730 exactly backwards (issue #173).
+  #
+  # So ask the server and report what it answered. A command that failed is not a verdict on its own :
+  # ipmitool exits non-zero both for a command the BMC does not have and for a BMC it never reached, and
+  # only the completion code it prints tells the two apart. The controller therefore stops asking on the
+  # first genuine "I do not have this command", and never on a network outage, however long it lasts
+  if $IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED; then
     # Enable or disable, depending on the user's choice, third-party PCIe card Dell default cooling response
     # No comment will be displayed on the change of this parameter since it is not related to the temperature of any device (CPU, GPU, etc...) but only to the settings made by the user when launching this Docker container
     if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Disabled"
       disable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Disabled"
     else
+      REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Enabled"
       enable_third_party_PCIe_card_Dell_default_cooling_response
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Enabled"
     fi
+    # The status of the command the branch above just ran
+    THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE=$?
 
-    if $MONITORING_ONLY_MODE; then
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+    if [ $THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_EXIT_CODE -eq 0 ]; then
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
+
+      if "$MONITORING_ONLY_MODE"; then
+        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS+=" (not applied: monitoring only mode)"
+      fi
+    elif does_the_server_lack_this_command "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
+      # The BMC answered, and answered that it does not have this command. That will not change while
+      # this container runs, so stop sending it
+      IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+    else
+      # The command did not go through, but nothing says the server refused it : an unreachable iDRAC, a
+      # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
     fi
   fi
 
@@ -377,6 +416,7 @@ while true; do
     TABLE_HEADER_PRINT_COUNTER=0
   fi
   print_temperature_array_line "$CPU_COLUMN_CONTENT_WIDTH" "$INLET_TEMPERATURE" "$CPUS_TEMPERATURES" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
+  IS_FIRST_MONITORING_CYCLE=false
   ((TABLE_HEADER_PRINT_COUNTER++))
 
   wait $SLEEP_PROCESS_PID

@@ -53,3 +53,4 @@ readonly LM_SENSORS_FALLBACK_CONFIRMING_READINGS=3
 # that has genuinely lost a CPU; the cost of concluding too early is dropping a socket that was merely
 # slow to become readable after POST, and monitoring one heat source less until it shows up again
 readonly CPU_REMOVAL_CONFIRMING_READINGS=5
+

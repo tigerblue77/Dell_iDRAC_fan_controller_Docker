@@ -22,6 +22,52 @@ function test_the_controller_applies_the_user_fan_control_profile_on_a_healthy_s
     "Dell's dynamic profile is only applied once, when the container is stopped"
 }
 
+function test_the_very_first_line_says_when_the_server_started_out_hot() {
+  # A server already above its threshold when the container starts. The comment
+  # column explains a profile CHANGE, and the first cycle changes nothing -- it
+  # establishes the profile -- so this stayed silent : Dell's profile applied, and
+  # a bare "-" where the reason belongs.
+  #
+  # The neighbouring case, a server with no readable CPU sensor at all, is already
+  # covered by the startup waiting path and is deliberately not retested here : it
+  # passes with or without this change, so asserting on it would prove nothing
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "80 41"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "CPU 1 temperature is too high, Dell default dynamic fan control profile applied for safety"
+}
+
+function test_the_very_first_line_still_explains_a_healthy_start() {
+  # The branch that already spoke must keep speaking : the fix must not trade one
+  # silence for another
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "40 41"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "user's fan control profile applied."
+}
+
+function test_the_explanation_is_printed_once_not_on_every_cycle() {
+  # It explains a change, so a server that stays hot must not repeat it forever :
+  # that would be the log spam the comment column exists to avoid.
+  #
+  # The second cycle reports a different reading, still above the threshold, so
+  # the harness has a positive signal to wait for. Waiting for the message NOT to
+  # reappear would mean waiting for the poll budget to run out -- eight seconds
+  # per run, and a test whose meaning depends on a timeout rather than on output
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "80 41"
+  export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
+  MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "81 41")
+  export MOCK_IPMITOOL_SDR_SWITCH_AFTER_CALLS=1
+
+  local -r OUTPUT=$(run_controller "81°C")
+
+  assert_contains "$OUTPUT" "81°C" "the second cycle must have been reached"
+  assert_equals "1" "$(printf '%s' "$OUTPUT" | grep -c "CPU 1 temperature is too high")" \
+    "the reason is stated on the cycle that established the profile, then not again"
+}
+
 function test_the_controller_falls_back_on_the_dell_default_profile_when_a_cpu_starts_overheating() {
   # Cold CPUs on the first cycle, CPU 2 above the threshold from the second one :
   # the profile change is what the user must see in the logs
@@ -153,20 +199,100 @@ function test_the_controller_manages_the_third_party_pcie_card_setting_on_gen_13
   fi
 }
 
-function test_the_controller_leaves_the_third_party_pcie_card_setting_alone_on_gen_14_and_newer() {
-  # The Dell OEM command does not exist on Gen 14+, sending it would only produce
-  # a rejection on every single cycle.
-  # KEEP_..._ON_EXIT is set so that the graceful exit does not send that same
-  # command itself : it resets the cooling response whatever the generation, so
-  # leaving it to its default would hide what this test is about
+function test_the_controller_stops_sending_a_command_the_server_refused() {
+  # A Gen 14+ server has no third-party PCIe card cooling response to set, and
+  # says so. The controller must ask once, believe the answer, and never ask
+  # again -- however Dell named the model. An R6515 is a Gen 15 AMD server whose
+  # name carries nothing a pattern could recognize, which is exactly why the
+  # question is put to the server rather than to its name (issue #173)
   export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
-  export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=true
-  simulate_server "PowerEdge R740xd" --cpus 2
+  simulate_server "PowerEdge R6515" --cpus 1
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
 
-  local -r OUTPUT=$(run_controller)
+  # Wait for five table lines, well past the point where the controller gives up,
+  # so that a command still being re-sent would show up in the call log
+  local -r OUTPUT=$(run_controller "" 5)
 
-  assert_contains "$OUTPUT" "Server model: DELL PowerEdge R740xd"
-  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0xce")"
+  assert_contains "$OUTPUT" "Server model: DELL PowerEdge R6515"
+  assert_matches "$OUTPUT" "fan control profile.*Not supported by this server" \
+    "rsp=0xc1 is the BMC saying it does not have the command, which settles it on the first try"
+  # The one asked on the first cycle, plus the one graceful_exit sends on the way
+  # out. That last one is deliberately NOT gated on the conclusion : one refused
+  # command on the way out costs nothing, a setting left behind on a server
+  # nothing monitors any more does
+  assert_equals "2" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "an answered refusal settles it, so the command is never sent again"
+}
+
+function test_a_transient_ipmi_failure_does_not_disable_the_cooling_response_for_good() {
+  # ipmitool exits non-zero both for a command the BMC does not implement and for
+  # a BMC it could not reach. Only the completion code it prints tells the two
+  # apart, and an unreachable iDRAC prints none : an iDRAC being reset or a
+  # momentary network glitch must not permanently disable the setting on a
+  # perfectly healthy server and make the column report the opposite of reality —
+  # exactly the defect this whole change exists to remove
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_server "PowerEdge R730xd" --cpus 2
+  # Refuse the very first cooling response command, then answer normally
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Error: Unable to establish IPMI v2 / RMCP+ session"
+  export MOCK_IPMITOOL_RAW_FAIL_ONLY_ONCE=true
+
+  local -r OUTPUT=$(run_controller "" 4)
+
+  assert_matches "$OUTPUT" "fan control profile.*Disabled" \
+    "the server recovered, so the setting must be applied and reported again"
+  assert_not_contains "$OUTPUT" "Not supported by this server" \
+    "one glitch is not a verdict"
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 4 ]; then
+    pass
+  else
+    fail "the controller must keep sending the command after a transient refusal" \
+      "calls: $(recorded_ipmitool_calls)"
+  fi
+}
+
+function test_an_unreachable_idrac_never_becomes_a_verdict_however_long_it_lasts() {
+  # The counting version of this decision gave up after a fixed number of cycles,
+  # so a long enough outage concluded "Not supported by this server" on a server
+  # that supports it perfectly well. Reading the completion code removes the
+  # deadline entirely : no answer, no verdict, however many cycles go by
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_server "PowerEdge R730xd" --cpus 2
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Error: Unable to establish IPMI v2 / RMCP+ session"
+
+  local -r OUTPUT=$(run_controller "" 6)
+
+  assert_not_contains "$OUTPUT" "Not supported by this server" \
+    "nothing answered, so there is nothing to conclude"
+  assert_matches "$OUTPUT" "fan control profile.*Could not be applied on this cycle" \
+    "the column reports the cycle that failed, without drawing a conclusion from it"
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 6 ]; then
+    pass
+  else
+    fail "the command must keep being retried while the iDRAC is unreachable" \
+      "calls: $(recorded_ipmitool_calls)"
+  fi
+}
+
+function test_the_controller_keeps_applying_a_command_the_server_accepts() {
+  # The other side of the same decision : a server that takes the command must
+  # keep being sent it on every cycle, and the table must show the user's setting
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_server "PowerEdge R730xd" --cpus 2
+
+  local -r OUTPUT=$(run_controller "" 2)
+
+  assert_matches "$OUTPUT" "fan control profile.*Disabled" "the Gen 13 server took the command"
+  assert_not_contains "$OUTPUT" "Not supported by this server"
+  if [ "$(count_ipmitool_calls_matching "raw 0x30 0xce")" -ge 2 ]; then
+    pass
+  else
+    fail "a server that accepts the command should be sent it on every cycle" \
+      "calls: $(recorded_ipmitool_calls)"
+  fi
 }
 
 function test_the_controller_survives_a_recent_server_that_rejects_the_fan_control_commands() {
