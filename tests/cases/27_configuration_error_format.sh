@@ -119,6 +119,34 @@ function test_a_failed_ipmi_connection_reports_as_a_configuration_error() {
   assert_contains "$OUTPUT" "docker-compose.yml" "the error should say where to fix it"
 }
 
+function test_a_missing_ipmi_device_reports_as_a_configuration_error() {
+  # Local mode without the host's IPMI device exposed to the container. IPMI_DEVICE_PATHS
+  # is pointed at paths that cannot exist rather than at /dev, which is machine-global
+  local OUTPUT
+  OUTPUT=$(
+    IPMI_DEVICE_PATHS=("$TEST_TEMPORARY_DIRECTORY/absent-ipmi0" "$TEST_TEMPORARY_DIRECTORY/absent-ipmi1")
+    set_iDRAC_login_string "local" "root" "calvin" 2>&1
+  )
+  local -r EXIT_CODE=$?
+
+  assert_reported_as_a_configuration_error "IDRAC_HOST" "local" "$EXIT_CODE" "$OUTPUT"
+}
+
+function test_the_missing_device_error_points_at_device_rather_than_at_e() {
+  # The reason this refusal was held back from #258 : its fix is in "--device", so the
+  # closing sentence every other parameter shares would send the user to the wrong place
+  local -r OUTPUT=$(
+    IPMI_DEVICE_PATHS=("$TEST_TEMPORARY_DIRECTORY/absent-ipmi0")
+    set_iDRAC_login_string "local" "root" "calvin" 2>&1
+  )
+
+  assert_contains "$OUTPUT" "--device=" "the fix is a device argument, and should be spelled out"
+  assert_contains "$OUTPUT" "devices:" "the compose equivalent should be named too"
+  assert_contains "$OUTPUT" "network mode" "the other way out is to stop asking for local mode"
+  assert_not_contains "$OUTPUT" "\"-e\" arguments" \
+    "the environment variable wording would send the user to the wrong place here"
+}
+
 function test_no_configuration_refusal_is_left_reporting_as_a_single_line() {
   # The point of the block is that it is the only form a refused parameter takes.
   # A refusal added later and wired to print_error_and_exit out of habit is exactly
@@ -127,10 +155,13 @@ function test_no_configuration_refusal_is_left_reporting_as_a_single_line() {
   #
   # Matched on the parameter names rather than on one spelling of the call, a refusal
   # naming its parameter in a variable and one naming it literally being the same
-  # mistake. The device error is the documented exception : it is a configuration
-  # mistake in "--device", where the block's closing sentence about "-e" would send
-  # the user to the wrong place
-  local -r PARAMETERS="FAN_SPEED|CHECK_INTERVAL|CPU_TEMPERATURE_THRESHOLD|CPU_TEMPERATURE_SOURCE|MONITORING_ONLY_MODE|DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE|KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT|PARAMETER_NAME"
+  # mistake.
+  #
+  # "Could not open device" is listed separately because it is the one refusal whose
+  # message names no parameter at all -- adding IDRAC_HOST to the list below does not
+  # reach it, so a revert to the single-line form would slip past a names-only match.
+  # The two cases above cover that revert behaviourally ; this keeps the grep honest
+  local -r PARAMETERS="FAN_SPEED|CHECK_INTERVAL|CPU_TEMPERATURE_THRESHOLD|CPU_TEMPERATURE_SOURCE|IDRAC_HOST|MONITORING_ONLY_MODE|DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE|KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT|PARAMETER_NAME|Could not open device"
 
   local OFFENDERS
   OFFENDERS=$(grep -nE "print_error_and_exit .*($PARAMETERS)" \

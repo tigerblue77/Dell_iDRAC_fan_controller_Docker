@@ -49,7 +49,7 @@ function test_local_mode_stops_the_controller_when_no_ipmi_device_is_exposed() {
   local -r EXIT_CODE=$?
 
   assert_equals 1 "$EXIT_CODE" "local mode without an IPMI device should stop the controller"
-  assert_contains "$OUTPUT" "stop using local mode" "the error should tell the user how to recover"
+  assert_contains "$OUTPUT" "network mode" "the error should tell the user how to recover"
 }
 
 function test_the_error_enumerates_every_path_that_was_looked_for() {

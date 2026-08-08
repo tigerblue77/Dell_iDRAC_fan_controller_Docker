@@ -257,7 +257,13 @@ function set_iDRAC_login_string() {
       # A device path holds no space, so joining on the separator is enough to enumerate them the way
       # the error always has : "/dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0"
       local -r IPMI_DEVICE_PATHS_ENUMERATION="${IPMI_DEVICE_PATHS[*]}"
-      print_error_and_exit "Could not open device at ${IPMI_DEVICE_PATHS_ENUMERATION// / or }, check that you added the device to your Docker container or stop using local mode"
+      # IDRAC_HOST is what is named, it being the parameter that makes the device mandatory : the
+      # device itself is not a parameter the user can be told to correct, only to add
+      print_configuration_error_and_exit "IDRAC_HOST" "$IDRAC_HOST" \
+        "local mode needs the host's IPMI device inside the container. Could not open device at ${IPMI_DEVICE_PATHS_ENUMERATION// / or }, none of them being visible from here" \
+        "Add \"--device=${IPMI_DEVICE_PATHS[0]}\" to your \"docker run\" command, or a \"devices:\" section to
+your docker-compose.yml, then start the container again. Alternatively, set IDRAC_HOST to
+your iDRAC's address to use network mode instead."
     fi
     IDRAC_LOGIN_STRING='open'
   else
@@ -1333,17 +1339,27 @@ function build_fan_control_fallback_comment() {
 # to start is only useful if the reason survives a "docker logs" scroll, hence the block form rather
 # than one line among the startup output -- the user has to be able to see, without reading the source,
 # which parameter is wrong, what it currently is, what is accepted, and where to change it
+#
+# The closing sentence is overridable because not every configuration mistake is made in the same
+# place : almost all of them are environment variables, but exposing the host's IPMI device is a
+# "--device" argument, and sending that user to "-e" would be worse than saying nothing. It defaults
+# to the environment variable wording, which is what every parameter validator wants
 function print_configuration_error_and_exit() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
   local -r EXPECTED="$3"
+  local -r WHERE_TO_FIX_IT="${4:-Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"
+section of your docker-compose.yml, then start the container again.}"
 
   printf "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n" >&2
   printf "  Parameter : %s\n" "$PARAMETER_NAME" >&2
   printf "  Value     : \"%s\"\n" "$VALUE" >&2
   printf "  Expected  : %s\n\n" "$EXPECTED" >&2
-  printf "  Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"\n" >&2
-  printf "  section of your docker-compose.yml, then start the container again.\n\n" >&2
+  # Indented line by line so a closing sentence written across several lines keeps the block's margin
+  printf "%s\n" "$WHERE_TO_FIX_IT" | while IFS= read -r LINE; do
+    printf "  %s\n" "$LINE" >&2
+  done
+  printf "\n" >&2
 
   exit 1
 }
