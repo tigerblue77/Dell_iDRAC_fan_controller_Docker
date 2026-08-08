@@ -10,6 +10,8 @@
 #   ./tests/run_tests.sh --list          # list the test cases without running them
 #   ./tests/run_tests.sh -f temperature  # run the test cases whose name matches
 #   ./tests/run_tests.sh --tap           # emit TAP output for a CI parser
+#   ./tests/run_tests.sh --junit FILE    # write a JUnit XML report
+#   ./tests/run_tests.sh --summary FILE  # write a Markdown report
 #
 # It exits 0 when every test passed, 1 otherwise.
 
@@ -22,6 +24,8 @@ FILTER=""
 LIST_ONLY=false
 TAP_OUTPUT=false
 USE_COLOR=true
+JUNIT_REPORT_FILE=""
+MARKDOWN_SUMMARY_FILE=""
 
 function print_usage() {
   cat << 'EOF'
@@ -30,6 +34,8 @@ Usage: tests/run_tests.sh [option ...]
   -f, --filter PATTERN  only run the test cases whose name matches PATTERN
   -l, --list            list the test cases without running them
       --tap             emit TAP version 13 output
+      --junit FILE      write a JUnit XML report, for a CI that publishes one
+      --summary FILE    append a Markdown report, for $GITHUB_STEP_SUMMARY
       --no-color        disable colored output
   -h, --help            show this help
 EOF
@@ -40,6 +46,8 @@ while [ $# -gt 0 ]; do
     -f | --filter) FILTER="$2"; shift 2 ;;
     -l | --list) LIST_ONLY=true; shift ;;
     --tap) TAP_OUTPUT=true; USE_COLOR=false; shift ;;
+    --junit) JUNIT_REPORT_FILE="$2"; shift 2 ;;
+    --summary) MARKDOWN_SUMMARY_FILE="$2"; shift 2 ;;
     --no-color) USE_COLOR=false; shift ;;
     -h | --help) print_usage; exit 0 ;;
     *) printf 'Unknown option "%s"\n\n' "$1" >&2; print_usage >&2; exit 2 ;;
@@ -66,6 +74,7 @@ source "$TESTS_DIRECTORY/lib/assertions.sh"
 source "$TESTS_DIRECTORY/lib/fixtures.sh"
 source "$TESTS_DIRECTORY/lib/dell_server_catalogue.sh"
 source "$TESTS_DIRECTORY/lib/harness.sh"
+source "$TESTS_DIRECTORY/lib/reports.sh"
 source "$REPO_ROOT/functions.sh"
 source "$REPO_ROOT/constants.sh"
 
@@ -190,19 +199,25 @@ for TEST_CASE in "${SELECTED_TEST_CASES[@]}"; do
   # Each test case runs in its own subshell so that the variables, functions,
   # PATH and working directory it changes cannot leak into the next one
   TEST_CASE_EXIT_CODE=0
+  TEST_CASE_STARTED_AT=$(current_time_in_milliseconds)
   (
     setup_test_context
     cd "$REPO_ROOT" || exit 1
     "$TEST_CASE_NAME"
   ) > "$TEST_TEMPORARY_DIRECTORY/output" 2>&1 || TEST_CASE_EXIT_CODE=$?
+  TEST_CASE_DURATION=$(($(current_time_in_milliseconds) - TEST_CASE_STARTED_AT))
 
   TEST_CASE_ASSERTIONS=$(wc -c < "$TEST_ASSERTIONS_FILE" | tr -d ' ')
   TOTAL_ASSERTIONS=$((TOTAL_ASSERTIONS + TEST_CASE_ASSERTIONS))
   HUMAN_READABLE_NAME="$(humanize_test_case_name "$TEST_CASE_NAME")"
+  TEST_SUITE_NAME="$(humanize_test_file_name "$TEST_FILE")"
+  TEST_FILE_PATH="${TEST_FILE#"$REPO_ROOT"/}"
 
   if [ -f "$TEST_SKIPPED_FILE" ]; then
     ((SKIPPED_TEST_CASES++))
     SKIP_REASON="$(cat "$TEST_SKIPPED_FILE")"
+    record_test_result "$TEST_SUITE_NAME" "$TEST_FILE_PATH" "$TEST_CASE_NAME" "$HUMAN_READABLE_NAME" \
+      "skipped" "$TEST_CASE_DURATION" "$TEST_CASE_ASSERTIONS" "$SKIP_REASON"
     if $TAP_OUTPUT; then
       printf 'ok %d - %s # SKIP %s\n' "$TEST_CASE_INDEX" "$HUMAN_READABLE_NAME" "$SKIP_REASON"
     else
@@ -214,23 +229,28 @@ for TEST_CASE in "${SELECTED_TEST_CASES[@]}"; do
   if [ -s "$TEST_DIAGNOSTICS_FILE" ] || [ "$TEST_CASE_EXIT_CODE" -ne 0 ]; then
     ((FAILED_TEST_CASES++))
     FAILED_TEST_CASE_NAMES+=("$TEST_CASE_NAME")
-    if $TAP_OUTPUT; then
-      printf 'not ok %d - %s\n' "$TEST_CASE_INDEX" "$HUMAN_READABLE_NAME"
-      sed 's/^/# /' "$TEST_DIAGNOSTICS_FILE"
-    else
-      printf '  %sfail%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$HUMAN_READABLE_NAME"
-      sed "s/^/       /" "$TEST_DIAGNOSTICS_FILE"
-    fi
     # A non-zero exit code with no recorded failure means the test case itself
     # crashed, which is worth showing whatever it wrote
+    TEST_CASE_DIAGNOSTICS="$(cat "$TEST_DIAGNOSTICS_FILE")"
     if [ "$TEST_CASE_EXIT_CODE" -ne 0 ] && [ ! -s "$TEST_DIAGNOSTICS_FILE" ]; then
-      printf '       test case exited with code %d\n' "$TEST_CASE_EXIT_CODE"
-      sed 's/^/       /' "$TEST_TEMPORARY_DIRECTORY/output"
+      TEST_CASE_DIAGNOSTICS="test case exited with code $TEST_CASE_EXIT_CODE"$'\n'"$(cat "$TEST_TEMPORARY_DIRECTORY/output")"
+    fi
+    record_test_result "$TEST_SUITE_NAME" "$TEST_FILE_PATH" "$TEST_CASE_NAME" "$HUMAN_READABLE_NAME" \
+      "failed" "$TEST_CASE_DURATION" "$TEST_CASE_ASSERTIONS" "$TEST_CASE_DIAGNOSTICS"
+
+    if $TAP_OUTPUT; then
+      printf 'not ok %d - %s\n' "$TEST_CASE_INDEX" "$HUMAN_READABLE_NAME"
+      printf '%s\n' "$TEST_CASE_DIAGNOSTICS" | sed 's/^/# /'
+    else
+      printf '  %sfail%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$HUMAN_READABLE_NAME"
+      printf '%s\n' "$TEST_CASE_DIAGNOSTICS" | sed 's/^/       /'
     fi
     continue
   fi
 
   ((PASSED_TEST_CASES++))
+  record_test_result "$TEST_SUITE_NAME" "$TEST_FILE_PATH" "$TEST_CASE_NAME" "$HUMAN_READABLE_NAME" \
+    "passed" "$TEST_CASE_DURATION" "$TEST_CASE_ASSERTIONS" ""
   if $TAP_OUTPUT; then
     printf 'ok %d - %s\n' "$TEST_CASE_INDEX" "$HUMAN_READABLE_NAME"
   else
@@ -254,6 +274,17 @@ if ! $TAP_OUTPUT; then
     printf '\nRe-run a single failing test case with:\n'
     printf '  tests/run_tests.sh --filter %s\n' "${FAILED_TEST_CASE_NAMES[0]}"
   fi
+fi
+
+# The reports are written whatever the outcome : a red run is the one whose
+# report matters most
+if [ -n "$JUNIT_REPORT_FILE" ]; then
+  write_junit_report "$JUNIT_REPORT_FILE" ||
+    printf 'Could not write the JUnit report to "%s"\n' "$JUNIT_REPORT_FILE" >&2
+fi
+if [ -n "$MARKDOWN_SUMMARY_FILE" ]; then
+  write_markdown_summary "$MARKDOWN_SUMMARY_FILE" ||
+    printf 'Could not write the Markdown summary to "%s"\n' "$MARKDOWN_SUMMARY_FILE" >&2
 fi
 
 [ "$FAILED_TEST_CASES" -eq 0 ]

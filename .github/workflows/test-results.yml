@@ -1,0 +1,55 @@
+name: Test results
+
+# Publishes the test results of a pull request opened from a fork.
+#
+# The "Tests" workflow runs on the fork's code, so GitHub gives it a read-only
+# token : it can run the suite but it cannot comment on the pull request with
+# what the suite found. This workflow is triggered by its completion instead. It
+# runs from master, on trusted code, with a token that can write, and it never
+# executes anything coming from the fork : it only reads the JUnit reports the
+# other workflow uploaded.
+#
+# Pull requests opened from a branch of this repository are published by the
+# "Tests" workflow itself, which is why this one skips them.
+#
+# /!\ Like every workflow_run workflow, this one only starts working once it is
+# on the default branch : a pull request adding it does not run it.
+
+on:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  publish-test-results:
+    name: Publish the test results of a fork's pull request
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion != 'skipped' &&
+      github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name
+    permissions:
+      checks: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Download the test results of the run that just finished
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: artifacts
+
+      - name: Publish the test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          # The run this one reports on is not the one it belongs to, so what to
+          # comment on has to be spelled out
+          commit: ${{ github.event.workflow_run.head_sha }}
+          event_file: artifacts/Event File/event.json
+          event_name: ${{ github.event.workflow_run.event }}
+          files: artifacts/**/*.xml
+          check_name: Test results
+          check_run_annotations: all tests, skipped tests

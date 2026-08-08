@@ -9,6 +9,9 @@ on:
       - "**/README.md"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Run the test suite
@@ -18,8 +21,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The Markdown summary is rendered on this job's page, the JUnit report is
+      # what the publish job turns into the pull request comment
       - name: Run the test suite
-        run: ./tests/run_tests.sh
+        run: |
+          ./tests/run_tests.sh \
+            --junit test-results/on-the-runner.xml \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the test results
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: Test Results (on the runner)
+          path: test-results/*.xml
 
   test-in-docker-image:
     name: Run the test suite inside the Docker image
@@ -38,8 +53,71 @@ jobs:
       # skip on the runner
       - name: Run the test suite inside the image
         run: |
+          mkdir -p test-results
           docker run --rm \
             --entrypoint /bin/bash \
             --volume "$PWD/tests:/app/tests:ro" \
+            --volume "$PWD/test-results:/app/test-results" \
             dell_idrac_fan_controller:test \
-            /app/tests/run_tests.sh
+            /app/tests/run_tests.sh \
+            --junit /app/test-results/in-the-docker-image.xml \
+            --summary /app/test-results/summary.md
+
+      # Written inside the container, so it is appended to this job's summary
+      # from here rather than directly
+      - name: Add the test suite summary to this job's page
+        if: ${{ !cancelled() }}
+        run: cat test-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload the test results
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: Test Results (in the Docker image)
+          path: test-results/*.xml
+
+  publish-test-results:
+    name: Publish the test results
+    needs: [test, test-in-docker-image]
+    runs-on: ubuntu-latest
+    # A pull request opened from a fork runs with a read-only token, so it cannot
+    # publish anything from here : the "Test results" workflow does it instead,
+    # from master, once this one has finished
+    if: >-
+      !cancelled() && (
+        github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository
+      )
+    permissions:
+      checks: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Download the test results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Test Results (*)
+          path: test-results
+
+      - name: Publish the test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: test-results/**/*.xml
+          check_name: Test results
+          # Lists every test case in the check run, not only the failing ones,
+          # so the report says what was tested and not only what broke
+          check_run_annotations: all tests, skipped tests
+
+  # Kept for the "Test results" workflow : a run triggered by a fork's pull
+  # request cannot read the pull request it came from, so the event that started
+  # it is handed over as an artifact
+  event-file:
+    name: Upload the event file
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Upload the event file
+        uses: actions/upload-artifact@v4
+        with:
+          name: Event File
+          path: ${{ github.event_path }}
