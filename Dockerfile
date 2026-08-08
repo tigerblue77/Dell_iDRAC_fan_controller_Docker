@@ -13,7 +13,7 @@ ADD healthcheck.sh /app/healthcheck.sh
 ADD Dell_iDRAC_fan_controller.sh /app/Dell_iDRAC_fan_controller.sh
 ADD supervisor.sh /app/supervisor.sh
 
-RUN chmod 0777 /app/functions.sh /app/healthcheck.sh /app/Dell_iDRAC_fan_controller.sh /app/supervisor.sh
+RUN chmod 0755 /app/functions.sh /app/healthcheck.sh /app/Dell_iDRAC_fan_controller.sh /app/supervisor.sh
 
 WORKDIR /app
 
