@@ -1,0 +1,159 @@
+name: Auto-update pull request branches
+
+# "Require branches to be up to date before merging" leaves every other open
+# pull request one commit behind master as soon as one of them is merged, and
+# each of them then needs its "Update branch" button pressed by hand. This
+# workflow presses it for them after every merge, for the pull requests that can
+# be updated without a conflict. The ones that do conflict are left alone :
+# resolving them is a decision only their author can make.
+#
+# GitHub's own answer to this problem is the merge queue, which tests and merges
+# pull requests against an up-to-date master without anyone updating anything.
+# It is not an option here : it requires a repository owned by an organization,
+# and this one belongs to a personal account.
+#
+# /!\ The update cannot be pushed with the default GITHUB_TOKEN. Nothing that
+# token pushes fires a "pull_request" event, so the "Tests" workflow would never
+# run on the head commit the update creates and the required checks would stay
+# at "Expected — Waiting for status to be reported", blocking the very merge
+# this workflow exists to unblock. It uses the PULL_REQUESTS_UPDATE_TOKEN secret
+# instead : a fine-grained personal access token, whose resource owner is this
+# account and whose repository access covers this repository, granting the
+# "Contents : read and write" and "Pull requests : read and write" repository
+# permissions. Create it in Settings > Developer settings > Personal access
+# tokens > Fine-grained tokens, then store it in Settings > Secrets and
+# variables > Actions > New repository secret
+
+on:
+  push:
+    branches: [master]
+  # Lets the whole set be caught up by hand, after the token expires and is
+  # renewed for instance
+  workflow_dispatch:
+
+# Everything is done with the personal access token, so the token of the run
+# itself needs nothing at all
+permissions: {}
+
+# Two merges landing one after the other would otherwise walk the same list of
+# pull requests at the same time, the second run racing the updates the first
+# one is still pushing. Queueing the runs rather than cancelling them is what
+# makes the last one see the final state of master
+concurrency:
+  group: auto-update-pull-request-branches
+  cancel-in-progress: false
+
+jobs:
+  update-pull-request-branches:
+    name: Update the pull requests master left behind
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Update every conflict-free pull request that is behind master
+        env:
+          GH_TOKEN: ${{ secrets.PULL_REQUESTS_UPDATE_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          MASTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The PULL_REQUESTS_UPDATE_TOKEN secret is empty or missing, so nothing can be updated. The comment at the top of this workflow says which token to create and why the default one cannot be used."
+            exit 1
+          fi
+
+          # Draft pull requests are skipped. They are not waiting to be merged,
+          # and several of them live in forks where an unasked-for merge commit
+          # after each push to master would be noise rather than help.
+          # Pull requests based on another branch are skipped too : this run
+          # only knows that master moved
+          open_pull_requests="$(
+            gh pr list \
+              --repo "$REPOSITORY" \
+              --base master \
+              --state open \
+              --limit 100 \
+              --json number,isDraft
+          )"
+          mapfile -t pull_requests < <(
+            jq --raw-output '.[] | select(.isDraft | not) | .number' <<< "$open_pull_requests"
+          )
+
+          if [ "${#pull_requests[@]}" -eq 0 ]; then
+            echo "No open pull request targets master."
+            exit 0
+          fi
+
+          echo "Considering ${#pull_requests[@]} open pull request(s) against master $MASTER_SHA."
+
+          updated=0
+          for number in "${pull_requests[@]}"; do
+            # GitHub computes mergeability lazily, and the push that started
+            # this run invalidated it for every open pull request : the answer
+            # is "null" until the background job that recomputes it is done, so
+            # the first read is really what asks the question and the next ones
+            # wait for the answer
+            mergeable="null"
+            head_sha=""
+            for _ in 1 2 3 4 5; do
+              if ! pull_request="$(gh api "repos/$REPOSITORY/pulls/$number")"; then
+                break
+              fi
+              mergeable="$(jq --raw-output '.mergeable | tostring' <<< "$pull_request")"
+              head_sha="$(jq --raw-output '.head.sha' <<< "$pull_request")"
+              [ "$mergeable" != "null" ] && break
+              sleep 5
+            done
+
+            if [ -z "$head_sha" ]; then
+              echo "::warning::Pull request #$number could not be read, skipping it."
+              continue
+            fi
+
+            if [ "$mergeable" = "null" ]; then
+              echo "::warning::Pull request #$number : GitHub did not say in time whether it can be merged, skipping it. The next push to master will try again."
+              continue
+            fi
+
+            if [ "$mergeable" != "true" ]; then
+              echo "Pull request #$number conflicts with master, leaving it to its author."
+              continue
+            fi
+
+            # An open pull request has its head commit mirrored into this
+            # repository as refs/pull/<number>/head, so comparing by SHA works
+            # for a pull request opened from a fork too, and avoids having to
+            # put a branch name holding slashes in the URL.
+            # In "A...B", behind_by counts the commits A has and B does not :
+            # exactly how far behind master this pull request is
+            if ! behind_by="$(gh api "repos/$REPOSITORY/compare/$MASTER_SHA...$head_sha" --jq '.behind_by')" ||
+               ! [[ "$behind_by" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Pull request #$number could not be compared with master, skipping it."
+              continue
+            fi
+
+            if [ "$behind_by" -eq 0 ]; then
+              echo "Pull request #$number is already up to date."
+              continue
+            fi
+
+            # expected_head_sha makes the update a no-op rather than a surprise
+            # if the author pushed to the branch since it was read above
+            if gh api \
+              --method PUT \
+              "repos/$REPOSITORY/pulls/$number/update-branch" \
+              --raw-field "expected_head_sha=$head_sha" \
+              --silent; then
+              echo "Pull request #$number was $behind_by commit(s) behind master and has been updated."
+              updated=$((updated + 1))
+            else
+              # A pull request opened from a fork can only be updated from here
+              # if its author left "Allow edits by maintainers" ticked, and the
+              # token must be allowed to write to the fork as well. Neither is
+              # something this repository can decide, so a refusal is reported
+              # and the run carries on with the next pull request
+              echo "::warning::Pull request #$number is $behind_by commit(s) behind master but could not be updated. If it comes from a fork, its author has to tick \"Allow edits by maintainers\" ; otherwise it has to be updated by hand."
+            fi
+          done
+
+          echo "Updated $updated pull request(s)." >> "$GITHUB_STEP_SUMMARY"
