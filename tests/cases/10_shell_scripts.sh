@@ -315,6 +315,47 @@ function test_the_env_example_offers_every_parameter_the_readme_documents() {
   done < <(grep -oE '^- `[A-Z_]+`' "$REPO_ROOT/README.md" | tr -d '`' | sed 's/^- //')
 }
 
+function test_the_suites_own_readme_lists_every_case_file() {
+  # The three guards above watch the documentation the users read. This one
+  # watches the documentation the contributors read : tests/README.md holds a
+  # "What is covered" table with one row per case file, and it is what somebody
+  # adding a test consults to decide where the test goes.
+  #
+  # Nothing compared the table with the directory, so it silently fell three
+  # files behind -- and a coverage table that omits a file is worse than no
+  # table, since it reads as "this is everything" while it is not. The runner
+  # discovers case files on its own, so an unlisted file still runs : the drift
+  # is invisible until somebody notices the table is short
+  if [ ! -f "$TESTS_DIRECTORY/README.md" ]; then
+    skip_test "no README next to the test cases"
+    return 0
+  fi
+
+  # Space padded on both ends so a file name can be matched whole
+  local LISTED_FILES=" "
+  local LINE
+  while IFS= read -r LINE; do
+    LISTED_FILES+="$LINE "
+  done < <(grep -oE 'cases/[0-9A-Za-z_]+\.sh' "$TESTS_DIRECTORY/README.md" | sort -u)
+
+  local CASE_FILE
+  for CASE_FILE in "$TESTS_DIRECTORY"/cases/*.sh; do
+    [ -f "$CASE_FILE" ] || continue
+
+    assert_contains "$LISTED_FILES" " cases/$(basename "$CASE_FILE") " \
+      "cases/$(basename "$CASE_FILE") runs in every suite, the README's coverage table should say what it checks"
+  done
+
+  local LISTED_FILE
+  for LISTED_FILE in $LISTED_FILES; do
+    if [ -f "$TESTS_DIRECTORY/$LISTED_FILE" ]; then
+      pass
+    else
+      fail "the README's coverage table lists $LISTED_FILE, which does not exist"
+    fi
+  done
+}
+
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
   local OUTPUT
   OUTPUT=$(bash "$REPO_ROOT/healthcheck.sh" 2>&1)
