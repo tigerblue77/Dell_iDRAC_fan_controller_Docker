@@ -8,6 +8,7 @@ function test_every_shell_script_has_a_valid_syntax() {
   local SCRIPT
   for SCRIPT in \
     "$REPO_ROOT"/*.sh \
+    "$REPO_ROOT"/.github/*.sh \
     "$TESTS_DIRECTORY"/*.sh \
     "$TESTS_DIRECTORY"/lib/*.sh \
     "$TESTS_DIRECTORY"/cases/*.sh \
