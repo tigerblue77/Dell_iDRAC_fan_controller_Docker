@@ -86,7 +86,7 @@ docker run -d \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
-  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
+  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -108,7 +108,7 @@ docker run -d \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
-  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
+  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -134,7 +134,7 @@ services:
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
-      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -161,7 +161,7 @@ services:
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
-      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -255,6 +255,8 @@ All parameters are optional as they have default values (including default iDRAC
   iDRAC unreachable escalation: After 12 checks (60s, rounded up to whole check intervals)
   ```
 - `MAXIMUM_CONSECUTIVE_IPMI_FAILURES` parameter expresses that same threshold as a raw number of consecutive unreachable cycles instead of a duration. **Default** value is (empty), the duration above being used. When set it takes precedence, being the more specific of the two. Prefer the duration unless you need the count exactly: it keeps meaning the same thing when `CHECK_INTERVAL` changes, where a cycle count silently would not.
+  - The minimum is **1**, `0` being refused: nothing can be concluded from fewer than one observed failure. Use an empty value, not `0`, to disable the escalation.
+  - `1` is accepted but **warned about** at startup, since it means exiting on the very first unreachable reading — on any transient glitch. It is legitimate on a rock-solid LAN, which is why it is a warning rather than a refusal; the same warning fires when `MAXIMUM_IPMI_UNREACHABLE_DURATION` resolves to a single check.
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
 - `MONITORING_ONLY_MODE` parameter is a boolean that allows to run the container in a read-only, monitoring-only mode: temperatures are still read and logged at each `CHECK_INTERVAL`, but no fan control profile (neither the user-defined one nor Dell's default) and no third-party PCIe card cooling response change is ever sent to the server. Useful to observe temperatures and validate your `FAN_SPEED`/`CPU_TEMPERATURE_THRESHOLD` values before letting the container actually take control of the fans. **Default** value is false.
@@ -420,7 +422,7 @@ export FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x6
 export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
 export CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
 export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
-export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty>
 export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 export MONITORING_ONLY_MODE=<true or false>
