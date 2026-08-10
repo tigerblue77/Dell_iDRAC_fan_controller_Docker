@@ -254,6 +254,34 @@ function test_the_controller_stops_sending_a_command_the_server_refused() {
     "an answered refusal settles it, so the command is never sent again"
 }
 
+function test_a_cooling_response_refused_for_want_of_privilege_names_the_account_and_stops() {
+  # An iDRAC account without the privilege level answers 0xd4 to this command, on every cycle, for
+  # ever : the credentials do not change while the container runs. Before this was told apart, it fell
+  # into the "could not be applied on this cycle" branch and was re-sent for the life of the container,
+  # so the column repeated a transient-sounding message about a condition no cycle would ever clear.
+  #
+  # What matters just as much is what it must NOT say. The server has the command -- this is not a Gen
+  # 14+ machine that dropped it -- so reporting "not supported by this server" would send the reader to
+  # check hardware that is perfectly fine instead of the iDRAC user they can actually fix
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  simulate_server "PowerEdge R730xd" --cpus 2
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xd4): Insufficient privilege level"
+
+  local -r OUTPUT=$(run_controller "" 5)
+
+  assert_matches "$OUTPUT" "fan control profile.*Refused: this account lacks the privilege level" \
+    "the column has to name the account, which is the thing the user can change"
+  assert_not_contains "$OUTPUT" "Not supported by this server" \
+    "the server has the command : saying otherwise points at hardware that is fine"
+  assert_not_contains "$OUTPUT" "Could not be applied on this cycle" \
+    "nothing about this clears on a later cycle, so it must not be reported as if it might"
+  # The one asked on the first cycle, plus the one graceful_exit sends on the way out, exactly as an
+  # answered "I do not have this command" behaves
+  assert_equals "2" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "an answered refusal settles it, so the command is never sent again"
+}
+
 function test_a_transient_ipmi_failure_does_not_disable_the_cooling_response_for_good() {
   # ipmitool exits non-zero both for a command the BMC does not implement and for
   # a BMC it could not reach. Only the completion code it prints tells the two

@@ -17,6 +17,10 @@ readonly THIRD_PARTY_PCIE_CARD_COMMAND="raw 0x30 0xce 0x00 0x16 0x05"
 # What an iDRAC 9 running firmware >= 3.30.30.30 answers to a fan control command
 readonly REJECTED_BY_FIRMWARE_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state"
 
+# What a BMC answers when the command exists but the account may not run it. Reported on an R550 in
+# issue #29, where every raw command answered "Insufficient privilege level"
+readonly REFUSED_FOR_PRIVILEGE_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xd4): Insufficient privilege level"
+
 function test_the_user_fan_control_profile_enables_manual_control_then_sets_the_speed() {
   DECIMAL_FAN_SPEED=30
   HEXADECIMAL_FAN_SPEED="0x1e"
@@ -158,6 +162,31 @@ function test_an_unsupported_third_party_pcie_card_command_stays_silent() {
 
   capture_output disable_third_party_PCIe_card_Dell_default_cooling_response
   assert_empty "$CAPTURED_OUTPUT" "an unsupported disable command must not flood the logs"
+}
+
+function test_a_privilege_refusal_is_told_apart_from_a_command_the_server_does_not_have() {
+  # Two answers that both come from the BMC and both stop the command being sent, but that mean
+  # opposite things to whoever reads the table. 0xc1 and 0xd5 say the server has no such command ;
+  # 0xd4 says it has it and this account may not run it. Reporting the second as the first sends a
+  # user to check hardware that is fine instead of the iDRAC account they can actually change
+  local -r LACKS_IT="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
+
+  assert_command_succeeds "0xc1 is the server saying it does not have the command" \
+    does_the_server_lack_this_command "$LACKS_IT"
+  assert_command_fails "0xc1 is not a privilege problem" \
+    does_the_command_need_a_higher_privilege_level "$LACKS_IT"
+
+  assert_command_succeeds "0xd4 is the account lacking the privilege level" \
+    does_the_command_need_a_higher_privilege_level "$REFUSED_FOR_PRIVILEGE_STDERR"
+  assert_command_fails "0xd4 must never be read as the server lacking the command" \
+    does_the_server_lack_this_command "$REFUSED_FOR_PRIVILEGE_STDERR"
+
+  # And neither of them is a verdict, so that the command keeps being retried
+  local -r NEVER_REACHED="Error: Unable to establish IPMI v2 / RMCP+ session"
+  assert_command_fails "a BMC that was never reached said nothing about the command" \
+    does_the_server_lack_this_command "$NEVER_REACHED"
+  assert_command_fails "nor about the privilege level" \
+    does_the_command_need_a_higher_privilege_level "$NEVER_REACHED"
 }
 
 function test_monitoring_only_mode_never_changes_the_third_party_pcie_card_cooling_response() {
