@@ -38,7 +38,13 @@ jobs:
   check:
     name: Check whether the base image changed
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Was 5, which no longer fits what this job does. The retry ladder on the
+    # base image digest sleeps 60s then 300s before its last attempt, so six
+    # minutes of it are spent waiting on purpose ; at 5 the job was killed
+    # mid-sleep and the third attempt could never run. The release walk above it
+    # also costs one registry read per version tag that has never been
+    # published. Fifteen leaves room for both and still bounds a wedged job
+    timeout-minutes: 15
     permissions:
       contents: read
       # Reading the published image back, see the login step below
