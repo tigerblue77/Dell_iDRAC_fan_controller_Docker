@@ -11,9 +11,10 @@ on:
 
 # Without this block the whole workflow runs on the repository-wide default
 # token. This one grants only what its two publishing steps need : "contents"
-# for the GitHub release "Generate release note" creates, "packages" for the
-# image pushed to ghcr.io. Everything else the default token may carry
-# (issues, pull requests, deployments...) is dropped
+# for the GitHub release "Generate release note" creates and for the lookup that
+# decides whether it has to, "packages" for the image pushed to ghcr.io.
+# Everything else the default token may carry (issues, pull requests,
+# deployments...) is dropped
 permissions:
   contents: write
   packages: write
@@ -356,9 +357,45 @@ jobs:
       # v1.52 to v1.69, behind a GitHub release with nothing to pull from
       # either registry. Published only once the push went through, a release
       # that fails simply does not exist, and re-firing the workflow from the
-      # Actions tab publishes it for real : re-firing a tag that already has a
-      # release updates that release in place, so recovering them costs nothing
+      # Actions tab publishes it for real.
+      #
+      # What re-firing a tag that ALREADY has a release costs is the part this
+      # comment used to get wrong. It does not update the release in place : the
+      # action appends to it. Asked only to generate notes it is handed no body
+      # of its own, so it re-sends the body already there and appends the notes
+      # it generates to that, and every re-fire added one more copy of the
+      # changelog - v1.71 still carries two - which would eventually have
+      # happened to the upgrade notes v1.72 and v1.75 carry above theirs
+      # (issue #337).
+      #
+      # So the note is written once, when the version has none, and a re-fire
+      # leaves the release it finds alone : what a re-fire is fired for is the
+      # image, and a changelog that has already gone out is not something to
+      # rewrite out of today's pull request titles. Deleting the release is what
+      # asks for a new note. See .github/release_note_already_exists.sh
+      - name: Check whether this version already has its release note
+        id: release_note
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The two answers are told apart by exit code, and which one sits on 1
+          # is deliberate : 1 is also what a script exits with when something
+          # inside it breaks under "set -e", so it carries the answer that costs
+          # the least to be wrong about. A run that dies in there writes a note
+          # that may already exist ; the other way round it would leave a
+          # published version announced by nothing, on a green run. Anything
+          # else is not an answer at all and fails the step
+          STATUS=0
+          .github/release_note_already_exists.sh "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" || STATUS=$?
+          case "$STATUS" in
+            0) echo "value=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "value=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$STATUS" ;;
+          esac
+
       - name: Generate release note
+        if: steps.release_note.outputs.value == 'true'
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true

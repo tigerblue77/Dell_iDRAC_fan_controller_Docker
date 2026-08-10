@@ -25,6 +25,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, rendered from `README.md` by a workflow no pull request fires either |
 | `cases/14_latest_tag_reconciliation.sh` | Which version `latest` ends up on after a release, against a stubbed registry. Skipped where `jq` is missing, the one thing the script needs that the suite does not |
 | `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified |
+| `cases/16_release_note_publication.sh` | Whether a version tag still needs its GitHub release note written, against a stubbed GitHub : the decision that keeps a re-fired release from appending a second copy of its changelog to the one it already carries |
 | `cases/17_reports.sh` | The JUnit XML and Markdown reports, whose consumer is a parser rather than a reader |
 | `cases/20_fan_speed_conversions.sh` | `FAN_SPEED` given as a percentage or as a hexadecimal byte |
 | `cases/21_fan_speed_validation.sh` | `FAN_SPEED` values that would reach `ipmitool` as an unintended duty cycle, refused before the first command |
