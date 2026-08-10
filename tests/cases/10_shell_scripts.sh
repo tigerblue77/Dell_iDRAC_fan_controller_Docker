@@ -377,6 +377,49 @@ function test_the_readme_documents_the_plausible_temperature_threshold_window() 
     ".env.example should carry the same unit and range, being the other file users copy from"
 }
 
+function test_the_readme_documents_the_fan_speed_range() {
+  # The range validate_fan_speed_parameter() enforces was stated in exactly one
+  # sentence of the README -- which spelled it "hexadecimaladecimal" -- and in
+  # none of the six placeholders a user copies into a "docker run", a compose file
+  # or a .env. A bound met for the first time as a container refusing to start is
+  # the defect #326 was about; this is the same one, one parameter over (#328)
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  assert_not_empty "$MINIMUM_FAN_SPEED_PERCENTAGE" \
+    "constants.sh should define the bottom of the fan speed range" || return 1
+  assert_not_empty "$MAXIMUM_FAN_SPEED_PERCENTAGE" \
+    "constants.sh should define the top of the fan speed range" || return 1
+
+  # Derived rather than written out, so that the documentation is held to the same
+  # bound in both notations. One substitution per statement, as everywhere else
+  local -r MINIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MINIMUM_FAN_SPEED_PERCENTAGE")
+  local -r MAXIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MAXIMUM_FAN_SPEED_PERCENTAGE")
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  # The parameter's own bullet, matched with its parentheses so that the assertion
+  # cannot be satisfied by the placeholders further up the file
+  assert_contains "$README_CONTENT" \
+    "(from $MINIMUM_FAN_SPEED_PERCENTAGE to $MAXIMUM_FAN_SPEED_PERCENTAGE%)" \
+    "the README's FAN_SPEED bullet should state the percentage range the validator enforces"
+  assert_contains "$README_CONTENT" \
+    "(from $MINIMUM_HEXADECIMAL_FAN_SPEED to $MAXIMUM_HEXADECIMAL_FAN_SPEED)" \
+    "and the same bound in the hexadecimal notation it also accepts"
+
+  # The placeholders, which is where a user meets the parameter first : they carry
+  # the unit as well, "%" being what says 5 is a duty cycle rather than a speed
+  local -r PLACEHOLDER="in %, from $MINIMUM_FAN_SPEED_PERCENTAGE to $MAXIMUM_FAN_SPEED_PERCENTAGE, or hexadecimal from $MINIMUM_HEXADECIMAL_FAN_SPEED to $MAXIMUM_HEXADECIMAL_FAN_SPEED"
+  assert_contains "$README_CONTENT" "$PLACEHOLDER" \
+    "the README's FAN_SPEED placeholders should carry the unit and both ranges"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should carry the same, being the other file users copy from"
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a

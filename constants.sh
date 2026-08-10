@@ -21,6 +21,17 @@ readonly FALLBACK_CPU_TEMPERATURE_THRESHOLD=50
 readonly MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=20
 readonly MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=125
 
+# Bounds of the fan speed, as a percentage of the fans' duty cycle. Dell's raw command takes a byte,
+# so the same setting is also accepted in hexadecimal, and the maximum is 0x64 in that notation --
+# derived from this number rather than written beside it, two spellings of one bound being one more
+# thing that can drift apart.
+#
+# Kept here rather than written into validate_fan_speed_parameter() for the same reason the check
+# interval's bounds are : the documentation states them too, and nothing could compare the two while
+# they lived only in the validator. test_the_readme_documents_the_fan_speed_range() now does (#328)
+readonly MINIMUM_FAN_SPEED_PERCENTAGE=0
+readonly MAXIMUM_FAN_SPEED_PERCENTAGE=100
+
 # Bounds the check interval is measured against, in seconds. The interval is the controller's reaction
 # time : between two checks the fans stay pinned at FAN_SPEED with Dell's own dynamic fan control
 # disabled, so it is also the longest the server can heat up before anything raises them again.
