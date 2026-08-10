@@ -1,4 +1,13 @@
-FROM ubuntu:latest
+# Named so the publishing workflows can build from the exact base digest they
+# resolved and recorded as org.opencontainers.image.base.digest, instead of
+# letting this line resolve "latest" a second time. Those two resolutions are
+# minutes apart, and when Canonical published in between, the image carried a
+# label naming a base it was not built from - which the nightly base image
+# refresh then compares against the live digest and concludes "unchanged" on an
+# image that is not. The default keeps a plain "docker build ." working, which
+# is how the test suite builds it
+ARG BASE_IMAGE=ubuntu:latest
+FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.authors="tigerblue77"
 
