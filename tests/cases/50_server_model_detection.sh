@@ -107,6 +107,54 @@ function test_the_board_field_fallback_reads_the_server_and_not_the_first_device
   assert_not_contains "$SERVER_MODEL" "PWR SPLY" "the power supply's board product must not answer for the server"
 }
 
+function test_an_inventory_naming_no_builtin_device_is_still_read_whole() {
+  # The identification is narrowed to the builtin FRU device's own section, which assumes the inventory
+  # labels it. Nothing guarantees every ipmitool build and every BMC does, and a server that used to be
+  # identified must not stop being just because its output is shaped differently -- so an inventory
+  # naming no builtin device falls back to being read whole, exactly as before that narrowing.
+  # This holds that fallback, which is otherwise invisible : it only ever runs on outputs no other case
+  # produces, and a narrowing that silently identified nothing would still leave the suite green
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=' Product Manufacturer  : DELL
+ Product Name          : PowerEdge R730xd'
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "an unlabelled inventory must not stop a server it can still identify"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R730xd" "$SERVER_MODEL"
+}
+
+function test_the_board_fields_are_read_whole_too_when_no_builtin_device_is_named() {
+  # The same fallback on the other path : both pairs are narrowed, so both need it
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=' Board Mfg             : DELL
+ Board Product         : PowerEdge R630'
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "the board fallback must survive an unlabelled inventory as well"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R630" "$SERVER_MODEL"
+}
+
+function test_a_server_with_empty_bays_and_populated_power_supplies_is_read_correctly() {
+  # The three hazards on one machine, which is what ordinary hardware looks like : empty drive bays
+  # making the walk exit non-zero (#193), a populated power supply filling the same fields as the
+  # server (#319), and the server's own fields being the ones that must answer (#323)
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd" --with-readable-psu
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "none of the three hazards should stop a server that identified itself"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+  assert_not_contains "$SERVER_MODEL" "PWR SPLY" "the power supply must not answer for the server"
+}
+
 function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_error() {
   export MOCK_IPMITOOL_FRU_EXIT_CODE=1
   export MOCK_IPMITOOL_FRU_OUTPUT="Error: Unable to establish IPMI v2 / RMCP+ session"
