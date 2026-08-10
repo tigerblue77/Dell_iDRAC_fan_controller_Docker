@@ -133,28 +133,43 @@ function test_a_duration_that_collapses_to_a_single_check_is_warned_about() {
   # A single check is exiting on the very first unreachable reading, which is word
   # for word what a zero is refused for -- and reachable by any duration at or below
   # CHECK_INTERVAL without a refusal. The rounding is right; its silence was not
-  local -r OUTPUT=$(warn_if_the_unreachable_duration_collapses_to_one_check "" "5" "1")
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "" "5" "1")
 
   assert_contains "$OUTPUT" "Warning" "a duration worth one check should not pass in silence"
+  assert_contains "$OUTPUT" "MAXIMUM_IPMI_UNREACHABLE_DURATION is \"5\"" \
+    "the warning should quote back the parameter that produced it"
+  assert_contains "$OUTPUT" "at or below CHECK_INTERVAL" \
+    "and say why a value that looks reasonable resolved to one check"
   assert_contains "$OUTPUT" "very first unreachable reading" \
-    "the warning should say what a single check actually does"
-  assert_contains "$OUTPUT" "MAXIMUM_CONSECUTIVE_IPMI_FAILURES" \
-    "and name the parameter for somebody who does want exactly that"
+    "and what a single check actually does"
 }
 
-function test_an_explicit_single_failure_count_is_not_warned_about() {
-  # MAXIMUM_CONSECUTIVE_IPMI_FAILURES=1 is a user asking for one check in the unit
-  # the escalation counts in. Nothing was rounded and nothing was lost in
-  # translation, so warning would be second-guessing a deliberate choice
-  local -r OUTPUT=$(warn_if_the_unreachable_duration_collapses_to_one_check "1" "" "1")
+function test_an_explicitly_configured_single_failure_is_warned_about_too() {
+  # Reached by typing it rather than by an invisible rounding, but the server does
+  # not care which parameter produced it : one check is one glitch away from a
+  # container that exits either way. Warning on one and not the other would read as
+  # the other being the safe way to ask for the same thing
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "1" "" "1")
 
-  assert_empty "$OUTPUT" "an explicitly requested single cycle is a choice, not an accident"
+  assert_contains "$OUTPUT" "Warning" "one check is one check, whichever parameter set it"
+  assert_contains "$OUTPUT" "MAXIMUM_CONSECUTIVE_IPMI_FAILURES is \"1\"" \
+    "the warning should name the parameter actually in force"
+  assert_not_contains "$OUTPUT" "CHECK_INTERVAL, so it resolves" \
+    "nothing was rounded here, so it must not be explained as if it had been"
 }
 
 function test_a_duration_worth_several_checks_is_not_warned_about() {
-  local -r OUTPUT=$(warn_if_the_unreachable_duration_collapses_to_one_check "" "60s" "12")
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "" "60s" "12")
 
   assert_empty "$OUTPUT" "a duration that survives more than one glitch needs no warning"
+}
+
+function test_a_disabled_escalation_is_not_warned_about() {
+  # Nothing exits at all, so there is no first failure to warn about -- and naming a
+  # parameter the user did not set would send them looking for one they never wrote
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "" "" "")
+
+  assert_empty "$OUTPUT" "an escalation that never fires cannot fire too early"
 }
 
 function test_a_powered_off_server_never_counts_towards_the_escalation() {

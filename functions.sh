@@ -273,27 +273,38 @@ function pluralize_checks() {
   echo "$COUNT checks"
 }
 
-# Warn when a configured duration collapsed into a single check
-# Usage : warn_if_the_unreachable_duration_collapses_to_one_check "$COUNT" "$DURATION" $IPMI_FAILURES_BEFORE_EXIT
+# Warn when the escalation would exit on the very first unreachable reading
+# Usage : warn_if_the_escalation_exits_on_the_first_failure "$COUNT" "$DURATION" $IPMI_FAILURES_BEFORE_EXIT
 #
-# A single check is exiting on the very first unreachable reading -- word for word the behaviour
-# validate_IPMI_unreachable_duration_parameter refuses a zero for, and reachable without a refusal by
-# any duration at or below CHECK_INTERVAL. The rounding itself is right : nothing can be concluded
-# from less than one observed failure. What was missing is anybody saying so, the way
-# validate_check_interval_parameter warns above its own threshold rather than accepting in silence.
+# A single check is exiting on the first unreachable reading -- word for word the behaviour
+# validate_IPMI_unreachable_duration_parameter refuses a zero for. It is reached two ways, and both
+# are warned about : the consequence is the same for the server whichever parameter produced it, and
+# a warning that fires on one and not the other would read as the other being safe.
 #
-# Only the duration path is warned about. MAXIMUM_CONSECUTIVE_IPMI_FAILURES=1 is a user asking for
-# exactly one check in the unit the escalation counts in, which is a choice rather than an accident
-function warn_if_the_unreachable_duration_collapses_to_one_check() {
+# They are worded apart because they are not the same mistake. A duration at or below CHECK_INTERVAL
+# was rounded there without the user seeing it -- the rounding itself is right, nothing being
+# concluded from less than one observed failure -- while a count of one was typed. Neither is refused,
+# both being legitimate on a rock-solid LAN ; this only makes sure nobody arrives there unaware, the
+# way validate_check_interval_parameter warns above its own threshold rather than accepting in silence
+function warn_if_the_escalation_exits_on_the_first_failure() {
   local -r COUNT="$1"
   local -r DURATION="$2"
   local -r FAILURES_BEFORE_EXIT="$3"
 
-  [ -z "$COUNT" ] || return 0
-  [ -n "$DURATION" ] || return 0
   [ "$FAILURES_BEFORE_EXIT" == "1" ] || return 0
 
-  print_warning "MAXIMUM_IPMI_UNREACHABLE_DURATION is \"$DURATION\", at or below CHECK_INTERVAL, so it resolves to a single check : the container will exit on the very first unreachable reading, i.e. on any transient glitch, which is what a zero is refused for. Raise it well above your check interval, or set MAXIMUM_CONSECUTIVE_IPMI_FAILURES if a single failure really is what you want"
+  local WHAT_WAS_CONFIGURED
+  if [ -n "$COUNT" ]; then
+    WHAT_WAS_CONFIGURED="MAXIMUM_CONSECUTIVE_IPMI_FAILURES is \"$COUNT\""
+  elif [ -n "$DURATION" ]; then
+    WHAT_WAS_CONFIGURED="MAXIMUM_IPMI_UNREACHABLE_DURATION is \"$DURATION\", at or below CHECK_INTERVAL, so it resolves to a single check"
+  else
+    # Unreachable through resolve_IPMI_failures_before_exit, which leaves the threshold empty when
+    # neither parameter is set. Guarded all the same rather than naming a parameter nobody configured
+    return 0
+  fi
+
+  print_warning "$WHAT_WAS_CONFIGURED : the container will exit on the very first unreachable reading, i.e. on any transient glitch, which is what a zero is refused for. Raise it so that more than one failure has to be observed before anything is concluded"
 }
 
 # Stop the container unless the given parameter is a usable unreachable-iDRAC duration

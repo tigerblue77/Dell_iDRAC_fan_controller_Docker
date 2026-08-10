@@ -52,7 +52,7 @@ CHECK_INTERVAL_IN_SECONDS=$(convert_duration_to_seconds "$CHECK_INTERVAL")
 readonly CHECK_INTERVAL_IN_SECONDS
 resolve_IPMI_failures_before_exit "$MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "$MAXIMUM_IPMI_UNREACHABLE_DURATION" "$CHECK_INTERVAL_IN_SECONDS"
 readonly IPMI_FAILURES_BEFORE_EXIT
-warn_if_the_unreachable_duration_collapses_to_one_check "$MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "$MAXIMUM_IPMI_UNREACHABLE_DURATION" "$IPMI_FAILURES_BEFORE_EXIT"
+warn_if_the_escalation_exits_on_the_first_failure "$MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "$MAXIMUM_IPMI_UNREACHABLE_DURATION" "$IPMI_FAILURES_BEFORE_EXIT"
 
 # Express FAN_SPEED in both notations, whichever one the user gave it in
 convert_fan_speed_parameter "$FAN_SPEED"
