@@ -356,6 +356,25 @@ function test_the_controller_starts_on_a_server_whose_power_supplies_are_populat
   assert_contains "$OUTPUT" "User static fan control profile (5%)" "the controller should reach its monitoring loop"
 }
 
+function test_the_controller_refuses_a_server_whose_only_dell_marking_is_its_power_supply() {
+  # The safety guarantee of the case below, on the shape that used to slip past it. A non-Dell server
+  # declaring no manufacturer of its own, with a Dell branded power supply on the FRU bus, was read as
+  # "DELL" and started -- so Dell's proprietary raw commands reached hardware that was never Dell.
+  # Whatever such a server does with 0x30 0x30 is undefined, which is exactly what the check exists to
+  # avoid, so the refusal matters more than the identification
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "Super Server X11DPi-N" --no-manufacturer --with-readable-psu)
+
+  local OUTPUT
+  OUTPUT=$(run_controller)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE"
+  assert_contains "$OUTPUT" "Your server isn't a Dell product"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30")" \
+    "no fan control command must ever reach a server whose only Dell marking is a spare part"
+}
+
 function test_the_controller_refuses_to_run_on_a_server_that_is_not_a_dell() {
   export MOCK_IPMITOOL_FRU_OUTPUT
   MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "Supermicro" --model "Super Server X11DPi-N")
