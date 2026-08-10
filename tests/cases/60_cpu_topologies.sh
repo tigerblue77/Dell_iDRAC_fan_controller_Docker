@@ -649,13 +649,28 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
   done
 
   local COOLING_RESPONSE_STATUS
+  local WIDEST_COOLING_RESPONSE_WIDTH=0
   for COOLING_RESPONSE_STATUS in "Enabled" "Disabled" "Not supported by this server" \
     "Could not be applied on this cycle" "Refused: this account lacks the privilege level" \
     "Enabled (not applied: monitoring only mode)" \
     "Disabled (not applied: monitoring only mode)"; do
+    (( ${#COOLING_RESPONSE_STATUS} > WIDEST_COOLING_RESPONSE_WIDTH )) && WIDEST_COOLING_RESPONSE_WIDTH=${#COOLING_RESPONSE_STATUS}
     assert_equals "true" "$([ "${#COOLING_RESPONSE_STATUS}" -le "$COOLING_RESPONSE_COLUMN_WIDTH" ] && echo true || echo false)" \
       "\"$COOLING_RESPONSE_STATUS\" (${#COOLING_RESPONSE_STATUS}) must fit in $COOLING_RESPONSE_COLUMN_WIDTH"
   done
+
+  # Every status fitting is not the whole invariant, and asserting only that is how the comment beside
+  # the constant came to name a widest value a later status had overtaken : it stayed green throughout.
+  # What that comment claims is that the number is the heading's length, and that the heading is wider
+  # than anything the column holds. Both are read from the source rather than repeated here, so the
+  # sentence is held to the code
+  local -r COOLING_RESPONSE_HEADING=$(grep -oE "center_column_heading COOLING_RESPONSE_HEADING '[^']*'" "$REPO_ROOT/functions.sh" | sed -E "s/.*'([^']*)'.*/\1/")
+
+  assert_not_empty "$COOLING_RESPONSE_HEADING" "the cooling response heading should be findable in functions.sh" || return 1
+  assert_equals "${#COOLING_RESPONSE_HEADING}" "$COOLING_RESPONSE_COLUMN_WIDTH" \
+    "the column is sized by its heading, so it should be exactly as wide as it"
+  assert_equals "true" "$([ "$WIDEST_COOLING_RESPONSE_WIDTH" -le "${#COOLING_RESPONSE_HEADING}" ] && echo true || echo false)" \
+    "the heading ($((${#COOLING_RESPONSE_HEADING}))) should stay wider than the widest status ($WIDEST_COOLING_RESPONSE_WIDTH), or the column has to be sized on the status instead"
 }
 
 function test_the_header_is_refused_when_the_profile_column_width_is_unresolved() {
