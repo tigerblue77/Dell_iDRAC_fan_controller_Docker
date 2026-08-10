@@ -420,6 +420,48 @@ function test_the_readme_documents_the_fan_speed_range() {
     ".env.example should carry the same, being the other file users copy from"
 }
 
+function test_the_readme_documents_the_check_interval_bounds() {
+  # The fourth number of this kind, and the one that was left unguarded : the
+  # supervisor's grace period, the temperature window and the fan speed range are
+  # all held to their constants, this one never was. It is also the only one the
+  # README states in another unit than the constant carries -- "15 minutes" against
+  # a MAXIMUM_CHECK_INTERVAL_IN_SECONDS of 900 -- so lowering that constant leaves
+  # the suite green, the refusal saying one number and the documentation another,
+  # and the user planning around whichever they read first (#330)
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  assert_not_empty "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" \
+    "constants.sh should define the interval a warning starts above" || return 1
+  assert_not_empty "$MAXIMUM_CHECK_INTERVAL_IN_SECONDS" \
+    "constants.sh should define the interval the container refuses above" || return 1
+
+  # The conversion the refusal itself performs, done here rather than written out,
+  # so that the two cannot end up disagreeing about what 900 seconds are
+  local -r MAXIMUM_IN_MINUTES=$((MAXIMUM_CHECK_INTERVAL_IN_SECONDS / 60))
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  assert_matches "$README_CONTENT" \
+    "\*\*$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS seconds\*\*" \
+    "the README should state the interval the container really starts warning above"
+  assert_matches "$README_CONTENT" \
+    "\*\*$MAXIMUM_IN_MINUTES minutes\*\*" \
+    "and the one it really refuses above, in the unit it is written in there"
+
+  # The placeholders, where a user meets the parameter before any of that prose :
+  # they carried neither the ceiling nor the fact that a suffix is accepted at all
+  local -r PLACEHOLDER="up to $MAXIMUM_IN_MINUTES minutes"
+  assert_contains "$README_CONTENT" "$PLACEHOLDER" \
+    "the README's CHECK_INTERVAL placeholders should carry the ceiling"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should carry the same, being the other file users copy from"
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a
