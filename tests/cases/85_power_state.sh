@@ -97,6 +97,66 @@ function test_the_container_exits_after_the_configured_consecutive_failures() {
     "and why exiting is the useful move, since it cannot move the fans itself"
 }
 
+function test_the_startup_log_states_what_the_escalation_resolved_to() {
+  # It is the only configured parameter whose resolution performs a conversion the
+  # user did not write -- a duration becomes a number of checks, rounded up against
+  # CHECK_INTERVAL -- and it was the only one whose resolved value was never shown.
+  # Every shape is asserted, the disabled one included, a log that goes silent when
+  # the escalation is off being indistinguishable from one that forgot to print it
+  assert_equals "After 12 checks (60s, rounded up to whole check intervals)" \
+    "$(describe_IPMI_unreachable_escalation "" "60s" 12)" \
+    "a duration should be reported with the number of checks it became"
+  assert_equals "After 1 check (5, rounded up to whole check intervals)" \
+    "$(describe_IPMI_unreachable_escalation "" "5" 1)" \
+    "and in the singular when it collapsed to one"
+  assert_equals "After 3 checks (set by MAXIMUM_CONSECUTIVE_IPMI_FAILURES)" \
+    "$(describe_IPMI_unreachable_escalation "3" "60s" 3)" \
+    "a count converts nothing, so it names the parameter in force instead"
+  assert_equals "Disabled (the iDRAC is retried until it answers)" \
+    "$(describe_IPMI_unreachable_escalation "" "" "")" \
+    "and a disabled escalation says what happens instead of exiting"
+}
+
+function test_the_controller_reports_the_escalation_it_will_apply() {
+  export MAXIMUM_IPMI_UNREACHABLE_DURATION="60s"
+  export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=""
+  export CHECK_INTERVAL=5
+  simulate_server "PowerEdge R740" --cpus 2
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "iDRAC unreachable escalation: After 12 checks" \
+    "the startup log should state the escalation alongside every other parameter"
+}
+
+function test_a_duration_that_collapses_to_a_single_check_is_warned_about() {
+  # A single check is exiting on the very first unreachable reading, which is word
+  # for word what a zero is refused for -- and reachable by any duration at or below
+  # CHECK_INTERVAL without a refusal. The rounding is right; its silence was not
+  local -r OUTPUT=$(warn_if_the_unreachable_duration_collapses_to_one_check "" "5" "1")
+
+  assert_contains "$OUTPUT" "Warning" "a duration worth one check should not pass in silence"
+  assert_contains "$OUTPUT" "very first unreachable reading" \
+    "the warning should say what a single check actually does"
+  assert_contains "$OUTPUT" "MAXIMUM_CONSECUTIVE_IPMI_FAILURES" \
+    "and name the parameter for somebody who does want exactly that"
+}
+
+function test_an_explicit_single_failure_count_is_not_warned_about() {
+  # MAXIMUM_CONSECUTIVE_IPMI_FAILURES=1 is a user asking for one check in the unit
+  # the escalation counts in. Nothing was rounded and nothing was lost in
+  # translation, so warning would be second-guessing a deliberate choice
+  local -r OUTPUT=$(warn_if_the_unreachable_duration_collapses_to_one_check "1" "" "1")
+
+  assert_empty "$OUTPUT" "an explicitly requested single cycle is a choice, not an accident"
+}
+
+function test_a_duration_worth_several_checks_is_not_warned_about() {
+  local -r OUTPUT=$(warn_if_the_unreachable_duration_collapses_to_one_check "" "60s" "12")
+
+  assert_empty "$OUTPUT" "a duration that survives more than one glitch needs no warning"
+}
+
 function test_a_powered_off_server_never_counts_towards_the_escalation() {
   # A chassis correctly reported as off is a state that was observed, not a failure
   # to reach anything : counting it would exit on a server simply left switched off
