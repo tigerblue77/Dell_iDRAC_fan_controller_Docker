@@ -1,0 +1,295 @@
+name: Auto-update pull request branches
+
+# "Require branches to be up to date before merging" leaves every other open
+# pull request one commit behind master as soon as one of them is merged, and
+# each of them then needs its "Update branch" button pressed by hand. This
+# workflow presses it for them after every merge, for the pull requests that can
+# be updated without a conflict. The ones that do conflict are left alone :
+# resolving them is a decision only their author can make.
+#
+# GitHub's own answer to this problem is the merge queue, which tests and merges
+# pull requests against an up-to-date master without anyone updating anything.
+# It is not an option here : it requires a repository owned by an organization,
+# and this one belongs to a personal account.
+#
+# The update is done by rebase, which is why it goes through the GraphQL
+# mutation rather than the REST "update a pull request branch" endpoint : that
+# endpoint only knows how to merge the base branch into the pull request. A
+# rebase replays the commits of the branch one by one, so it can hit a conflict
+# on an intermediate commit even on a pull request GitHub reports as mergeable,
+# because "mergeable" only ever answers for the merge. FALL_BACK_TO_MERGE below
+# decides what happens then : updating with a merge commit keeps the pull
+# request unblocked, which is the whole point, at the cost of a merge commit on
+# that one. Set it to "false" to leave those pull requests alone instead.
+#
+# Rebasing force-pushes the branch, so the commits of an updated pull request
+# get new SHAs : the review comments already written on it are marked outdated,
+# and anyone holding a local copy of that branch has to reset onto it.
+#
+# /!\ The default GITHUB_TOKEN can push the update, it just gains nothing by it.
+# An update that token pushes does fire "pull_request : synchronize", but the
+# runs it creates are held in an approval-required state : the pull request
+# shows an "Approve workflows to run" banner that somebody with write access has
+# to click before the required checks even start. No repository setting turns
+# that off, and
+# swapping one click per pull request for another is not worth a workflow, so
+# the update has to come from an identity GitHub already trusts.
+#
+# Two identities qualify, and both are wired up. Whichever is used needs the
+# same three repository permissions : "Contents : read and write", "Pull
+# requests : read and write" and "Workflows : read and write".
+#
+# That third one is the one easily forgotten, and leaving it out is a trap :
+# rebasing replays the branch's commits, and a branch that adds or edits
+# anything under .github/workflows is refused without it, with "refusing to
+# allow [...] to create or update workflow [...] without workflow scope
+# (updatePullRequestBranch)". This repository merges such pull requests
+# regularly, so a credential missing it would work until precisely the pull
+# request that needed it most.
+#
+# A GitHub App is what this repository uses, and what GitHub itself points to
+# for this case. Nothing about it has to be renewed by hand, because the private
+# key does not expire ; the installation token minted from it does, after an
+# hour, which is why the key rather than a token is what is stored. The key goes
+# into the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret and the App's identifier
+# into the PULL_REQUESTS_UPDATE_APP_ID variable, and the first step below mints
+# a fresh token from them at the start of every run.
+#
+# A fine-grained personal access token in the PULL_REQUESTS_UPDATE_TOKEN secret
+# works too, and is quicker to set up : its resource owner has to be this
+# account and its repository access has to cover this repository. It is what the
+# credential falls back to when no App is configured, so either can be adopted,
+# or swapped for the other, without this file changing. It expires, though, and
+# has to be renewed by hand before it does
+
+on:
+  push:
+    branches: [master]
+  # Lets the whole set be caught up by hand : after a run failed on a credential
+  # that had lapsed, or simply to see the thing work without waiting for a merge
+  workflow_dispatch:
+
+# Everything is done with the credential above, so the token of the run itself
+# needs nothing at all
+permissions: {}
+
+# Two merges landing one after the other would otherwise walk the same list of
+# pull requests at the same time, the second run racing the updates the first
+# one is still pushing. Queueing the runs rather than cancelling them is what
+# makes the last one see the final state of master
+concurrency:
+  group: auto-update-pull-request-branches
+  cancel-in-progress: false
+
+jobs:
+  update-pull-request-branches:
+    name: Update the pull requests master left behind
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Only runs once the App route is configured : without the variable there
+      # is nothing to mint from, the step is skipped, and the token below falls
+      # back to the personal access token. Setting the variable is the whole
+      # migration, and it needs no change to this file
+      - name: Mint an installation token, if a GitHub App is configured
+        id: app-token
+        if: vars.PULL_REQUESTS_UPDATE_APP_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.PULL_REQUESTS_UPDATE_APP_ID }}
+          private-key: ${{ secrets.PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY }}
+
+      - name: Rebase every conflict-free pull request that is behind master
+        env:
+          # The App's token when there is one, the personal access token
+          # otherwise. Whichever it is, it needs the three permissions the
+          # header describes
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.PULL_REQUESTS_UPDATE_TOKEN }}
+          UPDATING_AS: ${{ vars.PULL_REQUESTS_UPDATE_APP_ID != '' && 'the GitHub App' || 'the personal access token' }}
+          REPOSITORY: ${{ github.repository }}
+          # Whether a pull request whose rebase conflicts is updated with a
+          # merge commit rather than left behind
+          FALL_BACK_TO_MERGE: "true"
+        run: |
+          set -euo pipefail
+
+          # Updates one pull request, by rebase or by merge, through the same
+          # updatePullRequestBranch mutation that "gh pr update-branch" wraps.
+          # expectedHeadOid pins the update to the head commit read just above,
+          # so it cannot land on a commit the author pushed in the meantime.
+          # The mutation is called directly rather than through gh for the error
+          # message : gh reports any failure as "Cannot update PR branch due to
+          # conflicts", which would misdiagnose a token missing the Workflows
+          # permission as a conflict and send the reader hunting the wrong
+          # thing. The log below quotes what GitHub actually said instead.
+          # A GraphQL error comes back inside a 200 response, so the body has to
+          # be looked at rather than only the exit status
+          update_error=""
+          update_pull_request() {
+            local update_method="$1" pull_request_id="$2" expected_head_oid="$3"
+            local response
+
+            if ! response="$(
+              gh api graphql \
+                --raw-field "pullRequestId=$pull_request_id" \
+                --raw-field "expectedHeadOid=$expected_head_oid" \
+                --raw-field "updateMethod=$update_method" \
+                --raw-field 'query=
+                  mutation(
+                    $pullRequestId: ID!,
+                    $expectedHeadOid: GitObjectID!,
+                    $updateMethod: PullRequestBranchUpdateMethod!
+                  ) {
+                    updatePullRequestBranch(input: {
+                      pullRequestId: $pullRequestId,
+                      expectedHeadOid: $expectedHeadOid,
+                      updateMethod: $updateMethod
+                    }) {
+                      pullRequest { headRefOid }
+                    }
+                  }' 2>&1
+            )"; then
+              update_error="$(tr '\n' ' ' <<< "$response")"
+              return 1
+            fi
+
+            if jq --exit-status 'has("errors")' <<< "$response" > /dev/null 2>&1; then
+              update_error="$(jq --raw-output '[.errors[].message] | join(" ; ")' <<< "$response")"
+              return 1
+            fi
+
+            return 0
+          }
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::No credential is configured, so nothing can be updated. Set either the PULL_REQUESTS_UPDATE_TOKEN secret or the PULL_REQUESTS_UPDATE_APP_ID variable together with the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret. The comment at the top of this workflow says what each one needs and why the default token is not enough."
+            exit 1
+          fi
+
+          # Named in the log because the two identities fail differently, and
+          # knowing which one ran is the first thing wanted when one of them does
+          echo "Updating as $UPDATING_AS."
+
+          # Master is asked for by name rather than taken from github.sha :
+          # that is master's tip under the push trigger, but under
+          # workflow_dispatch it is the tip of whichever ref the run was started
+          # from, and the ref picker offers every branch carrying this file.
+          # Measuring against the wrong base would report up-to-date pull
+          # requests as behind, and skip genuinely behind ones as up to date
+          master_sha="$(gh api "repos/$REPOSITORY/commits/master" --jq '.sha')"
+
+          # Draft pull requests are skipped. They are not waiting to be merged,
+          # and several of them live in forks where an unasked-for merge commit
+          # after each push to master would be noise rather than help.
+          # Pull requests based on another branch are skipped too : this run
+          # only knows that master moved
+          open_pull_requests="$(
+            gh pr list \
+              --repo "$REPOSITORY" \
+              --base master \
+              --state open \
+              --limit 100 \
+              --json number,isDraft
+          )"
+          open_count="$(jq 'length' <<< "$open_pull_requests")"
+          mapfile -t pull_requests < <(
+            jq --raw-output '.[] | select(.isDraft | not) | .number' <<< "$open_pull_requests"
+          )
+
+          # Told apart, because an empty list after the draft filter is not the
+          # same thing as an empty repository and saying so would be untrue
+          if [ "${#pull_requests[@]}" -eq 0 ]; then
+            if [ "$open_count" -eq 0 ]; then
+              echo "No open pull request targets master."
+            else
+              echo "The $open_count open pull request(s) targeting master are all drafts, which this workflow leaves alone."
+            fi
+            echo "Updated 0 pull request(s)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "Considering ${#pull_requests[@]} open pull request(s) against master $master_sha."
+
+          updated=0
+          for number in "${pull_requests[@]}"; do
+            # GitHub computes mergeability lazily, and the push that started
+            # this run invalidated it for every open pull request : the answer
+            # is "null" until the background job that recomputes it is done, so
+            # the first read is really what asks the question and the next ones
+            # wait for the answer
+            mergeable="null"
+            head_sha=""
+            node_id=""
+            for _ in 1 2 3 4 5; do
+              if ! pull_request="$(gh api "repos/$REPOSITORY/pulls/$number")"; then
+                break
+              fi
+              mergeable="$(jq --raw-output '.mergeable | tostring' <<< "$pull_request")"
+              head_sha="$(jq --raw-output '.head.sha' <<< "$pull_request")"
+              # The GraphQL mutation addresses the pull request by node ID
+              node_id="$(jq --raw-output '.node_id' <<< "$pull_request")"
+              [ "$mergeable" != "null" ] && break
+              sleep 5
+            done
+
+            if [ -z "$head_sha" ]; then
+              echo "::warning::Pull request #$number could not be read, skipping it."
+              continue
+            fi
+
+            if [ "$mergeable" = "null" ]; then
+              echo "::warning::Pull request #$number : GitHub did not say in time whether it can be merged, skipping it. The next push to master will try again."
+              continue
+            fi
+
+            if [ "$mergeable" != "true" ]; then
+              echo "Pull request #$number conflicts with master, leaving it to its author."
+              continue
+            fi
+
+            # Comparing by SHA is what lets this work for a pull request opened
+            # from a fork : its branch names nothing in this repository, but its
+            # head commit is mirrored here as refs/pull/<number>/head.
+            # In "A...B", behind_by counts the commits A has and B does not :
+            # exactly how far behind master this pull request is
+            if ! behind_by="$(gh api "repos/$REPOSITORY/compare/$master_sha...$head_sha" --jq '.behind_by')" ||
+               ! [[ "$behind_by" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Pull request #$number could not be compared with master, skipping it."
+              continue
+            fi
+
+            if [ "$behind_by" -eq 0 ]; then
+              echo "Pull request #$number is already up to date."
+              continue
+            fi
+
+            if update_pull_request REBASE "$node_id" "$head_sha"; then
+              echo "Pull request #$number was $behind_by commit(s) behind master and has been rebased on top of it."
+              updated=$((updated + 1))
+              continue
+            fi
+            rebase_error="$update_error"
+
+            if [ "$FALL_BACK_TO_MERGE" != "true" ]; then
+              echo "::warning::Pull request #$number is $behind_by commit(s) behind master and could not be rebased : $rebase_error"
+              continue
+            fi
+
+            if update_pull_request MERGE "$node_id" "$head_sha"; then
+              echo "::notice::Pull request #$number could not be rebased ($rebase_error), so it has been updated with a merge commit instead."
+              updated=$((updated + 1))
+            else
+              # A pull request opened from a fork is expected to land here : the
+              # update writes to the fork, and neither of the two identities
+              # this workflow can use reaches one. A fine-grained token only
+              # ever addresses resources owned by its own resource owner, and an
+              # App installation only the repositories it is installed on, so
+              # "Allow edits by maintainers" does not rescue either of them : it
+              # grants the maintainer, and only a classic token acts with that
+              # breadth. Those pull requests keep being updated by hand ; the
+              # refusal is reported and the run carries on with the next one
+              echo "::warning::Pull request #$number is $behind_by commit(s) behind master but could not be updated, neither by rebase ($rebase_error) nor by merge ($update_error). If it comes from a fork, its author has to tick \"Allow edits by maintainers\" ; otherwise it has to be updated by hand."
+            fi
+          done
+
+          echo "Updated $updated pull request(s)." >> "$GITHUB_STEP_SUMMARY"
