@@ -1,0 +1,109 @@
+Dell iDRAC fan controller Docker image
+======================================
+
+Copyright (C) 2020-2026 Tigerblue77 and the Dell iDRAC fan controller
+Docker image contributors.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License, version 3, as
+published by the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero
+General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+The full licence text is in the LICENSE file next to this one.
+
+A separate commercial licence is available for parties who cannot meet
+the obligations of the AGPL. See LICENSE-COMMERCIAL.md. Which of the two
+applies is the recipient's choice: taking the program under the AGPL
+requires no permission, no registration and no notice to anyone.
+
+
+Third-party and upstream material
+---------------------------------
+
+This work started as a fork of alombardo4/idrac-fan-control-docker
+<https://github.com/alombardo4/idrac-fan-control-docker>, which is
+distributed under the MIT licence. The parts of that work that survive in
+this one remain covered by the notice below, in addition to the AGPL
+terms above, as the MIT licence requires:
+
+    MIT License
+
+    Copyright (c) 2024 Alec Lombardo
+
+    Permission is hereby granted, free of charge, to any person obtaining
+    a copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be
+    included in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+    NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+    BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+    ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+    CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+The Docker image this repository publishes also contains software that
+this project neither wrote nor distributes in source form here: the
+Ubuntu base image, ipmitool and lm-sensors, each under its own licence.
+They are aggregated with this program, not derived from it, and their
+terms are the ones shipped inside the image itself.
+
+
+Licence history
+---------------
+
+A downstream recipient needs to be able to reconstruct which terms
+applied when, so the chain is recorded here rather than only in the git
+history:
+
+  2020-01-11 .. 2024-11-25   No licence.
+                             Neither the upstream project nor this fork
+                             carried one. Contributions from that period
+                             were therefore not made under any stated
+                             licence.
+
+  2024-11-26 .. (relicensed) Creative Commons
+                             Attribution-NonCommercial-ShareAlike 4.0
+                             International (CC BY-NC-SA 4.0), issue #100.
+                             Copies obtained under those terms keep them
+                             for as long as their recipient abides by
+                             them: CC BY-NC-SA 4.0 is not revocable, and
+                             this relicensing does not withdraw it from
+                             anyone who already holds such a copy.
+
+  (relicensed) onwards       GNU Affero General Public License v3.0 only
+                             (AGPL-3.0-only), plus a separate commercial
+                             licence, issue #304.
+
+Upstream material remains under the MIT licence quoted above throughout,
+independently of any of these dates.
+
+
+Attribution
+-----------
+
+Attribution is a licence obligation here, not a courtesy: AGPL-3.0
+sections 5(a) and 7(b) require the legal notices and the author
+attributions to be preserved in modified versions. Keeping this file, the
+LICENSE file and the SPDX headers in the source files intact is what
+satisfies them.
+
+The people who wrote this program are listed in the repository's commit
+history, which is the authoritative record:
+
+    git shortlog -sne
