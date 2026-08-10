@@ -533,6 +533,18 @@ while true; do
       # this container runs, so stop sending it
       IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+    elif does_the_command_need_a_higher_privilege_level "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
+      # The BMC answered too, and answered that this account may not run the command. Also permanent for
+      # this run -- the credentials do not change while the container does -- so it stops being sent for
+      # the same reason as above, and the column says so rather than repeating "could not be applied on
+      # this cycle" for the life of the container on a condition no cycle will ever clear.
+      #
+      # What it must NOT say is "not supported by this server" : the server has the command, this account
+      # may not use it, and naming the hardware sends the reader to check a server that is fine instead
+      # of the iDRAC user they can actually fix. Reported on an R550 in #29, where every raw command --
+      # the fan control ones included -- answered "Insufficient privilege level"
+      IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Refused: this account lacks the privilege level"
     else
       # The command did not go through, but nothing says the server refused it : an unreachable iDRAC, a
       # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next

@@ -650,7 +650,8 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
 
   local COOLING_RESPONSE_STATUS
   for COOLING_RESPONSE_STATUS in "Enabled" "Disabled" "Not supported by this server" \
-    "Could not be applied on this cycle" "Enabled (not applied: monitoring only mode)" \
+    "Could not be applied on this cycle" "Refused: this account lacks the privilege level" \
+    "Enabled (not applied: monitoring only mode)" \
     "Disabled (not applied: monitoring only mode)"; do
     assert_equals "true" "$([ "${#COOLING_RESPONSE_STATUS}" -le "$COOLING_RESPONSE_COLUMN_WIDTH" ] && echo true || echo false)" \
       "\"$COOLING_RESPONSE_STATUS\" (${#COOLING_RESPONSE_STATUS}) must fit in $COOLING_RESPONSE_COLUMN_WIDTH"
