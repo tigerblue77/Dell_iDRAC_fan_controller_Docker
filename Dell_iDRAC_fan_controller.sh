@@ -115,9 +115,18 @@ elif [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]{1,3}$ ]]; then
   CPU_TEMPERATURE_THRESHOLD=$((10#$CPU_TEMPERATURE_THRESHOLD))
   # Hold a user-supplied value to the same plausibility window as an automatically detected one. A typo
   # such as "500" (or a Fahrenheit value) is otherwise accepted silently and no CPU ever reaches it, so
-  # the Dell default profile is never restored and the fans stay low for the life of the container
+  # the Dell default profile is never restored and the fans stay low for the life of the container.
+  #
+  # A value above the maximum is not a stricter setting but the absence of one, and the refusal says so
+  # rather than only stating a window : no PowerEdge CPU reaches 125°C, the server's own thermal
+  # protection powering the machine off first, so such a threshold could never be crossed and the
+  # fallback it governs could never fire. The container would print a threshold at startup while
+  # supervising nothing, which is what issue #326 turned out to be about. Being unable to disable that
+  # fallback is the intended behaviour, so the refusal deliberately offers no value that would.
+  # The README documents the same range and unit, and
+  # test_the_readme_documents_the_plausible_temperature_threshold_window() keeps the two from drifting
   if [ "$CPU_TEMPERATURE_THRESHOLD" -lt "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -gt "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
-    print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "${CPU_TEMPERATURE_THRESHOLD}°C" "a temperature between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C, no CPU throttling below the first nor tolerating more than the second"
+    print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "${CPU_TEMPERATURE_THRESHOLD}°C" "a temperature in degrees Celsius between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD} and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}, no CPU throttling below the first nor tolerating more than the second. Above the maximum is not a stricter setting but the absence of one : no PowerEdge CPU reaches it, the server's own thermal protection powering the machine off first, so the threshold could never be crossed and the overheat fallback it governs could never fire -- this container would print a threshold at startup while supervising nothing. That fallback is not meant to be switched off, so set the temperature your CPUs should not exceed, or \"auto\" to take the \"high\" value they report themselves"
   fi
 else
   # Reject an unusable threshold right away : every temperature comparison would fail against it, which

@@ -340,6 +340,43 @@ function test_the_readme_states_the_deadline_the_supervisor_actually_waits() {
     "and ask for a stop timeout above that same value"
 }
 
+function test_the_readme_documents_the_plausible_temperature_threshold_window() {
+  # The window is what the container refuses to start outside of, and until issue
+  # #326 it was written down nowhere : the README described the parameter as "a
+  # decimal number of degrees Celsius" with no bound, .env.example said nothing
+  # either, and a user who had set 160 discovered the range from a container that
+  # would not start. A refusal a document does not prepare the reader for is the
+  # one they cannot act on, so the two are held together here rather than left to
+  # agree by hand
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  assert_not_empty "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" \
+    "constants.sh should define the bottom of the plausible window" || return 1
+  assert_not_empty "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" \
+    "constants.sh should define the top of the plausible window" || return 1
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  assert_matches "$README_CONTENT" \
+    "\*\*between $MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD°C and $MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD°C\*\*" \
+    "the README should state the window the container really enforces"
+
+  # The placeholders are what a user copies into a "docker run" or a compose file,
+  # well before reading the bullet that explains them. They carry the unit as well
+  # as the range : a placeholder that names neither is how "160" gets typed as a
+  # Fahrenheit figure into a parameter whose bullet says Celsius three sections away
+  local -r PLACEHOLDER="in °C, from $MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD to $MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
+  assert_contains "$README_CONTENT" "$PLACEHOLDER" \
+    "the README's CPU_TEMPERATURE_THRESHOLD placeholders should carry the unit and the range"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should carry the same unit and range, being the other file users copy from"
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a
