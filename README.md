@@ -288,6 +288,26 @@ Past that timeout the container is `SIGKILL`ed, which no program can catch or de
 <!-- TROUBLESHOOTING -->
 ## Troubleshooting
 
+### Your container restarts over and over without ever monitoring anything
+
+Read its log rather than its restart count: a container that stops on a **configuration** mistake prints a block naming the parameter, its current value and what would have been accepted, then exits.
+
+```
+/!\ Error /!\ Invalid configuration, the container will not start.
+
+  Parameter : CPU_TEMPERATURE_THRESHOLD
+  Value     : "160°C"
+  Expected  : a temperature between 20°C and 125°C, [...]
+
+  Restarting will not help : this is read the same way on every start, so a container under
+  an "always", "unless-stopped" or "on-failure" restart policy stops here again on every
+  attempt, until the configuration itself is corrected.
+```
+
+Nothing about that can self-correct — the value is the same on every attempt — so the restart policy the [Usage](#usage) examples recommend, which is what protects you against a transient failure, turns a permanent refusal into an endless loop. `docker logs --tail 40 Dell_iDRAC_fan_controller` shows the block; fix what it names and the loop ends. The most common case is a `CPU_TEMPERATURE_THRESHOLD` above 125, which versions up to v1.27 accepted (see the [Parameters](#parameters) section).
+
+A refusal **without** that "Restarting will not help" line is the opposite case, and the only one worth waiting out: an iDRAC that did not answer this time may answer the next, so the restart policy is what recovers it without you doing anything.
+
 ### Your server frequently switches back to the default Dell fan mode:
 1. Check `Tcase` (case temperature) of your CPU on Intel Ark website and then set `CPU_TEMPERATURE_THRESHOLD` to a slightly lower value. Example with my CPUs ([Intel Xeon E5-2630L v2](https://www.intel.com/content/www/us/en/products/sku/75791/intel-xeon-processor-e52630l-v2-15m-cache-2-40-ghz/specifications.html)) : Tcase = 63°C, I set `CPU_TEMPERATURE_THRESHOLD` to 60(°C). Note that the default "auto" value does **not** do this for you : Tcase is a case (heat spreader) temperature, while "auto" uses the junction-scale "high" value, which is usually well above Tcase (on a Xeon Gold 5122 for instance, Tcase is 71°C but "high" is around 94°C). If you want a Tcase-derived threshold, set it explicitly. The startup log always states which threshold was picked and where it comes from.
 2. If it's already good, adapt your `FAN_SPEED` value to increase the airflow and thus further decrease the temperature of your CPU(s)

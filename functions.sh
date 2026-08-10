@@ -1339,10 +1339,16 @@ function get_Dell_server_model() {
       "an IPMI device the host's own BMC answers on. Nothing could be read from it, so the server could not be identified. IDRAC_USERNAME and IDRAC_PASSWORD are not used in local mode, so they are not what to check here. $IPMITOOL_REPORT" \
       "Check that the device exposed with \"--device=\" is your server's IPMI device and that its
 kernel modules (\"ipmi_devintf\", \"ipmi_si\") are loaded on the Docker host, then start the
-container again. Alternatively, set IDRAC_HOST to your iDRAC's address to use network mode instead."
+container again. Alternatively, set IDRAC_HOST to your iDRAC's address to use network mode instead." \
+      "false"
   fi
 
-  print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. $IPMITOOL_REPORT"
+  # The one refusal a restart can genuinely clear, and the only one that must not claim otherwise : a
+  # BMC that was resetting, an iDRAC still booting or a network that was down all answer on the next
+  # attempt without anybody correcting anything, and the restart policy is what carries that user
+  # through. It is also the escalation MAXIMUM_IPMI_UNREACHABLE_DURATION relies on once the loop is
+  # running, and the README already tells its readers to run under a restart policy because of it
+  print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. $IPMITOOL_REPORT" "" "false"
 }
 
 # Settle the width of the "Active fan speed profile" column, which the header and the rows both lay
@@ -1617,7 +1623,7 @@ function build_fan_control_fallback_comment() {
 }
 
 # Stop the container on an invalid configuration parameter, with everything needed to fix it
-# Usage : print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$EXPECTED"
+# Usage : print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$EXPECTED" ["$WHERE_TO_FIX_IT" ["$RESTARTING_WOULD_MEET_THE_SAME_REFUSAL"]]
 #
 # Refusing to start is the point : a malformed parameter fails silently once the container is running,
 # so the only outcome that can't be mistaken for normal operation is not running at all. But refusing
@@ -1629,17 +1635,36 @@ function build_fan_control_fallback_comment() {
 # place : almost all of them are environment variables, but exposing the host's IPMI device is a
 # "--device" argument, and sending that user to "-e" would be worse than saying nothing. It defaults
 # to the environment variable wording, which is what every parameter validator wants
+#
+# The last argument says whether the very same refusal is what the next start would meet. It is true
+# of everything decided from a value's own content -- the value is read identically on every start --
+# and the block says so, because a restart policy otherwise turns one refusal into an unbroken run of
+# them : that is what issue #326 was reported as, a container seen flapping rather than a mistake seen
+# in a variable, by a user with no way to tell a permanent refusal from a transient failure worth
+# waiting out. It defaults to true because every parameter validator is that case. It is false for the
+# refusals that come from asking hardware, an iDRAC that did not answer this time being able to answer
+# the next : telling that user restarting will not help would be worse than saying nothing, the
+# restart policy being exactly what recovers them
 function print_configuration_error_and_exit() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
   local -r EXPECTED="$3"
   local -r WHERE_TO_FIX_IT="${4:-Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"
 section of your docker-compose.yml, then start the container again.}"
+  local -r RESTARTING_WOULD_MEET_THE_SAME_REFUSAL="${5:-true}"
 
   printf "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n" >&2
   printf "  Parameter : %s\n" "$PARAMETER_NAME" >&2
   printf "  Value     : \"%s\"\n" "$VALUE" >&2
   printf "  Expected  : %s\n\n" "$EXPECTED" >&2
+  # No exit status could carry this instead : "always" and "unless-stopped" restart on the policy
+  # rather than on the code, and those are the two the README's own examples recommend. Saying it is
+  # therefore the only thing that can spare the user the wait
+  if [ "$RESTARTING_WOULD_MEET_THE_SAME_REFUSAL" == "true" ]; then
+    printf "  Restarting will not help : this is read the same way on every start, so a container under\n" >&2
+    printf "  an \"always\", \"unless-stopped\" or \"on-failure\" restart policy stops here again on every\n" >&2
+    printf "  attempt, until the configuration itself is corrected.\n\n" >&2
+  fi
   # Indented line by line so a closing sentence written across several lines keeps the block's margin
   printf "%s\n" "$WHERE_TO_FIX_IT" | while IFS= read -r LINE; do
     printf "  %s\n" "$LINE" >&2
