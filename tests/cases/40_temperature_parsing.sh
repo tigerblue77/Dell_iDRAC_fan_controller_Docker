@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Parsing of "ipmitool sdr type temperature". This is where the generation of the
 # server used to leak into the code : sensor hexadecimal IDs, sensor ordering and
 # reading widths all vary from one PowerEdge generation to the next, so every

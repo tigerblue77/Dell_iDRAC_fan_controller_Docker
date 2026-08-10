@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # FAN_SPEED, the parameter that reaches an ipmitool command as unchecked text. It
 # never fails visibly when malformed : it goes through printf's base detection and
 # converts to 0x00, the documented Dell command for 0% fan duty, while the

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The CPU temperature threshold, and where it comes from. It is the single number
 # that decides whether the server keeps running on the user's low static fan speed
 # or gets handed back to Dell's own dynamic profile, so a wrong one is not a

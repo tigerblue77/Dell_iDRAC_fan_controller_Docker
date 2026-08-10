@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # A numeric comparison whose operand is empty, or not yet resolved, does not
 # fail loudly : bash prints "integer expression expected" on stderr and "[" exits
 # 2, which every caller here reads as "false". A guard written to refuse a

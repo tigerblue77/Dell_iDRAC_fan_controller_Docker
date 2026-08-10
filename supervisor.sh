@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Supervisor : the container's PID 1, whose only job is to make sure the fans are handed back to Dell's
 # dynamic profile when the container stops, even when the monitoring process cannot do it itself.
 #

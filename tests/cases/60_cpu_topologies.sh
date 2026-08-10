@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Server typologies : single socket (R210, R240, R6515...), dual socket (R720,
 # R740, R760...) and quad socket (R910, R930, R940, R960...), with or without an
 # exhaust sensor, with an empty second socket, with an unreadable reading.

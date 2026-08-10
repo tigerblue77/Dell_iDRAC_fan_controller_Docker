@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The overheating decision. Everything here is safety-critical : a reading that
 # cannot be trusted must send the server back to Dell's own dynamic profile, not
 # leave it running on the low static speed the user asked for.

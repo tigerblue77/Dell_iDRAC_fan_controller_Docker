@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The whole controller, started exactly like its Docker image does, against a
 # mocked iDRAC. Each test case describes one server and reads back what the user
 # would see in "docker logs", then stops the container with SIGTERM like

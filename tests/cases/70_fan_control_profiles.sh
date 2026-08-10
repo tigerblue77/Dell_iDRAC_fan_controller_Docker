@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The commands actually sent to the server, and what happens when the server
 # refuses them - which is the normal situation on an iDRAC 9 running firmware
 # 3.30.30.30 or newer (Gen 15, 16) and on the iDRAC 10 of a Gen 17 server, where

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # How error and warning messages reach the container log. stdout and stderr are
 # both "docker logs", so a message that does not terminate its line fuses with
 # whatever is printed next -- and what the monitoring loop prints next, on every

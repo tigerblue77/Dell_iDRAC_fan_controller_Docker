@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Catalogue of Dell PowerEdge servers, from the 9th generation (2006) to the
 # 17th (2024), used to drive the model detection tests.
 #
