@@ -1737,23 +1737,37 @@ function print_configuration_error_and_exit() {
 section of your docker-compose.yml, then start the container again.}"
   local -r RESTARTING_WOULD_MEET_THE_SAME_REFUSAL="${5:-true}"
 
-  printf "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n" >&2
-  printf "  Parameter : %s\n" "$PARAMETER_NAME" >&2
-  printf "  Value     : \"%s\"\n" "$VALUE" >&2
-  printf "  Expected  : %s\n\n" "$EXPECTED" >&2
+  # Assembled whole, then written once. The block is a unit -- half of it is worse than none, the
+  # parameter being named without what is accepted, or what is accepted without where to fix it -- and
+  # printing it piecemeal made it interruptible : a SIGTERM landing between two of the printfs cut it
+  # off mid-block, and the tail went through a pipeline, i.e. a subshell, which is exactly where a
+  # signal is most likely to land. The test suite reproduced it by design, awaiting the first line and
+  # stopping the controller as soon as it appeared. Docker sends the same signal to the same process
+  local BLOCK PIECE
+  printf -v BLOCK "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n"
+  printf -v PIECE "  Parameter : %s\n" "$PARAMETER_NAME"
+  BLOCK+="$PIECE"
+  printf -v PIECE "  Value     : \"%s\"\n" "$VALUE"
+  BLOCK+="$PIECE"
+  printf -v PIECE "  Expected  : %s\n\n" "$EXPECTED"
+  BLOCK+="$PIECE"
   # No exit status could carry this instead : "always" and "unless-stopped" restart on the policy
   # rather than on the code, and those are the two the README's own examples recommend. Saying it is
   # therefore the only thing that can spare the user the wait
   if [ "$RESTARTING_WOULD_MEET_THE_SAME_REFUSAL" == "true" ]; then
-    printf "  Restarting will not help : this is read the same way on every start, so a container under\n" >&2
-    printf "  an \"always\", \"unless-stopped\" or \"on-failure\" restart policy stops here again on every\n" >&2
-    printf "  attempt, until the configuration itself is corrected.\n\n" >&2
+    printf -v PIECE "  Restarting will not help : this is read the same way on every start, so a container under\n  an \"always\", \"unless-stopped\" or \"on-failure\" restart policy stops here again on every\n  attempt, until the configuration itself is corrected.\n\n"
+    BLOCK+="$PIECE"
   fi
-  # Indented line by line so a closing sentence written across several lines keeps the block's margin
-  printf "%s\n" "$WHERE_TO_FIX_IT" | while IFS= read -r LINE; do
-    printf "  %s\n" "$LINE" >&2
-  done
-  printf "\n" >&2
+
+  # Indented line by line so a closing sentence written across several lines keeps the block's margin.
+  # Fed by a here-string rather than a pipe, a pipeline being the subshell this used to lose
+  local LINE
+  while IFS= read -r LINE; do
+    printf -v PIECE "  %s\n" "$LINE"
+    BLOCK+="$PIECE"
+  done <<< "$WHERE_TO_FIX_IT"
+
+  printf "%s\n" "$BLOCK" >&2
 
   exit 1
 }

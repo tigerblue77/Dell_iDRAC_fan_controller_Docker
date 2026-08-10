@@ -166,6 +166,31 @@ function test_the_missing_device_error_points_at_device_rather_than_at_e() {
     "the environment variable wording would send the user to the wrong place here"
 }
 
+function test_the_refusal_block_is_written_in_a_single_write() {
+  # What the block is for is being readable in a "docker logs" scroll, and half of
+  # it is worse than none : the parameter named without what is accepted, or what
+  # is accepted without where to fix it. Printed piecemeal it was interruptible,
+  # and a container refusing to start is precisely a container something is about
+  # to signal -- Docker on the way down, the test harness as soon as the first
+  # line appears. That is how it broke : the block stopped after "Expected" and the
+  # closing sentence, which went through a pipeline and therefore a subshell, was
+  # lost with it.
+  #
+  # Asserted structurally rather than by racing a signal, which would only fail
+  # some of the time : one redirection to stderr is one write, and one write cannot
+  # be cut in half
+  local -r BODY=$(sed -n '/^function print_configuration_error_and_exit()/,/^}/p' "$REPO_ROOT/functions.sh")
+
+  assert_not_empty "$BODY" "print_configuration_error_and_exit should be defined in functions.sh" || return 1
+
+  local -r WRITES=$(printf '%s\n' "$BODY" | grep -c '>&2' || true)
+  assert_equals 1 "$WRITES" \
+    "the block should reach stderr in one write, so no signal can cut it in half"
+
+  assert_not_contains "$BODY" "| while" \
+    "and not through a pipeline, a subshell being where a signal lands most easily"
+}
+
 function test_no_configuration_refusal_is_left_reporting_as_a_single_line() {
   # The point of the block is that it is the only form a refused parameter takes.
   # A refusal added later and wired to print_error_and_exit out of habit is exactly
