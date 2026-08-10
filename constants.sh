@@ -79,8 +79,14 @@ readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=54
 readonly MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=71
 
 # The cooling response column is sized by its own heading, "Third-party PCIe card Dell default cooling
-# response", which is longer than anything that column ever holds : its widest value is "Disabled (not
-# applied: monitoring only mode)" at 44. So, unlike the profile column, it does not move with the mode
+# response", which is 51 characters and longer than anything that column ever holds : its widest value
+# is "Refused: this account lacks the privilege level" at 47. So, unlike the profile column, it does not
+# move with the mode.
+#
+# That sentence used to name a value of 44 that a later status overtook, and nothing went red over it --
+# the suite asserted every status fits, which stayed true, but never that this number is the heading's
+# length nor that the heading beats every value, which is what the sentence actually claims. Both are
+# asserted now, in test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() (issue #344)
 readonly COOLING_RESPONSE_COLUMN_WIDTH=51
 
 # How long the supervisor gives the monitoring process to stop on its own after forwarding it the signal,
