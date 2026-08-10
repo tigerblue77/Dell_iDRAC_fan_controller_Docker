@@ -1,0 +1,144 @@
+name: Hardware report
+description: Answer one of the open questions that can only be settled on real hardware
+title: "Hardware report: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Three open questions in this repository cannot be answered without output from a
+        server nobody here owns. If you have one of these machines, a single paste settles
+        a question that has been open for months — and the container gets better on
+        hardware its author cannot test.
+
+        | Issue | Needs | What it decides |
+        |---|---|---|
+        | [#263](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/263) | a **14th generation PowerEdge or newer** (R640, R740, R650, R750, R660, R760, the MX and XR lines, or anything on iDRAC 9/10) | whether the iDRAC really *refuses* the third-party PCIe cooling command, or accepts it silently and makes the container report a setting it never applied |
+        | [#257](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/257) | an **AMD PowerEdge** (R6415, R7415, R6515, R7515, R6525, R7525, R6615, R7615…) | whether AMD servers can use the two `lm-sensors` features they are currently excluded from |
+        | [#256](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/256) | a server whose **iDRAC controls the fans but reports no CPU temperature at all** | whether the `lm-sensors` fallback addresses the failure those servers actually have |
+
+        Fill in only the sections that apply to your machine. A partial report is far
+        better than none: **paste the output verbatim, including any error.** An error
+        message is data here, not a reason to hold the report back.
+
+        > [!NOTE]
+        > These commands only *read* from your BMC. None of them changes a fan speed or
+        > any other setting.
+
+  - type: checkboxes
+    id: questions
+    attributes:
+      label: Which question are you answering?
+      description: Tick every one that applies. Tick none if you are simply reporting what your server does.
+      options:
+        - label: "#263 — my server is 14th generation or newer"
+        - label: "#257 — my server is an AMD PowerEdge"
+        - label: "#256 — my iDRAC controls the fans but reports no CPU temperature"
+
+  - type: input
+    id: model
+    attributes:
+      label: Server model
+      description: Exactly as Dell names it, or as the container prints it at startup.
+      placeholder: PowerEdge R740xd
+    validations:
+      required: true
+
+  - type: input
+    id: idrac
+    attributes:
+      label: iDRAC generation and firmware version
+      description: Readable in the iDRAC web console under "iDRAC Settings". Say "unknown" rather than guessing.
+      placeholder: iDRAC 9, firmware 3.30.30.30
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cpu_vendor
+    attributes:
+      label: CPU manufacturer
+      options:
+        - Intel
+        - AMD
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How does the container reach the BMC?
+      description: '"local" means IDRAC_HOST=local with the IPMI device passed through; "network" means an iDRAC address over the LAN.'
+      options:
+        - local
+        - network
+        - both, and they behave differently
+    validations:
+      required: true
+
+  - type: textarea
+    id: sdr
+    attributes:
+      label: "Sensor inventory — `ipmitool -I open sdr elist all`"
+      description: |
+        Wanted by **#256** and **#257**. From the Docker host, or inside the container.
+        In network mode, replace `-I open` with `-I lanplus -H <address> -U <user> -P <password>`
+        — and remove the password from what you paste.
+      render: shell
+      placeholder: |
+        $ ipmitool -I open sdr elist all
+        Inlet Temp       | 04h | ok  |  7.1 | 21 degrees C
+        Temp             | 01h | ok  |  3.1 | 42 degrees C
+        ...
+
+  - type: textarea
+    id: sensors
+    attributes:
+      label: "CPU temperatures the host itself reports — `sensors -u`"
+      description: |
+        Wanted by **#256** and **#257**, and only meaningful in `local` mode — it reads the
+        host's own CPUs, not the iDRAC. Ideally captured at the same moment as the inventory
+        above, so the two scales can be compared. On AMD this is the `k10temp` section
+        (`Tctl` / `Tdie`) that #257 turns on.
+      render: shell
+      placeholder: |
+        $ sensors -u
+        coretemp-isa-0000
+        Package id 0:
+          temp1_input: 42.000
+          temp1_max: 80.000
+          temp1_crit: 90.000
+
+  - type: textarea
+    id: pcie
+    attributes:
+      label: "Third-party PCIe cooling response — the `raw 0x30 0xce` probe"
+      description: |
+        Wanted by **#263**, and the whole question for 14th generation and newer servers.
+        Run it and paste the output *and* the exit code — an `Invalid command` rejection is
+        the answer just as much as a success is.
+      render: shell
+      placeholder: |
+        $ ipmitool -I open raw 0x30 0xce 0x00 0x16 0x05 0x00 0x00 0x00 0x05 0x00 0x00 0x00 0x00; echo "exit: $?"
+        Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command
+        exit: 1
+
+  - type: textarea
+    id: startup_log
+    attributes:
+      label: Container startup log
+      description: |
+        `docker logs <container>` from the first line onwards. Useful on its own: recent
+        versions name the server, the temperature source in use, the threshold retained and
+        where it came from — so this alone often contains the answer.
+      render: shell
+
+  - type: textarea
+    id: anything_else
+    attributes:
+      label: Anything else worth knowing
+      description: Container version, how the server is loaded when you captured this, or anything that looked wrong.
+
+  - type: markdown
+    attributes:
+      value: |
+        Thank you — this is the only way these three questions get closed.

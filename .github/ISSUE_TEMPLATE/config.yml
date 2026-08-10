@@ -1,0 +1,11 @@
+# Keeping blank issues enabled on purpose : most reports here are one-off
+# questions about a log line, and a form is the wrong shape for those. The
+# templates beside this file exist for the reports whose value depends entirely
+# on which commands were run, where a free-form issue tends to arrive missing
+# the one output that would have settled it.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Question about a parameter, a log line or a troubleshooting step
+    url: https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker#readme
+    about: The README documents every parameter, what the startup log states and the known troubleshooting paths. Most questions are answered there.
