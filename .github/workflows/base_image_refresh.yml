@@ -38,7 +38,13 @@ jobs:
   check:
     name: Check whether the base image changed
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Was 5, which no longer fits what this job does. The retry ladder on the
+    # base image digest sleeps 60s then 300s before its last attempt, so six
+    # minutes of it are spent waiting on purpose ; at 5 the job was killed
+    # mid-sleep and the third attempt could never run. The release walk above it
+    # also costs one registry read per version tag that has never been
+    # published. Fifteen leaves room for both and still bounds a wedged job
+    timeout-minutes: 15
     permissions:
       contents: read
       # Reading the published image back, see the login step below
@@ -47,25 +53,72 @@ jobs:
       changed: ${{ steps.compare.outputs.changed }}
       base-image: ${{ steps.base.outputs.image }}
       base-digest: ${{ steps.base.outputs.digest }}
+      base-pinned: ${{ steps.base.outputs.pinned }}
       release-tag: ${{ steps.release.outputs.tag }}
       release-sha: ${{ steps.release.outputs.sha }}
       image-name: ${{ steps.image-name.outputs.value }}
     steps:
-      # The whole history, tags included : the last release tag is read from it
+      # The whole history, tags included : the version tags are the candidate
+      # list the current release is picked out of
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Find the last release tag
+      # Moved above the release lookup, which now needs both this name and the
+      # credentials below
+      - name: Calculate final Docker image name
+        id: image-name
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ github.repository }}"
+          FINAL_NAME="${IMAGE_NAME/_Docker/}"
+          # docker/metadata-action lowercases it on the publishing side, this
+          # one is read back from a registry so it has to be lowercased here
+          echo "value=${FINAL_NAME,,}" >> "$GITHUB_OUTPUT"
+
+      # The package is public, so the reads below would work unauthenticated.
+      # Logging in anyway : this job fails the run rather than assume anything,
+      # so a read that only works while the package stays public is a daily
+      # failure waiting for the day someone flips its visibility
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find the last published release
         id: release
         run: |
           set -euo pipefail
-          # Same pattern as the tags "Docker image CI" builds on. Version sort,
-          # so v1.10 comes out above v1.9
-          TAG="$(git tag --list 'v[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+          # Not "the highest v* tag" any more, for the same reason the release
+          # build stopped asking that question. During the 429 storm the highest
+          # tag was v1.69, whose image never reached either registry ; this
+          # workflow would have rebuilt and republished "latest" from it every
+          # night, publishing an image for a version nobody can pull by number.
+          # The tags are walked highest first and the first one that actually
+          # resolves in the registry is the release "latest" belongs to
+          IMAGE="ghcr.io/${{ steps.image-name.outputs.value }}"
+          ERRORS="$RUNNER_TEMP/imagetools-error.txt"
+          TAG=""
+          for CANDIDATE in $(git tag --list 'v[0-9]*.[0-9]*' --sort=-v:refname); do
+            if docker buildx imagetools inspect "$IMAGE:$CANDIDATE" --format '{{json .Manifest}}' >/dev/null 2>"$ERRORS"; then
+              TAG="$CANDIDATE"
+              break
+            fi
+            if grep -qiE 'not found|manifest unknown|name unknown' "$ERRORS"; then
+              continue
+            fi
+            # Same doctrine as the comparison below : credentials, rate limit or
+            # outage are not an answer to "was this version published ?", and
+            # guessing here would republish "latest" from the wrong source
+            echo "::error::Could not read $IMAGE:$CANDIDATE, giving up rather than guessing which version is the current release"
+            cat "$ERRORS"
+            exit 1
+          done
           if [ -z "$TAG" ]; then
-            echo "::error::No v* tag found, nothing has ever been released"
+            echo "::error::No v* tag resolves in $IMAGE, nothing has ever been published"
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -79,36 +132,64 @@ jobs:
           # being refreshed is built from that tag, so its base is the one that
           # matters. A base already pinned by digest simply never moves, and
           # this workflow then never has anything to do
-          BASE_IMAGE="$(git show "${{ steps.release.outputs.tag }}:Dockerfile" \
-            | awk 'toupper($1) == "FROM" { print $2; exit }')"
+          # Two Dockerfile shapes have to parse here, and both are live : the
+          # tags released from now on name their base on an ARG above the FROM
+          # line, every tag released before that ARG existed names it on the
+          # FROM line itself. This job reads whichever the last published
+          # release happens to carry
+          BASE_IMAGE="$(git show "${{ steps.release.outputs.tag }}:Dockerfile" | awk '
+            toupper($1) == "ARG" {
+              eq = index($2, "=")
+              if (eq > 1) default_of[substr($2, 1, eq - 1)] = substr($2, eq + 1)
+            }
+            toupper($1) == "FROM" {
+              ref = $2
+              if (ref ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) {
+                name = ref
+                gsub(/^\$\{?|\}$/, "", name)
+                ref = default_of[name]
+              }
+              print ref
+              exit
+            }')"
           if [ -z "$BASE_IMAGE" ]; then
-            echo "::error::No FROM instruction found in the Dockerfile of ${{ steps.release.outputs.tag }}"
+            echo "::error::Could not work out the base image from the Dockerfile of ${{ steps.release.outputs.tag }}"
             exit 1
           fi
-          DIGEST="$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"
-          echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          # Same ladder as "Docker image CI" uses on this exact call : the base
+          # lives on Docker Hub, which answers 429 once the pull quota of the
+          # window is spent. Without it the nightly repair is down precisely
+          # during the rate limit storms it exists to repair
+          # Drop an existing digest, then drop a tag, then pin to the digest just
+          # resolved. A colon only introduces a tag when it sits in the last path
+          # segment : in "registry:5000/image" it is a host and a port
+          pin_to_digest() {
+            local REF="${BASE_IMAGE%%@*}" REPO
+            case "${REF##*/}" in
+              *:*) REPO="${REF%:*}" ;;
+              *)   REPO="$REF" ;;
+            esac
+            printf '%s@%s\n' "$REPO" "$1"
+          }
 
-      - name: Calculate final Docker image name
-        id: image-name
-        run: |
-          set -euo pipefail
-          IMAGE_NAME="${{ github.repository }}"
-          FINAL_NAME="${IMAGE_NAME/_Docker/}"
-          # docker/metadata-action lowercases it on the publishing side, this
-          # one is read back from a registry so it has to be lowercased here
-          echo "value=${FINAL_NAME,,}" >> "$GITHUB_OUTPUT"
-
-      # The package is public, so the read below would work unauthenticated.
-      # Logging in anyway : the comparison now fails the run rather than assume
-      # the base moved, so a read that only works while the package stays public
-      # is a daily failure waiting for the day someone flips its visibility
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          for DELAY in 60 300 0; do
+            if DIGEST="$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"; then
+              echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
+              echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+              # Both builds below are given this, so the base the suite runs on,
+              # the base that gets pushed and the digest recorded as a label are
+              # the same one - the whole point of a run that exists because the
+              # base moved
+              echo "pinned=$(pin_to_digest "$DIGEST")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$DELAY" -gt 0 ]; then
+              echo "::warning::Could not resolve $BASE_IMAGE, retrying in ${DELAY}s"
+              sleep "$DELAY"
+            fi
+          done
+          echo "::error::Could not resolve the digest of $BASE_IMAGE"
+          exit 1
 
       - name: Compare it with the base of the published image
         id: compare
@@ -116,9 +197,9 @@ jobs:
           set -euo pipefail
           # Read from GHCR rather than Docker Hub : anonymous Docker Hub
           # requests are rate limited per IP, and the runners share theirs.
-          # The publishing step below records the base digest as a label, which
-          # is what makes this comparison possible without keeping state
-          # anywhere else
+          # The publishing steps record both the base digest and the version as
+          # labels, which is what makes these comparisons possible without
+          # keeping state anywhere else
           IMAGE="ghcr.io/${{ steps.image-name.outputs.value }}:latest"
           ERRORS="$RUNNER_TEMP/imagetools-error.txt"
 
@@ -127,10 +208,18 @@ jobs:
               | jq -r 'if has("config") then [.] else [.[]] end
                        | map(.config.Labels["org.opencontainers.image.base.digest"] // empty)
                        | first // ""')"
+            # The same read, one label over : which VERSION "latest" is on. Both
+            # publishers stamp it, the release build explicitly since this rule
+            # depends on it
+            PUBLISHED_VERSION="$(printf '%s' "$CONFIG" \
+              | jq -r 'if has("config") then [.] else [.[]] end
+                       | map(.config.Labels["org.opencontainers.image.version"] // empty)
+                       | first // ""')"
           elif grep -qiE 'not found|manifest unknown|name unknown' "$ERRORS"; then
             # Nothing published under that tag yet, so there is nothing to
             # compare against and everything to build
             PUBLISHED=""
+            PUBLISHED_VERSION=""
           else
             # Credentials, rate limit, registry outage : none of these are an
             # answer to "did the base move ?". Failing here is deliberate.
@@ -143,10 +232,37 @@ jobs:
           fi
 
           CURRENT="${{ steps.base.outputs.digest }}"
-          if [ "$PUBLISHED" = "$CURRENT" ]; then
+          RELEASE="${{ steps.release.outputs.tag }}"
+
+          # "latest" sitting ahead of the highest release that resolves in the
+          # registry means a version tag was deleted from under us, or something
+          # was published by hand. Rebuilding from older source would move
+          # "latest" backwards, which is the one thing neither workflow may ever
+          # do, so this stops instead of guessing
+          if [ -n "$PUBLISHED_VERSION" ] && [ "$PUBLISHED_VERSION" != "$RELEASE" ] \
+             && [ "$(printf '%s\n%s\n' "$PUBLISHED_VERSION" "$RELEASE" | sort -V | tail -n 1)" = "$PUBLISHED_VERSION" ]; then
+            echo "::error::latest is on $PUBLISHED_VERSION, ahead of the highest published release $RELEASE. Refusing to rebuild it from older source"
+            exit 1
+          fi
+
+          if [ "$PUBLISHED" = "$CURRENT" ] && [ "$PUBLISHED_VERSION" = "$RELEASE" ]; then
             CHANGED=false
           else
             CHANGED=true
+            if [ "$PUBLISHED_VERSION" != "$RELEASE" ]; then
+              # This is the second half of the "latest" rule and the only thing
+              # that repairs it without a human. The release build decides
+              # whether it may claim "latest" from what is published when it
+              # starts building, so several releases building at once can all
+              # decide yes and the last one to finish pushing wins, whatever its
+              # version. Nothing ends up on a version that failed to build, but
+              # "latest" can end a burst one or two releases short. This is where
+              # that is put right, at most a day later, whether the base moved or
+              # not.
+              # Expected once more, harmlessly, the first time this runs against
+              # a "latest" published before the label was stamped explicitly
+              echo "::warning::latest is on ${PUBLISHED_VERSION:-an unrecorded version}, the highest published release is $RELEASE. Republishing it"
+            fi
             if [ -z "$PUBLISHED" ]; then
               # Expected exactly once, the first time this runs against an image
               # published before the label existed. Twice in a row means the
@@ -212,6 +328,11 @@ jobs:
           # Resolve the base from the registry rather than reuse whatever the
           # runner already had : that resolution is the whole point of the run
           pull: true
+          # The exact digest the check job compared against, not "latest"
+          # re-resolved here. A release tag predating this ARG ignores it and
+          # resolves its own FROM line, exactly as this job did before
+          build-args: |
+            BASE_IMAGE=${{ needs.check.outputs.base-pinned }}
           tags: dell_idrac_fan_controller:test
 
       - name: Run the test suite inside the image
@@ -289,8 +410,12 @@ jobs:
           push: true
           # Deliberately no "pull" here, unlike the test build above : the base
           # was resolved there, and re-resolving it would miss the builder cache
-          # and rebuild amd64 into something the suite never ran on. Should the
-          # base move between the two, the label records the digest the check
-          # job saw, one behind, and the next run picks the difference up
+          # and rebuild amd64 into something the suite never ran on
+          # The same pinned digest the test build was given. The base moving
+          # between the two builds used to leave the label one behind the bytes ;
+          # pinned, both builds are on the digest the check job saw and the label
+          # records, and a base that moves mid-run is simply picked up tomorrow
+          build-args: |
+            BASE_IMAGE=${{ needs.check.outputs.base-pinned }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

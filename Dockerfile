@@ -1,4 +1,19 @@
-FROM ubuntu:latest
+# Named so the publishing workflows can build from the exact base digest they
+# resolved and recorded as org.opencontainers.image.base.digest, instead of
+# letting this line resolve "latest" a second time. Those two resolutions are
+# minutes apart, so when Canonical published in between, the image went out
+# built on the newer base and labelled with the older one.
+# The label lags, it never leads : the resolution always precedes the build. So
+# the cost is a nightly base image refresh that rebuilds an image already
+# sitting on the current base, not one that skips an image that is not - a
+# wasted rebuild rather than a missed security fix.
+# Pinning also keeps that workflow's test build and its publishing build on one
+# digest, which is what makes "the suite ran on the bytes that get pushed" true
+# rather than merely likely.
+# The default keeps a plain "docker build ." working, which is how the test
+# suite builds it
+ARG BASE_IMAGE=ubuntu:latest
+FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.authors="tigerblue77"
 
