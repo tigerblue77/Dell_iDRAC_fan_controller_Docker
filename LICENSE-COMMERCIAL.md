@@ -48,7 +48,9 @@ It covers only the parts of the program whose copyright this project holds or is
 
 ## How to ask
 
-Open an issue on this repository describing your use case, or contact [@tigerblue77](https://github.com/tigerblue77) through GitHub. Please include:
+**Through GitHub — that is the channel, and there is no separate mailing address.** Open an issue on this repository describing your use case, or reach the maintainer, [@tigerblue77](https://github.com/tigerblue77), on his profile there. An issue is the better of the two unless what you have to say is confidential : it is seen sooner, and it leaves a record both sides can point back to.
+
+Please include:
 
 1. what the product or service is, and how the controller would sit inside it;
 2. whether you would redistribute it, host it, or both;
