@@ -1272,27 +1272,39 @@ function get_Dell_server_model() {
   IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>&1)
   local -r ipmitool_exit_code=$?
 
-  # Only the FIRST match of each field. "ipmitool fru" describes every FRU device on the bus, and more
-  # than one of them fills these fields : a populated power supply reports its own manufacturer and its
-  # own product name. Keeping every match sets these variables to several newline-separated values, the
-  # server's own and its parts', and the equality test the caller runs against SERVER_MANUFACTURER then
-  # fails on a genuine Dell -- refusing to start with "Your server isn't a Dell product" on hardware
-  # this function had just identified correctly (issue #319). ipmitool prints the builtin FRU device
-  # (ID 0), which describes the server itself, before it walks the SDR records, so the first match is
-  # the right one
-  SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2; exit}')
-  SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2; exit}')
+  # The server is the builtin FRU device (ID 0). "ipmitool fru" describes every FRU device on the bus,
+  # and all the others are parts rather than the server : a populated power supply fills these very same
+  # fields with its own manufacturer and its own product name.
+  #
+  # Reading the whole inventory and taking the first match (issue #319) is right only as long as the
+  # builtin device fills the field itself. When it does not, the first match silently comes from
+  # whichever device is listed next, so a server declaring no manufacturer of its own gets identified by
+  # its power supply's brand -- and a non-Dell server carrying a Dell branded power supply then passes
+  # the caller's "is this a Dell?" test, which exists to keep Dell's raw commands away from hardware
+  # that is not Dell. Narrowing the search to the builtin device's own section closes that.
+  #
+  # An inventory that labels no builtin device is read whole, exactly as before, rather than not at all
+  local FRU_SERVER_SECTION
+  FRU_SERVER_SECTION=$(echo "$IPMI_FRU_content" | awk '
+    /^FRU Device Description/ { inside = ($0 ~ /Builtin FRU Device/); next }
+    inside')
+  if [ -z "$FRU_SERVER_SECTION" ]; then
+    FRU_SERVER_SECTION="$IPMI_FRU_content"
+  fi
 
-  # Check if SERVER_MANUFACTURER is empty, if yes, assign value based on "Board Mfg". First match only,
-  # for the same reason as above, and this is the likelier of the two paths to meet a second match :
-  # Dell power supplies commonly leave the "Product *" fields empty and fill only the board ones
+  # First match only within that section too : one device cannot sensibly report the field twice, but a
+  # whole-inventory fallback above would otherwise bring the parts back in
+  SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | grep "Product Manufacturer" | awk -F ': ' '{print $2; exit}')
+  SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | grep "Product Name" | awk -F ': ' '{print $2; exit}')
+
+  # Check if SERVER_MANUFACTURER is empty, if yes, assign value based on "Board Mfg"
   if [ -z "$SERVER_MANUFACTURER" ]; then
-    SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{print $2; exit}')
+    SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{print $2; exit}')
   fi
 
   # Check if SERVER_MODEL is empty, if yes, assign value based on "Board Product"
   if [ -z "$SERVER_MODEL" ]; then
-    SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2; exit}')
+    SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2; exit}')
   fi
 
   # Whether the server could be identified is the reliable signal here, not ipmitool's

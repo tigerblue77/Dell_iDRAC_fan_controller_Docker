@@ -64,6 +64,49 @@ function test_a_populated_power_supply_does_not_poison_the_board_field_fallback_
   assert_equals "PowerEdge R630" "$SERVER_MODEL" "the board fallback must not append the power supply's board product"
 }
 
+function test_a_server_declaring_no_manufacturer_is_read_for_its_model_alone() {
+  # Some servers name themselves but fill no manufacturer field, in either the board or the product
+  # pair. The model still identifies them, so this must not be fatal here : it is the caller that
+  # decides what to do with a server it cannot confirm is a Dell
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "PowerEdge R730xd" --no-manufacturer)
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "a server that named itself was identified, whatever its manufacturer field says"
+  assert_empty "$SERVER_MANUFACTURER" "no manufacturer was declared, so none must be invented"
+  assert_equals "PowerEdge R730xd" "$SERVER_MODEL"
+}
+
+function test_a_server_declaring_no_manufacturer_is_not_given_its_power_supplys_brand() {
+  # The identification must read the SERVER, not merely the first FRU device that happened to fill the
+  # field. A server declaring no manufacturer of its own, with a Dell branded power supply on the bus,
+  # must not come back as "DELL" : Dell_iDRAC_fan_controller.sh tests SERVER_MANUFACTURER to keep Dell's
+  # raw commands away from hardware that is not Dell, and borrowing a power supply's brand defeats it
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "Super Server X11DPi-N" --no-manufacturer --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_empty "$SERVER_MANUFACTURER" "the power supply's manufacturer is not the server's"
+  assert_not_equals "DELL" "$SERVER_MANUFACTURER" "a Dell power supply must never make a server pass for a Dell"
+  assert_equals "Super Server X11DPi-N" "$SERVER_MODEL" "the model is still the server's own"
+}
+
+function test_the_board_field_fallback_reads_the_server_and_not_the_first_device_that_answers() {
+  # Same hazard on the fallback path, which is where it actually bites : Dell power supplies commonly
+  # fill only their board fields, and the fallback only runs on a server that filled no product field
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "Super Server X11DPi-N" --no-manufacturer --board-fields-only --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_empty "$SERVER_MANUFACTURER" "the board fallback must stay inside the builtin FRU device"
+  assert_equals "Super Server X11DPi-N" "$SERVER_MODEL" "the model must be the server's, not the power supply's"
+  assert_not_contains "$SERVER_MODEL" "PWR SPLY" "the power supply's board product must not answer for the server"
+}
+
 function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_error() {
   export MOCK_IPMITOOL_FRU_EXIT_CODE=1
   export MOCK_IPMITOOL_FRU_OUTPUT="Error: Unable to establish IPMI v2 / RMCP+ session"

@@ -18,6 +18,11 @@
 # fields at all and only expose "Board Mfg" / "Board Product", which
 # get_Dell_server_model() falls back on
 #
+# --no-manufacturer reproduces the servers that name themselves but declare no
+# manufacturer at all, in either the board or the product fields. Combined with
+# --with-readable-psu it is what tells whether the identification is really reading
+# the server, or merely the first FRU device that happened to fill the field
+#
 # --with-unreadable-devices appends the empty drive backplane, PERC and PSU bays that
 # a partially populated server reports as unreadable. They are what makes the real
 # "ipmitool fru" exit non-zero on hardware that is nonetheless perfectly healthy, and
