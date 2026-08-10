@@ -362,3 +362,24 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+
+      # After the release note, so that a registry hiccup here cannot withhold
+      # the announcement of a version whose image did go out.
+      #
+      # "Is a higher version already published ?" is decided above, before a
+      # single layer moves, and two releases tagged less than a build apart both
+      # get "no" : neither has published when the other asks, so both claim
+      # "latest" and the last push wins, separately on each registry. That is
+      # how "latest" was v1.75 on Docker Hub and v1.74 on GHCR at the same
+      # moment. Asked again here, once the pushes are done, the question has an
+      # answer that no longer depends on when it is asked : concurrent releases
+      # reaching this step agree, and whichever writes last writes the same
+      # thing. See .github/reconcile_latest_tag.sh
+      - name: Point "latest" at the highest published version
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.docker_image_name.outputs.value }}"
+          # Both registries, and in this order : Docker Hub is where the pull
+          # count is, so it is the one worth settling first if the run is about
+          # to be cut short
+          .github/reconcile_latest_tag.sh "${IMAGE,,}" docker.io ghcr.io
