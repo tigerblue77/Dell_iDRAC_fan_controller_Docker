@@ -118,16 +118,22 @@ function validate_fan_speed_parameter() {
   local -r VALUE="$2"
   local DECIMAL_VALUE
 
+  # One command substitution per statement, which is why these are hoisted rather than expanded inside
+  # the messages below (see test_no_statement_expands_two_command_substitutions)
+  local -r MINIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MINIMUM_FAN_SPEED_PERCENTAGE")
+  local -r MAXIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MAXIMUM_FAN_SPEED_PERCENTAGE")
+  local -r ACCEPTED_RANGE="a percentage from ${MINIMUM_FAN_SPEED_PERCENTAGE} to ${MAXIMUM_FAN_SPEED_PERCENTAGE}, or the same value in hexadecimal from ${MINIMUM_HEXADECIMAL_FAN_SPEED} to ${MAXIMUM_HEXADECIMAL_FAN_SPEED}"
+
   if [[ "$VALUE" =~ ^0[xX][0-9A-Fa-f]{1,2}$ ]]; then
     DECIMAL_VALUE=$(convert_hexadecimal_value_to_decimal "$VALUE")
   elif [[ "$VALUE" =~ ^[0-9]+$ ]]; then
     DECIMAL_VALUE=$(normalize_decimal_value "$VALUE")
   else
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$ACCEPTED_RANGE. The \"0x\" prefix is what tells the two notations apart"
   fi
 
-  if [ "$DECIMAL_VALUE" -gt 100 ]; then
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64 (this is ${DECIMAL_VALUE}%)"
+  if [ "$DECIMAL_VALUE" -gt "$MAXIMUM_FAN_SPEED_PERCENTAGE" ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$ACCEPTED_RANGE (this is ${DECIMAL_VALUE}%)"
   fi
 }
 

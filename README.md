@@ -81,7 +81,7 @@ docker run -d \
   --name Dell_iDRAC_fan_controller \
   --restart=unless-stopped \
   -e IDRAC_HOST=local \
-  -e FAN_SPEED=<decimal or hexadecimal fan speed> \
+  -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check> \
@@ -103,7 +103,7 @@ docker run -d \
   -e IDRAC_HOST=<iDRAC IP address> \
   -e IDRAC_USERNAME=<iDRAC username> \
   -e IDRAC_PASSWORD=<iDRAC password> \
-  -e FAN_SPEED=<decimal or hexadecimal fan speed> \
+  -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check> \
@@ -129,7 +129,7 @@ services:
     restart: unless-stopped
     environment:
       - IDRAC_HOST=local
-      - FAN_SPEED=<decimal or hexadecimal fan speed>
+      - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check>
@@ -156,7 +156,7 @@ services:
       - IDRAC_HOST=<iDRAC IP address>
       - IDRAC_USERNAME=<iDRAC username>
       - IDRAC_PASSWORD=<iDRAC password>
-      - FAN_SPEED=<decimal or hexadecimal fan speed>
+      - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check>
@@ -205,7 +205,15 @@ All parameters are optional as they have default values (including default iDRAC
 - `IDRAC_HOST` parameter can be set to "local" or to your distant iDRAC's IP address. **Default** value is "local".
 - `IDRAC_USERNAME` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "root".
 - `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "calvin".
-- `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%).
+- `FAN_SPEED` parameter is the duty cycle the fans are held at while your fan control profile is applied. It can be set as a decimal percentage (from 0 to 100%) or as the same value in hexadecimal (from 0x00 to 0x64). **Default** value is 5(%).
+  - Anything outside that range stops the container at startup rather than being clamped or passed through to the fans, `200` having once reached `ipmitool` as `0xc8`.
+  - :warning: **The `0x` prefix is the only thing that tells the two notations apart**, and both are accepted, so a value that lost its prefix is not refused — it just applies a different duty cycle than the one you meant. `0x64` is 100% while `64` is 64%; `0x30` is 48% while `30` is 30%. The startup log always states the one that was resolved:
+
+    ```
+    Fan speed objective: 64%
+    ```
+
+    That is the line to check first if the fans do not behave the way you expected.
 - `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). It can be set to a decimal number of degrees Celsius, from 20 to 125, or to "auto" to let the container read the threshold from the CPUs themselves. **Default** value is "auto".
   - An explicit value has to be **between 20°C and 125°C**, and the container refuses to start on anything outside that window rather than run with it. No CPU throttles below the lower bound and none tolerates more than the upper one, so a value outside it is a typo (`500` for `50`) or a Fahrenheit reading rather than a setting — and left in place it would be silent, every comparison against it reading as "not overheating" while the whole chassis stayed at `FAN_SPEED`.
   - A value **above** the maximum is not a stricter setting but the absence of one, which is why it is refused rather than clamped. No PowerEdge CPU reaches 125°C — the server's own thermal protection powers the machine off first — so such a threshold could never be crossed, the overheat fallback it governs could never fire, and the container would print `CPU temperature threshold: 160°C` at startup while supervising nothing. **That fallback cannot be switched off, by design**, and no value of this parameter is meant to do it. `MONITORING_ONLY_MODE` is not that switch either: it never applies **any** profile, yours included.
@@ -402,7 +410,7 @@ or
 export IDRAC_HOST=<iDRAC IP address>
 export IDRAC_USERNAME=<iDRAC username>
 export IDRAC_PASSWORD=<iDRAC password>
-export FAN_SPEED=<decimal or hexadecimal fan speed>
+export FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
 export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
 export CHECK_INTERVAL=<seconds between each check>
 export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
