@@ -342,6 +342,42 @@ function test_the_controller_survives_a_recent_server_that_rejects_the_fan_contr
   assert_contains "$OUTPUT" "45°C" "the temperatures must still be monitored and logged"
 }
 
+function test_the_controller_starts_on_a_server_whose_power_supplies_are_populated() {
+  # What the user sees when a second FRU device fills the same fields as the server : the
+  # container refuses to start, claiming the server is not a Dell. The counterpart of
+  # test_the_controller_refuses_to_run_on_a_server_that_is_not_a_dell() below -- that
+  # refusal must keep firing on a real non-Dell, and must never fire on a Dell whose
+  # power supply happens to be readable
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R740xd" --with-readable-psu)
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "Server model: DELL PowerEdge R740xd" "the server is named once, without its power supply"
+  assert_not_contains "$OUTPUT" "isn't a Dell product" "a Dell with populated power supplies is still a Dell"
+  assert_not_contains "$OUTPUT" "PWR SPLY" "the power supply must never appear as the server model"
+  assert_contains "$OUTPUT" "User static fan control profile (5%)" "the controller should reach its monitoring loop"
+}
+
+function test_the_controller_refuses_a_server_whose_only_dell_marking_is_its_power_supply() {
+  # The safety guarantee of the case below, on the shape that used to slip past it. A non-Dell server
+  # declaring no manufacturer of its own, with a Dell branded power supply on the FRU bus, was read as
+  # "DELL" and started -- so Dell's proprietary raw commands reached hardware that was never Dell.
+  # Whatever such a server does with 0x30 0x30 is undefined, which is exactly what the check exists to
+  # avoid, so the refusal matters more than the identification
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "Super Server X11DPi-N" --no-manufacturer --with-readable-psu)
+
+  local OUTPUT
+  OUTPUT=$(run_controller)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE"
+  assert_contains "$OUTPUT" "Your server isn't a Dell product"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30")" \
+    "no fan control command must ever reach a server whose only Dell marking is a spare part"
+}
+
 function test_the_controller_refuses_to_run_on_a_server_that_is_not_a_dell() {
   export MOCK_IPMITOOL_FRU_OUTPUT
   MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "Supermicro" --model "Super Server X11DPi-N")
@@ -354,6 +390,26 @@ function test_the_controller_refuses_to_run_on_a_server_that_is_not_a_dell() {
   assert_contains "$OUTPUT" "Your server isn't a Dell product"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30")" \
     "no fan control command must ever reach a non-Dell server"
+}
+
+function test_the_controller_starts_on_a_server_whose_fru_inventory_is_partially_unreadable() {
+  # The symptom issue #193 describes, end to end : an R740xd with two empty backplane bays and no
+  # second PERC makes "ipmitool fru" exit 1, and the container used to stop right there, before it
+  # ever applied a fan control profile -- leaving the fans wherever the BMC's own profile put them.
+  # The unit cases in 50_server_model_detection.sh hold the identification itself ; this one holds
+  # what the user actually sees, which is a container that starts and reaches its monitoring loop
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd"
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output --cpus 2 --cpu-temperatures "42 44" --inlet 21 --exhaust 34)"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "Server model: DELL PowerEdge R740xd" "the server identified itself despite the unreadable bays"
+  assert_not_contains "$OUTPUT" "the container will not start" "empty bays are not a configuration error"
+  assert_contains "$OUTPUT" "User static fan control profile (5%)" \
+    "the controller should reach its monitoring loop and drive the fans"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0xff")" \
+    "the user's fan speed should have been applied, which is what never happened"
 }
 
 function test_the_controller_stops_when_the_ipmi_connection_cannot_be_established() {

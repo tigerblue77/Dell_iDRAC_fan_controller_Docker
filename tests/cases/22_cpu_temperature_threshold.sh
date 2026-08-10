@@ -227,3 +227,52 @@ function test_an_implausible_threshold_stops_the_controller() {
     assert_startup_is_refused "[$VALUE] should stop the controller"
   done
 }
+
+function test_both_ends_of_the_plausible_window_are_themselves_accepted() {
+  # A window the documentation states as "between 20°C and 125°C" but that refuses
+  # 20 or 125 is a window described wrongly, and an off-by-one on either bound is
+  # invisible until somebody sets exactly it
+  export CPU_TEMPERATURE_THRESHOLD="$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
+  assert_startup_reports "CPU temperature threshold: ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C" \
+    "the bottom of the plausible window should be accepted"
+
+  export CPU_TEMPERATURE_THRESHOLD="$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
+  assert_startup_reports "CPU temperature threshold: ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C" \
+    "the top of the plausible window should be accepted"
+}
+
+function test_the_refusal_says_why_rather_than_only_stating_a_bound() {
+  # 160 is the value issue #326 was reported with, and a bound quoted without its
+  # reason is what left that user restarting into the same error. The reason is not
+  # that 160 is merely implausible : it is that no PowerEdge CPU reaches it, so the
+  # threshold could never be crossed and the overheat fallback it governs could
+  # never fire -- the container would have printed it at startup while supervising
+  # nothing. The unit is named too, 160 being an ordinary Fahrenheit figure
+  export CPU_TEMPERATURE_THRESHOLD=160
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "42 44"
+
+  local -r OUTPUT=$(run_controller 'Error')
+
+  assert_contains "$OUTPUT" \
+    "degrees Celsius between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD} and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}" \
+    "the refusal should state the window, and the unit it is counted in"
+  assert_contains "$OUTPUT" "could never fire" \
+    "the refusal should say what an unreachable threshold costs, not only that it is out of range"
+}
+
+function test_the_refusal_offers_no_way_to_switch_the_fallback_off() {
+  # Being unable to disable the overheat fallback is the intended behaviour, so the
+  # refusal must not read as an invitation to set the maximum instead : a threshold
+  # no CPU reaches is the very configuration the window exists to refuse, and 125
+  # is one of those as surely as 160 is. An earlier revision of this branch did
+  # recommend it, which is what this case is here to keep from coming back
+  export CPU_TEMPERATURE_THRESHOLD=160
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "42 44"
+
+  local -r OUTPUT=$(run_controller 'Error')
+
+  assert_not_contains "$OUTPUT" "set ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}" \
+    "the maximum is a safety limit, not a documented way around the fallback"
+  assert_contains "$OUTPUT" "not meant to be switched off" \
+    "the refusal should say the fallback is not disableable rather than leave the user hunting"
+}

@@ -100,6 +100,81 @@ function test_the_container_exits_after_the_configured_consecutive_failures() {
     "and why exiting is the useful move, since it cannot move the fans itself"
 }
 
+function test_the_startup_log_states_what_the_escalation_resolved_to() {
+  # It is the only configured parameter whose resolution performs a conversion the
+  # user did not write -- a duration becomes a number of checks, rounded up against
+  # CHECK_INTERVAL -- and it was the only one whose resolved value was never shown.
+  # Every shape is asserted, the disabled one included, a log that goes silent when
+  # the escalation is off being indistinguishable from one that forgot to print it
+  assert_equals "After 12 checks (60s, rounded up to whole check intervals)" \
+    "$(describe_IPMI_unreachable_escalation "" "60s" 12)" \
+    "a duration should be reported with the number of checks it became"
+  assert_equals "After 1 check (5, rounded up to whole check intervals)" \
+    "$(describe_IPMI_unreachable_escalation "" "5" 1)" \
+    "and in the singular when it collapsed to one"
+  assert_equals "After 3 checks (set by MAXIMUM_CONSECUTIVE_IPMI_FAILURES)" \
+    "$(describe_IPMI_unreachable_escalation "3" "60s" 3)" \
+    "a count converts nothing, so it names the parameter in force instead"
+  assert_equals "Disabled (the iDRAC is retried until it answers)" \
+    "$(describe_IPMI_unreachable_escalation "" "" "")" \
+    "and a disabled escalation says what happens instead of exiting"
+}
+
+function test_the_controller_reports_the_escalation_it_will_apply() {
+  export MAXIMUM_IPMI_UNREACHABLE_DURATION="60s"
+  export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=""
+  export CHECK_INTERVAL=5
+  simulate_server "PowerEdge R740" --cpus 2
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "iDRAC unreachable escalation: After 12 checks" \
+    "the startup log should state the escalation alongside every other parameter"
+}
+
+function test_a_duration_that_collapses_to_a_single_check_is_warned_about() {
+  # A single check is exiting on the very first unreachable reading, which is word
+  # for word what a zero is refused for -- and reachable by any duration at or below
+  # CHECK_INTERVAL without a refusal. The rounding is right; its silence was not
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "" "5" "1")
+
+  assert_contains "$OUTPUT" "Warning" "a duration worth one check should not pass in silence"
+  assert_contains "$OUTPUT" "MAXIMUM_IPMI_UNREACHABLE_DURATION is \"5\"" \
+    "the warning should quote back the parameter that produced it"
+  assert_contains "$OUTPUT" "at or below CHECK_INTERVAL" \
+    "and say why a value that looks reasonable resolved to one check"
+  assert_contains "$OUTPUT" "very first unreachable reading" \
+    "and what a single check actually does"
+}
+
+function test_an_explicitly_configured_single_failure_is_warned_about_too() {
+  # Reached by typing it rather than by an invisible rounding, but the server does
+  # not care which parameter produced it : one check is one glitch away from a
+  # container that exits either way. Warning on one and not the other would read as
+  # the other being the safe way to ask for the same thing
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "1" "" "1")
+
+  assert_contains "$OUTPUT" "Warning" "one check is one check, whichever parameter set it"
+  assert_contains "$OUTPUT" "MAXIMUM_CONSECUTIVE_IPMI_FAILURES is \"1\"" \
+    "the warning should name the parameter actually in force"
+  assert_not_contains "$OUTPUT" "CHECK_INTERVAL, so it resolves" \
+    "nothing was rounded here, so it must not be explained as if it had been"
+}
+
+function test_a_duration_worth_several_checks_is_not_warned_about() {
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "" "60s" "12")
+
+  assert_empty "$OUTPUT" "a duration that survives more than one glitch needs no warning"
+}
+
+function test_a_disabled_escalation_is_not_warned_about() {
+  # Nothing exits at all, so there is no first failure to warn about -- and naming a
+  # parameter the user did not set would send them looking for one they never wrote
+  local -r OUTPUT=$(warn_if_the_escalation_exits_on_the_first_failure "" "" "")
+
+  assert_empty "$OUTPUT" "an escalation that never fires cannot fire too early"
+}
+
 function test_a_powered_off_server_never_counts_towards_the_escalation() {
   # A chassis correctly reported as off is a state that was observed, not a failure
   # to reach anything : counting it would exit on a server simply left switched off

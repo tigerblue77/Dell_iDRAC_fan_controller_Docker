@@ -14,9 +14,27 @@ readonly FALLBACK_CPU_TEMPERATURE_THRESHOLD=50
 
 # Window (in °C) a CPU temperature threshold must fall into to be plausible. No CPU throttles below 20°C,
 # and none tolerates more than 125°C, so a value outside it is a misreading or a typo rather than a
-# setting : left in place it would either pin the fans low forever or never let them slow down at all
+# setting : left in place it would either pin the fans low forever or never let them slow down at all.
+#
+# The maximum is a safety limit rather than a sanity check, and that is why it is not negotiable : a
+# threshold above it is not a stricter setting but the absence of one, no PowerEdge CPU reaching 125°C
+# before its own thermal protection powers the machine off, so the fallback such a threshold governs
+# could never fire and the container would supervise nothing while printing a threshold at startup.
+# Being unable to disable that fallback is the intended behaviour. Only hardware whose manufacturer
+# "high" value genuinely exceeds this would reopen the number, and none is known to exist (issue #326)
 readonly MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=20
 readonly MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=125
+
+# Bounds of the fan speed, as a percentage of the fans' duty cycle. Dell's raw command takes a byte,
+# so the same setting is also accepted in hexadecimal, and the maximum is 0x64 in that notation --
+# derived from this number rather than written beside it, two spellings of one bound being one more
+# thing that can drift apart.
+#
+# Kept here rather than written into validate_fan_speed_parameter() for the same reason the check
+# interval's bounds are : the documentation states them too, and nothing could compare the two while
+# they lived only in the validator. test_the_readme_documents_the_fan_speed_range() now does (#328)
+readonly MINIMUM_FAN_SPEED_PERCENTAGE=0
+readonly MAXIMUM_FAN_SPEED_PERCENTAGE=100
 
 # Bounds the check interval is measured against, in seconds. The interval is the controller's reaction
 # time : between two checks the fans stay pinned at FAN_SPEED with Dell's own dynamic fan control

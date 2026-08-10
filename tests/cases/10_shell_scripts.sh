@@ -343,6 +343,194 @@ function test_the_readme_states_the_deadline_the_supervisor_actually_waits() {
     "and ask for a stop timeout above that same value"
 }
 
+function test_the_readme_documents_the_plausible_temperature_threshold_window() {
+  # The window is what the container refuses to start outside of, and until issue
+  # #326 it was written down nowhere : the README described the parameter as "a
+  # decimal number of degrees Celsius" with no bound, .env.example said nothing
+  # either, and a user who had set 160 discovered the range from a container that
+  # would not start. A refusal a document does not prepare the reader for is the
+  # one they cannot act on, so the two are held together here rather than left to
+  # agree by hand
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  assert_not_empty "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" \
+    "constants.sh should define the bottom of the plausible window" || return 1
+  assert_not_empty "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" \
+    "constants.sh should define the top of the plausible window" || return 1
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  assert_matches "$README_CONTENT" \
+    "\*\*between $MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD°C and $MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD°C\*\*" \
+    "the README should state the window the container really enforces"
+
+  # The placeholders are what a user copies into a "docker run" or a compose file,
+  # well before reading the bullet that explains them. They carry the unit as well
+  # as the range : a placeholder that names neither is how "160" gets typed as a
+  # Fahrenheit figure into a parameter whose bullet says Celsius three sections away
+  local -r PLACEHOLDER="in °C, from $MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD to $MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
+  assert_contains "$README_CONTENT" "$PLACEHOLDER" \
+    "the README's CPU_TEMPERATURE_THRESHOLD placeholders should carry the unit and the range"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should carry the same unit and range, being the other file users copy from"
+}
+
+function test_the_readme_documents_the_fan_speed_range() {
+  # The range validate_fan_speed_parameter() enforces was stated in exactly one
+  # sentence of the README -- which spelled it "hexadecimaladecimal" -- and in
+  # none of the six placeholders a user copies into a "docker run", a compose file
+  # or a .env. A bound met for the first time as a container refusing to start is
+  # the defect #326 was about; this is the same one, one parameter over (#328)
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  assert_not_empty "$MINIMUM_FAN_SPEED_PERCENTAGE" \
+    "constants.sh should define the bottom of the fan speed range" || return 1
+  assert_not_empty "$MAXIMUM_FAN_SPEED_PERCENTAGE" \
+    "constants.sh should define the top of the fan speed range" || return 1
+
+  # Derived rather than written out, so that the documentation is held to the same
+  # bound in both notations. One substitution per statement, as everywhere else
+  local -r MINIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MINIMUM_FAN_SPEED_PERCENTAGE")
+  local -r MAXIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MAXIMUM_FAN_SPEED_PERCENTAGE")
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  # The parameter's own bullet, matched with its parentheses so that the assertion
+  # cannot be satisfied by the placeholders further up the file
+  assert_contains "$README_CONTENT" \
+    "(from $MINIMUM_FAN_SPEED_PERCENTAGE to $MAXIMUM_FAN_SPEED_PERCENTAGE%)" \
+    "the README's FAN_SPEED bullet should state the percentage range the validator enforces"
+  assert_contains "$README_CONTENT" \
+    "(from $MINIMUM_HEXADECIMAL_FAN_SPEED to $MAXIMUM_HEXADECIMAL_FAN_SPEED)" \
+    "and the same bound in the hexadecimal notation it also accepts"
+
+  # The placeholders, which is where a user meets the parameter first : they carry
+  # the unit as well, "%" being what says 5 is a duty cycle rather than a speed
+  local -r PLACEHOLDER="in %, from $MINIMUM_FAN_SPEED_PERCENTAGE to $MAXIMUM_FAN_SPEED_PERCENTAGE, or hexadecimal from $MINIMUM_HEXADECIMAL_FAN_SPEED to $MAXIMUM_HEXADECIMAL_FAN_SPEED"
+  assert_contains "$README_CONTENT" "$PLACEHOLDER" \
+    "the README's FAN_SPEED placeholders should carry the unit and both ranges"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should carry the same, being the other file users copy from"
+}
+
+function test_the_readme_documents_the_check_interval_bounds() {
+  # The fourth number of this kind, and the one that was left unguarded : the
+  # supervisor's grace period, the temperature window and the fan speed range are
+  # all held to their constants, this one never was. It is also the only one the
+  # README states in another unit than the constant carries -- "15 minutes" against
+  # a MAXIMUM_CHECK_INTERVAL_IN_SECONDS of 900 -- so lowering that constant leaves
+  # the suite green, the refusal saying one number and the documentation another,
+  # and the user planning around whichever they read first (#330)
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  assert_not_empty "$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS" \
+    "constants.sh should define the interval a warning starts above" || return 1
+  assert_not_empty "$MAXIMUM_CHECK_INTERVAL_IN_SECONDS" \
+    "constants.sh should define the interval the container refuses above" || return 1
+
+  # The conversion the refusal itself performs, done here rather than written out,
+  # so that the two cannot end up disagreeing about what 900 seconds are
+  local -r MAXIMUM_IN_MINUTES=$((MAXIMUM_CHECK_INTERVAL_IN_SECONDS / 60))
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  assert_matches "$README_CONTENT" \
+    "\*\*$CHECK_INTERVAL_WARNING_THRESHOLD_IN_SECONDS seconds\*\*" \
+    "the README should state the interval the container really starts warning above"
+  assert_matches "$README_CONTENT" \
+    "\*\*$MAXIMUM_IN_MINUTES minutes\*\*" \
+    "and the one it really refuses above, in the unit it is written in there"
+
+  # The placeholders, where a user meets the parameter before any of that prose :
+  # they carried neither the ceiling nor the fact that a suffix is accepted at all
+  local -r PLACEHOLDER="up to $MAXIMUM_IN_MINUTES minutes"
+  assert_contains "$README_CONTENT" "$PLACEHOLDER" \
+    "the README's CHECK_INTERVAL placeholders should carry the ceiling"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should carry the same, being the other file users copy from"
+}
+
+function test_the_documented_unreachable_duration_spelling_is_one_the_validator_takes() {
+  # This parameter's placeholders said "how long" and stopped there -- the only one
+  # of the four naming no unit at all -- so nothing told a user filling the file in
+  # that 5 is five seconds. They now name it, and show a suffixed spelling, which
+  # is worth holding to the grammar that really accepts it : a documented example
+  # the validator would refuse is worse than no example (#332)
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  local -r DOCUMENTED_SPELLING="5m"
+  local -r PLACEHOLDER="in seconds or suffixed like $DOCUMENTED_SPELLING"
+
+  assert_contains "$(cat "$REPO_ROOT/README.md")" "$PLACEHOLDER" \
+    "the README's MAXIMUM_IPMI_UNREACHABLE_DURATION placeholders should name the unit"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should name it too, being the other file users copy from"
+
+  # The validator answers by stopping the controller, so the call has to happen in
+  # the subshell a command substitution creates
+  local OUTPUT
+  OUTPUT=$(validate_IPMI_unreachable_duration_parameter "MAXIMUM_IPMI_UNREACHABLE_DURATION" "$DOCUMENTED_SPELLING" 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" \
+    "[$DOCUMENTED_SPELLING] is the spelling the documentation shows, so the validator has to take it"
+  assert_empty "$OUTPUT" "and take it without a word"
+}
+
+function test_the_documented_consecutive_failures_minimum_is_the_one_enforced() {
+  # The last placeholder of the family that stated its unit but not its refusal :
+  # 0 is refused, and 0 is what somebody writes to mean "do not escalate" -- the
+  # way to do that being an empty value. Held to the validator rather than to a
+  # constant, the minimum of one being structural : nothing can be concluded from
+  # fewer than one observed failure, so there is no number here that could drift
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  local -r DOCUMENTED_MINIMUM="1 or more"
+
+  assert_contains "$(cat "$REPO_ROOT/README.md")" "$DOCUMENTED_MINIMUM" \
+    "the README's MAXIMUM_CONSECUTIVE_IPMI_FAILURES placeholders should state the minimum"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$DOCUMENTED_MINIMUM" \
+    ".env.example should state it too, being the other file users copy from"
+
+  # The validator answers by stopping the controller, so the calls have to happen
+  # in the subshell a command substitution creates
+  local OUTPUT
+  OUTPUT=$(validate_maximum_consecutive_IPMI_failures_parameter "MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "1" 2>&1)
+  local -r ACCEPTED_EXIT_CODE=$?
+  assert_equals 0 "$ACCEPTED_EXIT_CODE" "1 is the documented minimum, so the validator has to take it"
+
+  OUTPUT=$(validate_maximum_consecutive_IPMI_failures_parameter "MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "0" 2>&1)
+  local -r REFUSED_EXIT_CODE=$?
+  assert_equals 1 "$REFUSED_EXIT_CODE" "and refuse what the documentation says is below it"
+  assert_contains "$OUTPUT" "leave this parameter empty" \
+    "0 is what somebody writes to disable the escalation, so the refusal has to name what really does"
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a

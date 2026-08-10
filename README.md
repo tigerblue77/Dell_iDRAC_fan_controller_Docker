@@ -81,12 +81,12 @@ docker run -d \
   --name Dell_iDRAC_fan_controller \
   --restart=unless-stopped \
   -e IDRAC_HOST=local \
-  -e FAN_SPEED=<decimal or hexadecimal fan speed> \
-  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
+  -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
+  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
-  -e CHECK_INTERVAL=<seconds between each check> \
-  -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty> \
-  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
+  -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
+  -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
+  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -103,12 +103,12 @@ docker run -d \
   -e IDRAC_HOST=<iDRAC IP address> \
   -e IDRAC_USERNAME=<iDRAC username> \
   -e IDRAC_PASSWORD=<iDRAC password> \
-  -e FAN_SPEED=<decimal or hexadecimal fan speed> \
-  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto> \
+  -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
+  -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
-  -e CHECK_INTERVAL=<seconds between each check> \
-  -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty> \
-  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty> \
+  -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
+  -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
+  -e MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty> \
   -e DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false> \
   -e KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false> \
   -e MONITORING_ONLY_MODE=<true or false> \
@@ -129,12 +129,12 @@ services:
     restart: unless-stopped
     environment:
       - IDRAC_HOST=local
-      - FAN_SPEED=<decimal or hexadecimal fan speed>
-      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
+      - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
+      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
-      - CHECK_INTERVAL=<seconds between each check>
-      - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
-      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+      - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
+      - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
+      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -156,12 +156,12 @@ services:
       - IDRAC_HOST=<iDRAC IP address>
       - IDRAC_USERNAME=<iDRAC username>
       - IDRAC_PASSWORD=<iDRAC password>
-      - FAN_SPEED=<decimal or hexadecimal fan speed>
-      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
+      - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
+      - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
-      - CHECK_INTERVAL=<seconds between each check>
-      - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
-      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+      - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
+      - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
+      - MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty>
       - DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
       - KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
       - MONITORING_ONLY_MODE=<true or false>
@@ -205,8 +205,18 @@ All parameters are optional as they have default values (including default iDRAC
 - `IDRAC_HOST` parameter can be set to "local" or to your distant iDRAC's IP address. **Default** value is "local".
 - `IDRAC_USERNAME` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "root".
 - `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "calvin".
-- `FAN_SPEED` parameter can be set as a decimal (from 0 to 100%) or hexadecimaladecimal value (from 0x00 to 0x64) you want to set the fans to. **Default** value is 5(%).
-- `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). It can be set to a decimal number of degrees Celsius, or to "auto" to let the container read the threshold from the CPUs themselves. **Default** value is "auto".
+- `FAN_SPEED` parameter is the duty cycle the fans are held at while your fan control profile is applied. It can be set as a decimal percentage (from 0 to 100%) or as the same value in hexadecimal (from 0x00 to 0x64). **Default** value is 5(%).
+  - Anything outside that range stops the container at startup rather than being clamped or passed through to the fans, `200` having once reached `ipmitool` as `0xc8`.
+  - :warning: **The `0x` prefix is the only thing that tells the two notations apart**, and both are accepted, so a value that lost its prefix is not refused — it just applies a different duty cycle than the one you meant. `0x64` is 100% while `64` is 64%; `0x30` is 48% while `30` is 30%. The startup log always states the one that was resolved:
+
+    ```
+    Fan speed objective: 64%
+    ```
+
+    That is the line to check first if the fans do not behave the way you expected.
+- `CPU_TEMPERATURE_THRESHOLD` parameter is the T°junction (junction temperature) threshold beyond which the Dell fan mode defined in your BIOS will become active again (to protect the server hardware against overheat). It can be set to a decimal number of degrees Celsius, from 20 to 125, or to "auto" to let the container read the threshold from the CPUs themselves. **Default** value is "auto".
+  - An explicit value has to be **between 20°C and 125°C**, and the container refuses to start on anything outside that window rather than run with it. No CPU throttles below the lower bound and none tolerates more than the upper one, so a value outside it is a typo (`500` for `50`) or a Fahrenheit reading rather than a setting — and left in place it would be silent, every comparison against it reading as "not overheating" while the whole chassis stayed at `FAN_SPEED`.
+  - A value **above** the maximum is not a stricter setting but the absence of one, which is why it is refused rather than clamped. No PowerEdge CPU reaches 125°C — the server's own thermal protection powers the machine off first — so such a threshold could never be crossed, the overheat fallback it governs could never fire, and the container would print `CPU temperature threshold: 160°C` at startup while supervising nothing. **That fallback cannot be switched off, by design**, and no value of this parameter is meant to do it. `MONITORING_ONLY_MODE` is not that switch either: it never applies **any** profile, yours included.
   - In "auto" mode, the threshold is the "high" temperature your CPU manufacturer defined, as reported by the [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) utility (the `high = +62.0°C` value below), which is far more relevant than a single fixed value shared by every CPU model :
 
     ```
@@ -221,6 +231,7 @@ All parameters are optional as they have default values (including default iDRAC
   - Automatic detection only works on **Intel** CPUs. AMD's `k10temp` driver publishes no "high" value at all on Zen parts (every EPYC server), and on older parts it publishes a fixed 70°C that is a Linux driver constant rather than an AMD specification, so it is deliberately ignored. AMD servers use the fallback value below.
   - Whenever the threshold can't be detected, the container falls back to 50(°C) and logs why at startup.
   - :warning: **This default changed in v1.28.** Versions up to v1.27 used a fixed 50°C. On Intel servers in "local" mode, "auto" typically resolves to a **higher** value (roughly 62 to 96°C depending on the CPU model — read the exact one from the startup log), so the fans stay at `FAN_SPEED` longer than they used to before Dell's profile takes over. This matches what your CPU actually asks for, but it also means the whole chassis runs at `FAN_SPEED` for longer, and the CPU is the only component this container watches. If you were relying on the old behaviour, set `CPU_TEMPERATURE_THRESHOLD=50` explicitly.
+  - :warning: **The accepted range is also new in v1.28.** Versions up to v1.27 took any integer, so a value such as `160` was accepted and simply never reached — the container ran with its overheat fallback unable to fire, while printing that threshold at startup as though something were being supervised. From v1.28 it stops the container at startup instead, and a `restart: unless-stopped` policy then restarts it straight into the same refusal, which reads as a container flapping rather than as a configuration mistake. Set the temperature your CPUs should not exceed, or `auto`.
 - `CPU_TEMPERATURE_SOURCE` parameter selects where the CPU temperatures the container supervises are read from. **Default** value is "auto".
   - `auto` reads them from your iDRAC, and falls back to [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) only if your iDRAC turns out to report no CPU temperature **at all**. Some older iDRACs accept Dell's raw fan control commands but answer nothing usable to a temperature query ([issue #216](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)) : on those, the container used to be able to do nothing but hand the fans back to Dell's own profile forever. The fallback is tried on the check that found no sensor, just before the container would otherwise refuse to run over it, and it is logged when it engages. One check is enough to conclude: an iDRAC that exposes no processor entity does so on every check rather than on that one, which is the same reason the container refuses instead of retrying. Once engaged it stays for the life of the container, that being a property of the firmware rather than a passing condition, and changing the meaning of the table's numbers mid-run would be worse than keeping a source that works.
   - `ipmi` never reads `lm-sensors`, whatever your iDRAC reports. Set it if you want the source to be the iDRAC and nothing else.
@@ -237,7 +248,15 @@ All parameters are optional as they have default values (including default iDRAC
   Both limits are lifted by `MONITORING_ONLY_MODE`, where no profile is ever applied, Dell's dynamic fan control keeps the fans and the interval is only how often temperatures are logged. If you want a slow polling cadence for logging purposes, that is the mode to use.
 - `MAXIMUM_IPMI_UNREACHABLE_DURATION` parameter is how long the iDRAC may stay completely unreachable before the container gives up and exits. **Default** value is 60s, in seconds unless a unit suffix (`s`, `m`, `h` or `d`) says otherwise, exactly like `CHECK_INTERVAL`. Empty disables the escalation. It counts only failures to reach the iDRAC: a server correctly reported as powered off is a state that was observed, not a failure, and never counts however long it stays off; any cycle that reaches the iDRAC resets the count. An unreachable iDRAC accepts no command, so exiting cannot and does not try to move the fans — the point is to obtain a fresh IPMI session, which is what clears an expired session, a rebooted iDRAC or an exhausted session limit, and to make the loss visible to `docker ps` and to anything watching container state instead of it being buried in logs. **Read the paragraph below before relying on it.**
   > **This only helps if something restarts the container.** With Docker's default `no` restart policy, a container that exits stays dead: `graceful_exit` tries to restore Dell's profile on the way out, but that command goes through the same unreachable iDRAC and fails too, so the fans keep the speed they were last set to with nothing watching them at all. Worse, a container that keeps retrying recovers on its own the moment the iDRAC answers again, whereas one that exited does not. Run with `--restart unless-stopped` (or a Compose `restart:` policy) if you leave this enabled, or set it empty to keep the previous retry-forever behaviour.
+
+  The duration is counted in whole `CHECK_INTERVAL` cycles: it is divided by the interval and rounded **up**, never below one, nothing being concluded from less than one observed failure. So a duration at or below a single `CHECK_INTERVAL` means exiting on the **first** unreachable reading — which is what a `0` is refused for, reached without a refusal. With the defaults, 60s against a 5s interval, that is 12 cycles; if you shorten this parameter, keep it comfortably above your `CHECK_INTERVAL`. The startup log states what it resolved to, and warns you whenever the escalation would fire on the first failure, whichever of the two parameters put it there:
+
+  ```
+  iDRAC unreachable escalation: After 12 checks (60s, rounded up to whole check intervals)
+  ```
 - `MAXIMUM_CONSECUTIVE_IPMI_FAILURES` parameter expresses that same threshold as a raw number of consecutive unreachable cycles instead of a duration. **Default** value is (empty), the duration above being used. When set it takes precedence, being the more specific of the two. Prefer the duration unless you need the count exactly: it keeps meaning the same thing when `CHECK_INTERVAL` changes, where a cycle count silently would not.
+  - The minimum is **1**, `0` being refused: nothing can be concluded from fewer than one observed failure. Use an empty value, not `0`, to disable the escalation.
+  - `1` is accepted but **warned about** at startup, since it means exiting on the very first unreachable reading — on any transient glitch. It is legitimate on a rock-solid LAN, which is why it is a warning rather than a refusal; the same warning fires when `MAXIMUM_IPMI_UNREACHABLE_DURATION` resolves to a single check.
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
 - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
 - `MONITORING_ONLY_MODE` parameter is a boolean that allows to run the container in a read-only, monitoring-only mode: temperatures are still read and logged at each `CHECK_INTERVAL`, but no fan control profile (neither the user-defined one nor Dell's default) and no third-party PCIe card cooling response change is ever sent to the server. Useful to observe temperatures and validate your `FAN_SPEED`/`CPU_TEMPERATURE_THRESHOLD` values before letting the container actually take control of the fans. **Default** value is false.
@@ -284,6 +303,26 @@ Past that timeout the container is `SIGKILL`ed, which no program can catch or de
 
 <!-- TROUBLESHOOTING -->
 ## Troubleshooting
+
+### Your container restarts over and over without ever monitoring anything
+
+Read its log rather than its restart count: a container that stops on a **configuration** mistake prints a block naming the parameter, its current value and what would have been accepted, then exits.
+
+```
+/!\ Error /!\ Invalid configuration, the container will not start.
+
+  Parameter : CPU_TEMPERATURE_THRESHOLD
+  Value     : "160°C"
+  Expected  : a temperature between 20°C and 125°C, [...]
+
+  Restarting will not help : this is read the same way on every start, so a container under
+  an "always", "unless-stopped" or "on-failure" restart policy stops here again on every
+  attempt, until the configuration itself is corrected.
+```
+
+Nothing about that can self-correct — the value is the same on every attempt — so the restart policy the [Usage](#usage) examples recommend, which is what protects you against a transient failure, turns a permanent refusal into an endless loop. `docker logs --tail 40 Dell_iDRAC_fan_controller` shows the block; fix what it names and the loop ends. The most common case is a `CPU_TEMPERATURE_THRESHOLD` above 125, which versions up to v1.27 accepted (see the [Parameters](#parameters) section).
+
+A refusal **without** that "Restarting will not help" line is the opposite case, and the only one worth waiting out: an iDRAC that did not answer this time may answer the next, so the restart policy is what recovers it without you doing anything.
 
 ### Your server frequently switches back to the default Dell fan mode:
 1. Check `Tcase` (case temperature) of your CPU on Intel Ark website and then set `CPU_TEMPERATURE_THRESHOLD` to a slightly lower value. Example with my CPUs ([Intel Xeon E5-2630L v2](https://www.intel.com/content/www/us/en/products/sku/75791/intel-xeon-processor-e52630l-v2-15m-cache-2-40-ghz/specifications.html)) : Tcase = 63°C, I set `CPU_TEMPERATURE_THRESHOLD` to 60(°C). Note that the default "auto" value does **not** do this for you : Tcase is a case (heat spreader) temperature, while "auto" uses the junction-scale "high" value, which is usually well above Tcase (on a Xeon Gold 5122 for instance, Tcase is 71°C but "high" is around 94°C). If you want a Tcase-derived threshold, set it explicitly. The startup log always states which threshold was picked and where it comes from.
@@ -381,11 +420,11 @@ or
 export IDRAC_HOST=<iDRAC IP address>
 export IDRAC_USERNAME=<iDRAC username>
 export IDRAC_PASSWORD=<iDRAC password>
-export FAN_SPEED=<decimal or hexadecimal fan speed>
-export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold, or auto>
-export CHECK_INTERVAL=<seconds between each check>
-export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, or empty>
-export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, or empty>
+export FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
+export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
+export CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
+export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
+export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty>
 export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=<true or false>
 export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=<true or false>
 export MONITORING_ONLY_MODE=<true or false>

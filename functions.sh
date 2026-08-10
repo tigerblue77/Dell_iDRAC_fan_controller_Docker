@@ -122,16 +122,22 @@ function validate_fan_speed_parameter() {
   local -r VALUE="$2"
   local DECIMAL_VALUE
 
+  # One command substitution per statement, which is why these are hoisted rather than expanded inside
+  # the messages below (see test_no_statement_expands_two_command_substitutions)
+  local -r MINIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MINIMUM_FAN_SPEED_PERCENTAGE")
+  local -r MAXIMUM_HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$MAXIMUM_FAN_SPEED_PERCENTAGE")
+  local -r ACCEPTED_RANGE="a percentage from ${MINIMUM_FAN_SPEED_PERCENTAGE} to ${MAXIMUM_FAN_SPEED_PERCENTAGE}, or the same value in hexadecimal from ${MINIMUM_HEXADECIMAL_FAN_SPEED} to ${MAXIMUM_HEXADECIMAL_FAN_SPEED}"
+
   if [[ "$VALUE" =~ ^0[xX][0-9A-Fa-f]{1,2}$ ]]; then
     DECIMAL_VALUE=$(convert_hexadecimal_value_to_decimal "$VALUE")
   elif [[ "$VALUE" =~ ^[0-9]+$ ]]; then
     DECIMAL_VALUE=$(normalize_decimal_value "$VALUE")
   else
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$ACCEPTED_RANGE. The \"0x\" prefix is what tells the two notations apart"
   fi
 
-  if [ "$DECIMAL_VALUE" -gt 100 ]; then
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "a percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64 (this is ${DECIMAL_VALUE}%)"
+  if [ "$DECIMAL_VALUE" -gt "$MAXIMUM_FAN_SPEED_PERCENTAGE" ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$ACCEPTED_RANGE (this is ${DECIMAL_VALUE}%)"
   fi
 }
 
@@ -231,6 +237,80 @@ function exit_if_iDRAC_unreachable_for_too_long() {
   print_error_and_exit "The iDRAC could not be reached $CONSECUTIVE_IPMI_FAILURES times in a row, i.e. for about $UNREACHABLE_FOR_SECONDS seconds. Exiting so that a restart policy can retry with a fresh IPMI session. An unreachable iDRAC accepts no command, so this cannot and does not try to move the fans : they keep the speed they were last set to until something reaches the iDRAC again"
 }
 
+# Describe the resolved escalation, for the startup log
+# Usage : describe_IPMI_unreachable_escalation "$COUNT" "$DURATION" $IPMI_FAILURES_BEFORE_EXIT
+#
+# Every other configured parameter states what it resolved to, and this one is the only whose
+# resolution performs a conversion the user did not write : a duration becomes a number of checks,
+# rounded up against CHECK_INTERVAL. Leaving that unsaid is what let a value collapse to a single
+# check without anybody being able to see it from the log (issue #332)
+function describe_IPMI_unreachable_escalation() {
+  local -r COUNT="$1"
+  local -r DURATION="$2"
+  local -r FAILURES_BEFORE_EXIT="$3"
+
+  if [ -z "$FAILURES_BEFORE_EXIT" ]; then
+    echo "Disabled (the iDRAC is retried until it answers)"
+    return 0
+  fi
+
+  # The count is the user's own number of checks, so there is no conversion to report -- only which
+  # of the two parameters is the one in force, the count taking precedence when both are set
+  if [ -n "$COUNT" ]; then
+    echo "After $(pluralize_checks "$FAILURES_BEFORE_EXIT") (set by MAXIMUM_CONSECUTIVE_IPMI_FAILURES)"
+    return 0
+  fi
+
+  echo "After $(pluralize_checks "$FAILURES_BEFORE_EXIT") ($DURATION, rounded up to whole check intervals)"
+}
+
+# "1 check" / "12 checks", so the line reads as a sentence in the case that matters most
+# Usage : pluralize_checks $COUNT
+function pluralize_checks() {
+  local -r COUNT="$1"
+
+  if [ "$COUNT" -eq 1 ]; then
+    echo "1 check"
+    return 0
+  fi
+
+  echo "$COUNT checks"
+}
+
+# Warn when the escalation would exit on the very first unreachable reading
+# Usage : warn_if_the_escalation_exits_on_the_first_failure "$COUNT" "$DURATION" $IPMI_FAILURES_BEFORE_EXIT
+#
+# A single check is exiting on the first unreachable reading -- word for word the behaviour
+# validate_IPMI_unreachable_duration_parameter refuses a zero for. It is reached two ways, and both
+# are warned about : the consequence is the same for the server whichever parameter produced it, and
+# a warning that fires on one and not the other would read as the other being safe.
+#
+# They are worded apart because they are not the same mistake. A duration at or below CHECK_INTERVAL
+# was rounded there without the user seeing it -- the rounding itself is right, nothing being
+# concluded from less than one observed failure -- while a count of one was typed. Neither is refused,
+# both being legitimate on a rock-solid LAN ; this only makes sure nobody arrives there unaware, the
+# way validate_check_interval_parameter warns above its own threshold rather than accepting in silence
+function warn_if_the_escalation_exits_on_the_first_failure() {
+  local -r COUNT="$1"
+  local -r DURATION="$2"
+  local -r FAILURES_BEFORE_EXIT="$3"
+
+  [ "$FAILURES_BEFORE_EXIT" == "1" ] || return 0
+
+  local WHAT_WAS_CONFIGURED
+  if [ -n "$COUNT" ]; then
+    WHAT_WAS_CONFIGURED="MAXIMUM_CONSECUTIVE_IPMI_FAILURES is \"$COUNT\""
+  elif [ -n "$DURATION" ]; then
+    WHAT_WAS_CONFIGURED="MAXIMUM_IPMI_UNREACHABLE_DURATION is \"$DURATION\", at or below CHECK_INTERVAL, so it resolves to a single check"
+  else
+    # Unreachable through resolve_IPMI_failures_before_exit, which leaves the threshold empty when
+    # neither parameter is set. Guarded all the same rather than naming a parameter nobody configured
+    return 0
+  fi
+
+  print_warning "$WHAT_WAS_CONFIGURED : the container will exit on the very first unreachable reading, i.e. on any transient glitch, which is what a zero is refused for. Raise it so that more than one failure has to be observed before anything is concluded"
+}
+
 # Stop the container unless the given parameter is a usable unreachable-iDRAC duration
 # Usage : validate_IPMI_unreachable_duration_parameter "$PARAMETER_NAME" "$VALUE"
 #
@@ -273,7 +353,7 @@ function validate_maximum_consecutive_IPMI_failures_parameter() {
   # Zero would exit on the very first unreachable cycle, i.e. on any transient glitch, which is the
   # opposite of riding one out
   if [ "$((10#$VALUE))" -lt 1 ]; then
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at least 1 : zero would exit on the very first unreachable cycle, i.e. on any transient glitch"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at least 1 : zero would exit on the very first unreachable cycle, i.e. on any transient glitch. If you meant to switch the escalation off rather than to make it immediate, leave this parameter empty : that is what disables it"
   fi
 }
 
@@ -1276,22 +1356,83 @@ function get_Dell_server_model() {
   IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>&1)
   local -r ipmitool_exit_code=$?
 
-  if [ $ipmitool_exit_code -ne 0 ]; then
-    print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. ipmitool said: $IPMI_FRU_content"
+  # The server is the builtin FRU device (ID 0). "ipmitool fru" describes every FRU device on the bus,
+  # and all the others are parts rather than the server : a populated power supply fills these very same
+  # fields with its own manufacturer and its own product name.
+  #
+  # Reading the whole inventory and taking the first match (issue #319) is right only as long as the
+  # builtin device fills the field itself. When it does not, the first match silently comes from
+  # whichever device is listed next, so a server declaring no manufacturer of its own gets identified by
+  # its power supply's brand -- and a non-Dell server carrying a Dell branded power supply then passes
+  # the caller's "is this a Dell?" test, which exists to keep Dell's raw commands away from hardware
+  # that is not Dell. Narrowing the search to the builtin device's own section closes that.
+  #
+  # An inventory that labels no builtin device is read whole, exactly as before, rather than not at all
+  local FRU_SERVER_SECTION
+  FRU_SERVER_SECTION=$(echo "$IPMI_FRU_content" | awk '
+    /^FRU Device Description/ { inside = ($0 ~ /Builtin FRU Device/); next }
+    inside')
+  if [ -z "$FRU_SERVER_SECTION" ]; then
+    FRU_SERVER_SECTION="$IPMI_FRU_content"
   fi
 
-  SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
-  SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
+  # First match only within that section too : one device cannot sensibly report the field twice, but a
+  # whole-inventory fallback above would otherwise bring the parts back in
+  SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | grep "Product Manufacturer" | awk -F ': ' '{print $2; exit}')
+  SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | grep "Product Name" | awk -F ': ' '{print $2; exit}')
 
   # Check if SERVER_MANUFACTURER is empty, if yes, assign value based on "Board Mfg"
   if [ -z "$SERVER_MANUFACTURER" ]; then
-    SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{print $2}')
+    SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{print $2; exit}')
   fi
 
   # Check if SERVER_MODEL is empty, if yes, assign value based on "Board Product"
   if [ -z "$SERVER_MODEL" ]; then
-    SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2}')
+    SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2; exit}')
   fi
+
+  # Whether the server could be identified is the reliable signal here, not ipmitool's
+  # exit code : "ipmitool fru" walks every FRU device and returns non-zero as soon as a
+  # single one of them fails to read, which is the normal state of healthy hardware.
+  # An unpopulated drive backplane or PSU bay answers "Device not present (Timeout)"
+  # while the builtin FRU device (ID 0) still returns the manufacturer and the model, so
+  # exiting on the exit code alone refused to start on servers that were perfectly fine.
+  # The FRU walk is a property of the inventory and not of the transport, so "-I open"
+  # and "-I lanplus" were refused alike.
+  #
+  # The failure #103 asked to catch is total rather than partial, so gating on the
+  # identification keeps catching it : a session that cannot be opened returns no
+  # inventory at all, both fields above stay empty and the error below still fires
+  if [ -n "$SERVER_MANUFACTURER" ] || [ -n "$SERVER_MODEL" ]; then
+    return 0
+  fi
+
+  # Only mention the exit code when there is one to report : an inventory that came back
+  # empty from a call that succeeded is not a failed call, and "exited with code 0" inside
+  # a connection error would contradict itself
+  local IPMITOOL_REPORT="ipmitool said: $IPMI_FRU_content"
+  if [ $ipmitool_exit_code -ne 0 ]; then
+    IPMITOOL_REPORT="ipmitool exited with code $ipmitool_exit_code and said: $IPMI_FRU_content"
+  fi
+
+  # Local mode never sends a username nor a password -- it talks to the Docker host's own
+  # BMC through the exposed IPMI device -- so naming those two parameters there would send
+  # the user to correct something the connection does not even use
+  if [[ "$IDRAC_HOST" == "local" ]]; then
+    print_configuration_error_and_exit "IDRAC_HOST" "$IDRAC_HOST" \
+      "an IPMI device the host's own BMC answers on. Nothing could be read from it, so the server could not be identified. IDRAC_USERNAME and IDRAC_PASSWORD are not used in local mode, so they are not what to check here. $IPMITOOL_REPORT" \
+      "Check that the device exposed with \"--device=\" is your server's IPMI device and that its
+kernel modules (\"ipmi_devintf\", \"ipmi_si\") are loaded on the Docker host, then start the
+container again. Alternatively, set IDRAC_HOST to your iDRAC's address to use network mode instead." \
+      "false"
+  fi
+
+  # The one refusal a restart can genuinely clear, and the only one that must not claim otherwise : a
+  # BMC that was resetting, an iDRAC still booting or a network that was down all answer on the next
+  # attempt without anybody correcting anything, and the restart policy is what carries that user
+  # through. It is also the escalation MAXIMUM_IPMI_UNREACHABLE_DURATION relies on once the loop is
+  # running, and the README already tells its readers to run under a restart policy because of it
+  print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. $IPMITOOL_REPORT" "" "false"
 }
 
 # Settle the width of the "Active fan speed profile" column, which the header and the rows both lay
@@ -1566,7 +1707,7 @@ function build_fan_control_fallback_comment() {
 }
 
 # Stop the container on an invalid configuration parameter, with everything needed to fix it
-# Usage : print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$EXPECTED"
+# Usage : print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$EXPECTED" ["$WHERE_TO_FIX_IT" ["$RESTARTING_WOULD_MEET_THE_SAME_REFUSAL"]]
 #
 # Refusing to start is the point : a malformed parameter fails silently once the container is running,
 # so the only outcome that can't be mistaken for normal operation is not running at all. But refusing
@@ -1578,17 +1719,36 @@ function build_fan_control_fallback_comment() {
 # place : almost all of them are environment variables, but exposing the host's IPMI device is a
 # "--device" argument, and sending that user to "-e" would be worse than saying nothing. It defaults
 # to the environment variable wording, which is what every parameter validator wants
+#
+# The last argument says whether the very same refusal is what the next start would meet. It is true
+# of everything decided from a value's own content -- the value is read identically on every start --
+# and the block says so, because a restart policy otherwise turns one refusal into an unbroken run of
+# them : that is what issue #326 was reported as, a container seen flapping rather than a mistake seen
+# in a variable, by a user with no way to tell a permanent refusal from a transient failure worth
+# waiting out. It defaults to true because every parameter validator is that case. It is false for the
+# refusals that come from asking hardware, an iDRAC that did not answer this time being able to answer
+# the next : telling that user restarting will not help would be worse than saying nothing, the
+# restart policy being exactly what recovers them
 function print_configuration_error_and_exit() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
   local -r EXPECTED="$3"
   local -r WHERE_TO_FIX_IT="${4:-Fix it in the \"-e\" arguments of your \"docker run\" command, or in the \"environment\"
 section of your docker-compose.yml, then start the container again.}"
+  local -r RESTARTING_WOULD_MEET_THE_SAME_REFUSAL="${5:-true}"
 
   printf "\n/!\\ Error /!\\ Invalid configuration, the container will not start.\n\n" >&2
   printf "  Parameter : %s\n" "$PARAMETER_NAME" >&2
   printf "  Value     : \"%s\"\n" "$VALUE" >&2
   printf "  Expected  : %s\n\n" "$EXPECTED" >&2
+  # No exit status could carry this instead : "always" and "unless-stopped" restart on the policy
+  # rather than on the code, and those are the two the README's own examples recommend. Saying it is
+  # therefore the only thing that can spare the user the wait
+  if [ "$RESTARTING_WOULD_MEET_THE_SAME_REFUSAL" == "true" ]; then
+    printf "  Restarting will not help : this is read the same way on every start, so a container under\n" >&2
+    printf "  an \"always\", \"unless-stopped\" or \"on-failure\" restart policy stops here again on every\n" >&2
+    printf "  attempt, until the configuration itself is corrected.\n\n" >&2
+  fi
   # Indented line by line so a closing sentence written across several lines keeps the block's margin
   printf "%s\n" "$WHERE_TO_FIX_IT" | while IFS= read -r LINE; do
     printf "  %s\n" "$LINE" >&2

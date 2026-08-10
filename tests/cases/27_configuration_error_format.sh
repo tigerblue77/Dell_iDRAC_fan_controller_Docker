@@ -28,6 +28,14 @@ function assert_reported_as_a_configuration_error() {
     "the error should say what would have been accepted"
   assert_contains "$OUTPUT" "docker-compose.yml" \
     "the error should say where to fix it"
+  # A value is read identically on the next start, so the restart policy the
+  # README's own examples recommend turns one refusal into an unbroken run of them
+  # -- reported as a container flapping rather than as a mistake in a variable
+  # (issue #326). No exit status ends that loop, "always" and "unless-stopped"
+  # restarting on the policy rather than on the code, so the only thing that spares
+  # the user the wait is the block saying so
+  assert_contains "$OUTPUT" "Restarting will not help" \
+    "the error should say that a restart would only meet the same refusal"
 }
 
 # The validators answer by stopping the controller, so the call has to happen in
@@ -120,6 +128,14 @@ function test_a_failed_ipmi_connection_reports_as_a_configuration_error() {
   assert_contains "$OUTPUT" "Parameter : IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" \
     "the three parameters that make up the connection should be named"
   assert_contains "$OUTPUT" "docker-compose.yml" "the error should say where to fix it"
+  # The one refusal of the lot a restart can genuinely clear, and therefore the one
+  # the notice above must stay away from : an iDRAC that was rebooting, or a network
+  # that was down, answers on the next attempt without anybody correcting anything.
+  # Telling that user restarting will not help would send them looking for a mistake
+  # they did not make, and away from the restart policy the README asks them to run
+  # under for this very reason
+  assert_not_contains "$OUTPUT" "Restarting will not help" \
+    "an iDRAC that did not answer this time may answer the next"
 }
 
 function test_a_missing_ipmi_device_reports_as_a_configuration_error() {

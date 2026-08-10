@@ -36,6 +36,128 @@ function test_the_server_model_falls_back_on_the_fru_board_fields() {
   assert_equals "PowerEdge R630" "$SERVER_MODEL"
 }
 
+function test_a_populated_power_supply_is_not_mistaken_for_the_server_itself() {
+  # "ipmitool fru" describes every FRU device on the bus, and a populated power supply
+  # fills the same "Product Manufacturer" / "Product Name" fields as the server. Keeping
+  # every match makes the manufacturer "DELL\nDELL", which the caller's
+  # [[ ! $SERVER_MANUFACTURER == "DELL" ]] fails, refusing to start with "Your server
+  # isn't a Dell product" on a server that was just identified correctly
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R740xd" --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_equals "DELL" "$SERVER_MANUFACTURER" "the manufacturer is the server's own, once, not one per FRU device"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL" "the model is the server's, not its power supply's"
+  assert_not_contains "$SERVER_MODEL" "PWR SPLY" "the power supply's product name must not leak into the model"
+}
+
+function test_a_populated_power_supply_does_not_poison_the_board_field_fallback_either() {
+  # The same hazard on the fallback path, and the likelier one on real hardware : Dell
+  # power supplies commonly leave the "Product *" fields empty and fill only the board
+  # ones, and the fallback is exactly what runs on a server that filled no product field
+  # either. Nothing about a failing connection is involved -- this inventory is entirely
+  # readable, so "ipmitool fru" exits 0 and no connection check stands in the way
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R630" --board-fields-only --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_equals "DELL" "$SERVER_MANUFACTURER" "the board fallback must take the first match only"
+  assert_equals "PowerEdge R630" "$SERVER_MODEL" "the board fallback must not append the power supply's board product"
+}
+
+function test_a_server_declaring_no_manufacturer_is_read_for_its_model_alone() {
+  # Some servers name themselves but fill no manufacturer field, in either the board or the product
+  # pair. The model still identifies them, so this must not be fatal here : it is the caller that
+  # decides what to do with a server it cannot confirm is a Dell
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "PowerEdge R730xd" --no-manufacturer)
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "a server that named itself was identified, whatever its manufacturer field says"
+  assert_empty "$SERVER_MANUFACTURER" "no manufacturer was declared, so none must be invented"
+  assert_equals "PowerEdge R730xd" "$SERVER_MODEL"
+}
+
+function test_a_server_declaring_no_manufacturer_is_not_given_its_power_supplys_brand() {
+  # The identification must read the SERVER, not merely the first FRU device that happened to fill the
+  # field. A server declaring no manufacturer of its own, with a Dell branded power supply on the bus,
+  # must not come back as "DELL" : Dell_iDRAC_fan_controller.sh tests SERVER_MANUFACTURER to keep Dell's
+  # raw commands away from hardware that is not Dell, and borrowing a power supply's brand defeats it
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "Super Server X11DPi-N" --no-manufacturer --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_empty "$SERVER_MANUFACTURER" "the power supply's manufacturer is not the server's"
+  assert_not_equals "DELL" "$SERVER_MANUFACTURER" "a Dell power supply must never make a server pass for a Dell"
+  assert_equals "Super Server X11DPi-N" "$SERVER_MODEL" "the model is still the server's own"
+}
+
+function test_the_board_field_fallback_reads_the_server_and_not_the_first_device_that_answers() {
+  # Same hazard on the fallback path, which is where it actually bites : Dell power supplies commonly
+  # fill only their board fields, and the fallback only runs on a server that filled no product field
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "Super Server X11DPi-N" --no-manufacturer --board-fields-only --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_empty "$SERVER_MANUFACTURER" "the board fallback must stay inside the builtin FRU device"
+  assert_equals "Super Server X11DPi-N" "$SERVER_MODEL" "the model must be the server's, not the power supply's"
+  assert_not_contains "$SERVER_MODEL" "PWR SPLY" "the power supply's board product must not answer for the server"
+}
+
+function test_an_inventory_naming_no_builtin_device_is_still_read_whole() {
+  # The identification is narrowed to the builtin FRU device's own section, which assumes the inventory
+  # labels it. Nothing guarantees every ipmitool build and every BMC does, and a server that used to be
+  # identified must not stop being just because its output is shaped differently -- so an inventory
+  # naming no builtin device falls back to being read whole, exactly as before that narrowing.
+  # This holds that fallback, which is otherwise invisible : it only ever runs on outputs no other case
+  # produces, and a narrowing that silently identified nothing would still leave the suite green
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=' Product Manufacturer  : DELL
+ Product Name          : PowerEdge R730xd'
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "an unlabelled inventory must not stop a server it can still identify"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R730xd" "$SERVER_MODEL"
+}
+
+function test_the_board_fields_are_read_whole_too_when_no_builtin_device_is_named() {
+  # The same fallback on the other path : both pairs are narrowed, so both need it
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=' Board Mfg             : DELL
+ Board Product         : PowerEdge R630'
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "the board fallback must survive an unlabelled inventory as well"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R630" "$SERVER_MODEL"
+}
+
+function test_a_server_with_empty_bays_and_populated_power_supplies_is_read_correctly() {
+  # The three hazards on one machine, which is what ordinary hardware looks like : empty drive bays
+  # making the walk exit non-zero (#193), a populated power supply filling the same fields as the
+  # server (#319), and the server's own fields being the ones that must answer (#323)
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd" --with-readable-psu
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "none of the three hazards should stop a server that identified itself"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+  assert_not_contains "$SERVER_MODEL" "PWR SPLY" "the power supply must not answer for the server"
+}
+
 function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_error() {
   export MOCK_IPMITOOL_FRU_EXIT_CODE=1
   export MOCK_IPMITOOL_FRU_OUTPUT="Error: Unable to establish IPMI v2 / RMCP+ session"
@@ -49,6 +171,108 @@ function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_
   assert_contains "$OUTPUT" "credentials that can open an IPMI session" "the error should say what is expected instead"
   assert_contains "$OUTPUT" "IDRAC_HOST" "the error should name the variables to check"
   assert_contains "$OUTPUT" "Unable to establish IPMI v2 / RMCP+ session" "the error should quote what ipmitool said"
+  assert_contains "$OUTPUT" "exited with code 1" "the error should report the exit code it no longer decides on"
+}
+
+function test_unreadable_fru_devices_do_not_stop_a_server_that_could_still_be_identified() {
+  # "ipmitool fru" walks every FRU device and exits non-zero as soon as one of them
+  # fails to read, so an R740xd with an empty drive backplane bay returns 1 while still
+  # reporting its model. Exiting on that exit code alone refused to start on healthy
+  # hardware, which is the regression this guards against.
+  # The harness builds a lanplus login string, so this is the network mode case
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd"
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "an identified server should start even though ipmitool exited non-zero"
+  assert_not_contains "$CAPTURED_OUTPUT" "the container will not start" "a partial FRU read is not a connection failure"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+}
+
+function test_unreadable_fru_devices_do_not_stop_the_controller_in_local_mode_either() {
+  # The transport says nothing about whether individual FRU devices answered, so local
+  # mode must not be stricter than the network mode covered above. Both were reproduced
+  # on the same R740xd : "-I open" and "-I lanplus" each exit 1, each report the same
+  # three unreadable bays (BP0, BP2, PERC2), and each still return the model
+  IDRAC_HOST="local"
+  IDRAC_LOGIN_STRING="open"
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd"
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "local mode should tolerate a partial FRU read exactly like network mode"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+  assert_equals "1" "$(count_ipmitool_calls_matching '^-I open fru$')" \
+    "the inventory should have been read over the local interface, which is what this case is about"
+}
+
+function test_a_partially_read_inventory_still_falls_back_on_the_fru_board_fields() {
+  # The two halves meeting : a server that fills only the "Board *" fields AND has empty
+  # bays. The fallback runs before anything is decided, so the board fields alone identify it
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R630" --board-fields-only
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "the board fields identify the server just as well as the product ones"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R630" "$SERVER_MODEL"
+}
+
+function test_unreadable_fru_devices_still_stop_a_server_that_could_not_be_identified_at_all() {
+  # The counterpart : when nothing came back, the non-zero exit code is a real failure
+  # and the controller must still refuse to run blind
+  export MOCK_IPMITOOL_FRU_OUTPUT MOCK_IPMITOOL_FRU_STDERR MOCK_IPMITOOL_FRU_EXIT_CODE
+  MOCK_IPMITOOL_FRU_OUTPUT=""
+  MOCK_IPMITOOL_FRU_STDERR="Device not present (Timeout)"
+  MOCK_IPMITOOL_FRU_EXIT_CODE=1
+
+  local OUTPUT
+  OUTPUT=$(get_Dell_server_model 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "a server that could not be identified at all should stop the controller"
+  assert_contains "$OUTPUT" "credentials that can open an IPMI session"
+}
+
+function test_an_empty_inventory_is_not_reported_as_a_failure_ipmitool_never_returned() {
+  # An inventory that came back blank from a call that SUCCEEDED is not a failed call. The
+  # error still has to fire -- nothing identified the server -- but quoting an exit code of
+  # 0 in it would send the user looking for a failure ipmitool never reported
+  export MOCK_IPMITOOL_FRU_OUTPUT="FRU Device Description : Builtin FRU Device (ID 0)"
+  export MOCK_IPMITOOL_FRU_EXIT_CODE=0
+
+  local OUTPUT
+  OUTPUT=$(get_Dell_server_model 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "an inventory identifying nothing should stop the controller"
+  assert_not_contains "$OUTPUT" "exited with code" "a call that succeeded has no exit code worth reporting"
+  assert_contains "$OUTPUT" "ipmitool said:" "the error should still quote the inventory it could not read"
+}
+
+function test_local_mode_is_not_told_to_check_a_username_and_a_password_it_never_sends() {
+  # Local mode talks to the host's own BMC through the exposed IPMI device : naming
+  # IDRAC_USERNAME and IDRAC_PASSWORD there sends the user to correct something the
+  # connection does not even use
+  IDRAC_HOST="local"
+  IDRAC_LOGIN_STRING="open"
+  export MOCK_IPMITOOL_FRU_EXIT_CODE=1
+  export MOCK_IPMITOOL_FRU_OUTPUT="Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0: No such file or directory"
+
+  local OUTPUT
+  OUTPUT=$(get_Dell_server_model 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "a local BMC that answers nothing should stop the controller too"
+  assert_contains "$OUTPUT" "IDRAC_HOST" "the error should name the parameter that selects local mode"
+  assert_not_contains "$OUTPUT" "Parameter : IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" \
+    "local mode should not be told to check credentials it never sends"
+  assert_contains "$OUTPUT" "Could not open device at" "the error should quote what ipmitool said"
 }
 
 function test_the_catalogue_covers_every_generation_and_typology_without_duplicates() {
