@@ -428,7 +428,7 @@ Running the container is never restricted. On a homelab, on a company's own serv
 
 Copyright and attribution notices, the licence history and the third-party terms that apply to the published Docker image are recorded in [`NOTICE`][link-to-notice-file].
 
-> **Note for existing users.** This project was licensed under CC BY-NC-SA 4.0 until the relicensing tracked in [#304](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/304). Copies obtained under those terms keep them ; nothing is withdrawn from anyone. Everything from that point on is AGPL-3.0-only, which grants strictly more than the previous licence did to every non-commercial user, and finally gives commercial users a clear answer.
+> **Note for existing users.** This project was licensed under CC BY-NC-SA 4.0 until the relicensing tracked in [#304](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/304). Copies obtained under those terms keep them ; nothing is withdrawn from anyone. Everything from that point on is AGPL-3.0-only, which **permits** more than the previous licence did — commercial use included, for everybody, and combination with the whole GPL family — in exchange for one **obligation** CC BY-NC-SA never had : whoever redistributes the program, modified or not, has to pass the corresponding source on with it. If you run the container rather than redistribute it, that obligation never triggers and the change is a pure gain for you.
 
 [agpl]: https://www.gnu.org/licenses/agpl-3.0
 [agpl-shield]: https://img.shields.io/badge/License-AGPL%20v3-blue.svg
