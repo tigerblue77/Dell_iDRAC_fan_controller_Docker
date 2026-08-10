@@ -1324,6 +1324,24 @@ function does_the_server_lack_this_command() {
   [[ "$IPMITOOL_STDERR" == *"rsp=0xc1"* || "$IPMITOOL_STDERR" == *"rsp=0xd5"* ]]
 }
 
+# Whether the given ipmitool stderr says the BMC itself answered and refused the command for want of
+# privilege, rather than not having it at all.
+# Usage : does_the_command_need_a_higher_privilege_level "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"
+#
+# 0xd4 is "insufficient privilege level" : the command is there and this account may not run it. It is
+# deliberately kept out of does_the_server_lack_this_command() above, because concluding "not supported
+# by this server" from it would send a user to look at their hardware for something that lives in their
+# iDRAC account -- the same shape of wrong diagnosis #195 set out to remove, on a different input.
+#
+# It is a verdict all the same, and a permanent one for this run : the credentials this container was
+# given do not change while it runs, so neither will the answer. Concluded once and never retried,
+# where a 0xc0 node busy or an unreachable host keep being sent the command on every cycle
+function does_the_command_need_a_higher_privilege_level() {
+  local -r IPMITOOL_STDERR="$1"
+
+  [[ "$IPMITOOL_STDERR" == *"rsp=0xd4"* ]]
+}
+
 # Prepare traps in case of container exit
 function graceful_exit() {
   if "$MONITORING_ONLY_MODE"; then
