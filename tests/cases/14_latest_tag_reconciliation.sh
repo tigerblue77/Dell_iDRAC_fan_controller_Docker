@@ -273,6 +273,37 @@ function test_an_unreadable_registry_is_left_alone_rather_than_treated_as_empty(
   teardown_reconciliation_sandbox
 }
 
+function test_a_latest_ahead_of_every_published_version_is_not_dragged_backwards() {
+  if ! latest_tag_reconciliation_can_run; then
+    skip_test "no .github next to the scripts, or no jq"
+    return 0
+  fi
+
+  # A version tag deleted from under us, or something pushed by hand : "latest"
+  # is on v1.76 and no v1.76 resolves any more. Pointing it at the highest
+  # version that still does would hand every user of "latest" an OLDER image
+  # than the one they already have, which is the single thing this script must
+  # never do. "Base image refresh" refuses the same situation
+  setup_reconciliation_sandbox "v1.74 v1.75" \
+    "docker.io/owner/image:v1.74	v1.74" \
+    "docker.io/owner/image:v1.75	v1.75" \
+    "docker.io/owner/image:latest	v1.76"
+
+  local OUTPUT EXIT_CODE=0
+  OUTPUT="$(run_reconciliation docker.io)" || EXIT_CODE=$?
+
+  assert_equals "v1.76" "$(published_version "docker.io/owner/image:latest")" \
+    "latest must not be moved back onto an older version than the one it serves"
+  assert_empty "$(cat "$REGISTRY_CREATE_LOG")" \
+    "nothing should be written when the only available move is backwards"
+  assert_contains "$OUTPUT" "::warning::" \
+    "a state nothing here produced has to be reported for someone to look at"
+  assert_equals "0" "$EXIT_CODE" \
+    "it must not redden a release whose image did go out"
+
+  teardown_reconciliation_sandbox
+}
+
 function test_a_write_that_did_not_take_is_reported_rather_than_assumed() {
   if ! latest_tag_reconciliation_can_run; then
     skip_test "no .github next to the scripts, or no jq"

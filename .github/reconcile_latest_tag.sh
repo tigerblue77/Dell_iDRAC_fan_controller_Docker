@@ -145,13 +145,34 @@ for REGISTRY in "${REGISTRIES[@]}"; do
 
   STATUS=0
   CURRENT_VERSION="$(version_of_tag "$REFERENCE:$LATEST_TAG")" || STATUS=$?
-  if [ "$STATUS" -eq 2 ]; then
+  # Anything that is not "read it" or "it is not there" is the unreadable case :
+  # a read that failed in a way this script has no name for is the last thing
+  # that should be allowed to decide where "latest" points
+  if [ "$STATUS" -ge 2 ]; then
     printf '::warning::Could not read "%s" on %s, leaving it alone\n' "$LATEST_TAG" "$REGISTRY"
     continue
   fi
 
   if [ "$STATUS" -eq 0 ] && [ "$CURRENT_VERSION" = "$HIGHEST_PUBLISHED" ]; then
     printf '%s : "%s" is already %s\n' "$REGISTRY" "$LATEST_TAG" "$HIGHEST_PUBLISHED"
+    continue
+  fi
+
+  # "latest" already ahead of every version that resolves means a version tag
+  # was deleted from under us, or something was published by hand. Pointing it
+  # at the highest version still published would move "latest" BACKWARDS, and
+  # handing users an older image than the one they already have is the one thing
+  # no workflow here may ever do. "Base image refresh" refuses the same
+  # situation for the same reason.
+  #
+  # It warns where that workflow errors, and the difference is deliberate : that
+  # one is a maintenance run with nothing to withhold, this one stands behind a
+  # release whose image did go out. Someone still has to look - a state nothing
+  # here produced does not repair itself - but not at the cost of a red release
+  if [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" != "$HIGHEST_PUBLISHED" ] &&
+    [ "$(printf '%s\n%s\n' "$CURRENT_VERSION" "$HIGHEST_PUBLISHED" | sort -V | tail -n 1)" = "$CURRENT_VERSION" ]; then
+    printf '::warning::"%s" on %s is on %s, ahead of the highest version published there (%s). Refusing to move it backwards\n' \
+      "$LATEST_TAG" "$REGISTRY" "$CURRENT_VERSION" "$HIGHEST_PUBLISHED"
     continue
   fi
 
