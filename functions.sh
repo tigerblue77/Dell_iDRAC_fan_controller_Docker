@@ -1272,17 +1272,14 @@ function get_Dell_server_model() {
   IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>&1)
   local -r ipmitool_exit_code=$?
 
-  if [ $ipmitool_exit_code -ne 0 ]; then
-    print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. ipmitool said: $IPMI_FRU_content"
-  fi
-
   # Only the FIRST match of each field. "ipmitool fru" describes every FRU device on the bus, and more
   # than one of them fills these fields : a populated power supply reports its own manufacturer and its
   # own product name. Keeping every match sets these variables to several newline-separated values, the
   # server's own and its parts', and the equality test the caller runs against SERVER_MANUFACTURER then
   # fails on a genuine Dell -- refusing to start with "Your server isn't a Dell product" on hardware
-  # this function had just identified correctly. ipmitool prints the builtin FRU device (ID 0), which
-  # describes the server itself, before it walks the SDR records, so the first match is the right one
+  # this function had just identified correctly (issue #319). ipmitool prints the builtin FRU device
+  # (ID 0), which describes the server itself, before it walks the SDR records, so the first match is
+  # the right one
   SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2; exit}')
   SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2; exit}')
 
@@ -1297,6 +1294,43 @@ function get_Dell_server_model() {
   if [ -z "$SERVER_MODEL" ]; then
     SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2; exit}')
   fi
+
+  # Whether the server could be identified is the reliable signal here, not ipmitool's
+  # exit code : "ipmitool fru" walks every FRU device and returns non-zero as soon as a
+  # single one of them fails to read, which is the normal state of healthy hardware.
+  # An unpopulated drive backplane or PSU bay answers "Device not present (Timeout)"
+  # while the builtin FRU device (ID 0) still returns the manufacturer and the model, so
+  # exiting on the exit code alone refused to start on servers that were perfectly fine.
+  # The FRU walk is a property of the inventory and not of the transport, so "-I open"
+  # and "-I lanplus" were refused alike.
+  #
+  # The failure #103 asked to catch is total rather than partial, so gating on the
+  # identification keeps catching it : a session that cannot be opened returns no
+  # inventory at all, both fields above stay empty and the error below still fires
+  if [ -n "$SERVER_MANUFACTURER" ] || [ -n "$SERVER_MODEL" ]; then
+    return 0
+  fi
+
+  # Only mention the exit code when there is one to report : an inventory that came back
+  # empty from a call that succeeded is not a failed call, and "exited with code 0" inside
+  # a connection error would contradict itself
+  local IPMITOOL_REPORT="ipmitool said: $IPMI_FRU_content"
+  if [ $ipmitool_exit_code -ne 0 ]; then
+    IPMITOOL_REPORT="ipmitool exited with code $ipmitool_exit_code and said: $IPMI_FRU_content"
+  fi
+
+  # Local mode never sends a username nor a password -- it talks to the Docker host's own
+  # BMC through the exposed IPMI device -- so naming those two parameters there would send
+  # the user to correct something the connection does not even use
+  if [[ "$IDRAC_HOST" == "local" ]]; then
+    print_configuration_error_and_exit "IDRAC_HOST" "$IDRAC_HOST" \
+      "an IPMI device the host's own BMC answers on. Nothing could be read from it, so the server could not be identified. IDRAC_USERNAME and IDRAC_PASSWORD are not used in local mode, so they are not what to check here. $IPMITOOL_REPORT" \
+      "Check that the device exposed with \"--device=\" is your server's IPMI device and that its
+kernel modules (\"ipmi_devintf\", \"ipmi_si\") are loaded on the Docker host, then start the
+container again. Alternatively, set IDRAC_HOST to your iDRAC's address to use network mode instead."
+  fi
+
+  print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. $IPMITOOL_REPORT"
 }
 
 # Settle the width of the "Active fan speed profile" column, which the header and the rows both lay

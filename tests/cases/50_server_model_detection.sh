@@ -77,6 +77,108 @@ function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_
   assert_contains "$OUTPUT" "credentials that can open an IPMI session" "the error should say what is expected instead"
   assert_contains "$OUTPUT" "IDRAC_HOST" "the error should name the variables to check"
   assert_contains "$OUTPUT" "Unable to establish IPMI v2 / RMCP+ session" "the error should quote what ipmitool said"
+  assert_contains "$OUTPUT" "exited with code 1" "the error should report the exit code it no longer decides on"
+}
+
+function test_unreadable_fru_devices_do_not_stop_a_server_that_could_still_be_identified() {
+  # "ipmitool fru" walks every FRU device and exits non-zero as soon as one of them
+  # fails to read, so an R740xd with an empty drive backplane bay returns 1 while still
+  # reporting its model. Exiting on that exit code alone refused to start on healthy
+  # hardware, which is the regression this guards against.
+  # The harness builds a lanplus login string, so this is the network mode case
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd"
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "an identified server should start even though ipmitool exited non-zero"
+  assert_not_contains "$CAPTURED_OUTPUT" "the container will not start" "a partial FRU read is not a connection failure"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+}
+
+function test_unreadable_fru_devices_do_not_stop_the_controller_in_local_mode_either() {
+  # The transport says nothing about whether individual FRU devices answered, so local
+  # mode must not be stricter than the network mode covered above. Both were reproduced
+  # on the same R740xd : "-I open" and "-I lanplus" each exit 1, each report the same
+  # three unreadable bays (BP0, BP2, PERC2), and each still return the model
+  IDRAC_HOST="local"
+  IDRAC_LOGIN_STRING="open"
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R740xd"
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "local mode should tolerate a partial FRU read exactly like network mode"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL"
+  assert_equals "1" "$(count_ipmitool_calls_matching '^-I open fru$')" \
+    "the inventory should have been read over the local interface, which is what this case is about"
+}
+
+function test_a_partially_read_inventory_still_falls_back_on_the_fru_board_fields() {
+  # The two halves meeting : a server that fills only the "Board *" fields AND has empty
+  # bays. The fallback runs before anything is decided, so the board fields alone identify it
+  simulate_partially_readable_fru_inventory --manufacturer "DELL" --model "PowerEdge R630" --board-fields-only
+
+  local EXIT_CODE=0
+  capture_output get_Dell_server_model || EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "the board fields identify the server just as well as the product ones"
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R630" "$SERVER_MODEL"
+}
+
+function test_unreadable_fru_devices_still_stop_a_server_that_could_not_be_identified_at_all() {
+  # The counterpart : when nothing came back, the non-zero exit code is a real failure
+  # and the controller must still refuse to run blind
+  export MOCK_IPMITOOL_FRU_OUTPUT MOCK_IPMITOOL_FRU_STDERR MOCK_IPMITOOL_FRU_EXIT_CODE
+  MOCK_IPMITOOL_FRU_OUTPUT=""
+  MOCK_IPMITOOL_FRU_STDERR="Device not present (Timeout)"
+  MOCK_IPMITOOL_FRU_EXIT_CODE=1
+
+  local OUTPUT
+  OUTPUT=$(get_Dell_server_model 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "a server that could not be identified at all should stop the controller"
+  assert_contains "$OUTPUT" "credentials that can open an IPMI session"
+}
+
+function test_an_empty_inventory_is_not_reported_as_a_failure_ipmitool_never_returned() {
+  # An inventory that came back blank from a call that SUCCEEDED is not a failed call. The
+  # error still has to fire -- nothing identified the server -- but quoting an exit code of
+  # 0 in it would send the user looking for a failure ipmitool never reported
+  export MOCK_IPMITOOL_FRU_OUTPUT="FRU Device Description : Builtin FRU Device (ID 0)"
+  export MOCK_IPMITOOL_FRU_EXIT_CODE=0
+
+  local OUTPUT
+  OUTPUT=$(get_Dell_server_model 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "an inventory identifying nothing should stop the controller"
+  assert_not_contains "$OUTPUT" "exited with code" "a call that succeeded has no exit code worth reporting"
+  assert_contains "$OUTPUT" "ipmitool said:" "the error should still quote the inventory it could not read"
+}
+
+function test_local_mode_is_not_told_to_check_a_username_and_a_password_it_never_sends() {
+  # Local mode talks to the host's own BMC through the exposed IPMI device : naming
+  # IDRAC_USERNAME and IDRAC_PASSWORD there sends the user to correct something the
+  # connection does not even use
+  IDRAC_HOST="local"
+  IDRAC_LOGIN_STRING="open"
+  export MOCK_IPMITOOL_FRU_EXIT_CODE=1
+  export MOCK_IPMITOOL_FRU_OUTPUT="Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0: No such file or directory"
+
+  local OUTPUT
+  OUTPUT=$(get_Dell_server_model 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 1 "$EXIT_CODE" "a local BMC that answers nothing should stop the controller too"
+  assert_contains "$OUTPUT" "IDRAC_HOST" "the error should name the parameter that selects local mode"
+  assert_not_contains "$OUTPUT" "Parameter : IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" \
+    "local mode should not be told to check credentials it never sends"
+  assert_contains "$OUTPUT" "Could not open device at" "the error should quote what ipmitool said"
 }
 
 function test_the_catalogue_covers_every_generation_and_typology_without_duplicates() {
