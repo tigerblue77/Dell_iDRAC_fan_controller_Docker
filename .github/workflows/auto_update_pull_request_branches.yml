@@ -55,10 +55,14 @@ name: Auto-update pull request branches
 # permissions, and it is what GitHub itself points to for this case. Nothing
 # about it has to be renewed by hand, because the private key does not expire.
 # Its installation token does, after an hour, so it is not something to paste
-# into the secret : the private key goes there instead, and a step such as
-# actions/create-github-app-token mints a fresh token at the start of every run.
-# That step, which this workflow does not currently carry, plus registering and
-# installing the App, is what the App route costs over the token
+# into a secret : the private key goes into PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY
+# and the App's identifier into the PULL_REQUESTS_UPDATE_APP_ID variable, and
+# the first step below mints a fresh token from them at the start of every run.
+#
+# Both routes are wired up, and setting the App variable is the whole migration :
+# the minting step only runs once that variable exists, and the token falls back
+# to the personal access token whenever it does not. So the App can be adopted
+# later, or never, without this file changing over the token
 
 on:
   push:
@@ -85,9 +89,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Only runs once the App route is configured : without the variable there
+      # is nothing to mint from, the step is skipped, and the token below falls
+      # back to the personal access token. Setting the variable is the whole
+      # migration, and it needs no change to this file
+      - name: Mint an installation token, if a GitHub App is configured
+        id: app-token
+        if: vars.PULL_REQUESTS_UPDATE_APP_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.PULL_REQUESTS_UPDATE_APP_ID }}
+          private-key: ${{ secrets.PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY }}
+
       - name: Rebase every conflict-free pull request that is behind master
         env:
-          GH_TOKEN: ${{ secrets.PULL_REQUESTS_UPDATE_TOKEN }}
+          # The App's token when there is one, the personal access token
+          # otherwise. Whichever it is, it needs the three permissions the
+          # header describes
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.PULL_REQUESTS_UPDATE_TOKEN }}
+          UPDATING_AS: ${{ vars.PULL_REQUESTS_UPDATE_APP_ID != '' && 'the GitHub App' || 'the personal access token' }}
           REPOSITORY: ${{ github.repository }}
           # Whether a pull request whose rebase conflicts is updated with a
           # merge commit rather than left behind
@@ -144,9 +164,13 @@ jobs:
           }
 
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::The PULL_REQUESTS_UPDATE_TOKEN secret is empty or missing, so nothing can be updated. The comment at the top of this workflow says which token to create and why the default one cannot be used."
+            echo "::error::No credential is configured, so nothing can be updated. Set either the PULL_REQUESTS_UPDATE_TOKEN secret or the PULL_REQUESTS_UPDATE_APP_ID variable together with the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret. The comment at the top of this workflow says what each one needs and why the default token is not enough."
             exit 1
           fi
+
+          # Named in the log because the two identities fail differently, and
+          # knowing which one ran is the first thing wanted when one of them does
+          echo "Updating as $UPDATING_AS."
 
           # Master is asked for by name rather than taken from github.sha :
           # that is master's tip under the push trigger, but under
