@@ -12,10 +12,12 @@ readonly FALLBACK_CPU_TEMPERATURE_THRESHOLD=50
 # and none tolerates more than 125°C, so a value outside it is a misreading or a typo rather than a
 # setting : left in place it would either pin the fans low forever or never let them slow down at all.
 #
-# The maximum carries a second meaning the README states and the refusal points at : it is what a user
-# who wants their own fan control profile kept whatever the CPU temperature is told to set, no Dell
-# server CPU reaching 125°C before its own thermal protection shuts the machine down. Lowering it would
-# take that answer away, not merely tighten a sanity check (issue #326)
+# The maximum is a safety limit rather than a sanity check, and that is why it is not negotiable : a
+# threshold above it is not a stricter setting but the absence of one, no PowerEdge CPU reaching 125°C
+# before its own thermal protection powers the machine off, so the fallback such a threshold governs
+# could never fire and the container would supervise nothing while printing a threshold at startup.
+# Being unable to disable that fallback is the intended behaviour. Only hardware whose manufacturer
+# "high" value genuinely exceeds this would reopen the number, and none is known to exist (issue #326)
 readonly MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=20
 readonly MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=125
 

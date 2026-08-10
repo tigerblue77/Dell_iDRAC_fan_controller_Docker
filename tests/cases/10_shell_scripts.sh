@@ -366,20 +366,15 @@ function test_the_readme_documents_the_plausible_temperature_threshold_window() 
     "\*\*between $MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD°C and $MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD°C\*\*" \
     "the README should state the window the container really enforces"
 
-  # The maximum is not only a bound : it is the answer given to whoever set a very
-  # high value to keep their own profile applied whatever the temperature, so the
-  # README has to name it as a value to set and not merely as a limit
-  assert_contains "$README_CONTENT" \
-    "CPU_TEMPERATURE_THRESHOLD=$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" \
-    "the README should name the maximum as what to set to keep your own profile applied"
-
   # The placeholders are what a user copies into a "docker run" or a compose file,
-  # well before reading the bullet that explains them
-  local -r PLACEHOLDER="from $MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD to $MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
+  # well before reading the bullet that explains them. They carry the unit as well
+  # as the range : a placeholder that names neither is how "160" gets typed as a
+  # Fahrenheit figure into a parameter whose bullet says Celsius three sections away
+  local -r PLACEHOLDER="in °C, from $MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD to $MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
   assert_contains "$README_CONTENT" "$PLACEHOLDER" \
-    "the README's CPU_TEMPERATURE_THRESHOLD placeholders should carry the range"
+    "the README's CPU_TEMPERATURE_THRESHOLD placeholders should carry the unit and the range"
   assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
-    ".env.example should carry the same range, being the other file users copy from"
+    ".env.example should carry the same unit and range, being the other file users copy from"
 }
 
 function test_the_suites_own_readme_lists_every_case_file() {
