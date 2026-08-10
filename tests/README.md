@@ -22,6 +22,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | --- | --- |
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, drift between the code and what documents it, healthcheck |
 | `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh |
+| `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, rendered from `README.md` by a workflow no pull request fires either |
 | `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified |
 | `cases/17_reports.sh` | The JUnit XML and Markdown reports, whose consumer is a parser rather than a reader |
 | `cases/20_fan_speed_conversions.sh` | `FAN_SPEED` given as a percentage or as a hexadecimal byte |
