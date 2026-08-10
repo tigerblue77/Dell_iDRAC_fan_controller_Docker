@@ -494,6 +494,40 @@ function test_the_documented_unreachable_duration_spelling_is_one_the_validator_
   assert_empty "$OUTPUT" "and take it without a word"
 }
 
+function test_the_documented_consecutive_failures_minimum_is_the_one_enforced() {
+  # The last placeholder of the family that stated its unit but not its refusal :
+  # 0 is refused, and 0 is what somebody writes to mean "do not escalate" -- the
+  # way to do that being an empty value. Held to the validator rather than to a
+  # constant, the minimum of one being structural : nothing can be concluded from
+  # fewer than one observed failure, so there is no number here that could drift
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  local -r DOCUMENTED_MINIMUM="1 or more"
+
+  assert_contains "$(cat "$REPO_ROOT/README.md")" "$DOCUMENTED_MINIMUM" \
+    "the README's MAXIMUM_CONSECUTIVE_IPMI_FAILURES placeholders should state the minimum"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$DOCUMENTED_MINIMUM" \
+    ".env.example should state it too, being the other file users copy from"
+
+  # The validator answers by stopping the controller, so the calls have to happen
+  # in the subshell a command substitution creates
+  local OUTPUT
+  OUTPUT=$(validate_maximum_consecutive_IPMI_failures_parameter "MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "1" 2>&1)
+  local -r ACCEPTED_EXIT_CODE=$?
+  assert_equals 0 "$ACCEPTED_EXIT_CODE" "1 is the documented minimum, so the validator has to take it"
+
+  OUTPUT=$(validate_maximum_consecutive_IPMI_failures_parameter "MAXIMUM_CONSECUTIVE_IPMI_FAILURES" "0" 2>&1)
+  local -r REFUSED_EXIT_CODE=$?
+  assert_equals 1 "$REFUSED_EXIT_CODE" "and refuse what the documentation says is below it"
+  assert_contains "$OUTPUT" "leave this parameter empty" \
+    "0 is what somebody writes to disable the escalation, so the refusal has to name what really does"
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a

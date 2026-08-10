@@ -349,7 +349,7 @@ function validate_maximum_consecutive_IPMI_failures_parameter() {
   # Zero would exit on the very first unreachable cycle, i.e. on any transient glitch, which is the
   # opposite of riding one out
   if [ "$((10#$VALUE))" -lt 1 ]; then
-    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at least 1 : zero would exit on the very first unreachable cycle, i.e. on any transient glitch"
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "at least 1 : zero would exit on the very first unreachable cycle, i.e. on any transient glitch. If you meant to switch the escalation off rather than to make it immediate, leave this parameter empty : that is what disables it"
   fi
 }
 
