@@ -1272,17 +1272,27 @@ function get_Dell_server_model() {
   IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>&1)
   local -r ipmitool_exit_code=$?
 
-  SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2}')
-  SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2}')
+  # Only the FIRST match of each field. "ipmitool fru" describes every FRU device on the bus, and more
+  # than one of them fills these fields : a populated power supply reports its own manufacturer and its
+  # own product name. Keeping every match sets these variables to several newline-separated values, the
+  # server's own and its parts', and the equality test the caller runs against SERVER_MANUFACTURER then
+  # fails on a genuine Dell -- refusing to start with "Your server isn't a Dell product" on hardware
+  # this function had just identified correctly (issue #319). ipmitool prints the builtin FRU device
+  # (ID 0), which describes the server itself, before it walks the SDR records, so the first match is
+  # the right one
+  SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | grep "Product Manufacturer" | awk -F ': ' '{print $2; exit}')
+  SERVER_MODEL=$(echo "$IPMI_FRU_content" | grep "Product Name" | awk -F ': ' '{print $2; exit}')
 
-  # Check if SERVER_MANUFACTURER is empty, if yes, assign value based on "Board Mfg"
+  # Check if SERVER_MANUFACTURER is empty, if yes, assign value based on "Board Mfg". First match only,
+  # for the same reason as above, and this is the likelier of the two paths to meet a second match :
+  # Dell power supplies commonly leave the "Product *" fields empty and fill only the board ones
   if [ -z "$SERVER_MANUFACTURER" ]; then
-    SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{print $2}')
+    SERVER_MANUFACTURER=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{print $2; exit}')
   fi
 
   # Check if SERVER_MODEL is empty, if yes, assign value based on "Board Product"
   if [ -z "$SERVER_MODEL" ]; then
-    SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2}')
+    SERVER_MODEL=$(echo "$IPMI_FRU_content" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2; exit}')
   fi
 
   # Whether the server could be identified is the reliable signal here, not ipmitool's
