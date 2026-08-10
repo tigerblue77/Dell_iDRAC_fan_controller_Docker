@@ -365,9 +365,11 @@ Don't forget to give the project a star! Thanks again!
 
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+3. Commit your Changes, signed off (`git commit -s -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
+
+Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before you do : it explains the sign-off in step 3, and the terms your contribution arrives under in a project that is [dual-licensed](#license).
 
 To test locally, use either :
 ```bash
@@ -414,16 +416,25 @@ The suite also runs on every push and pull request through the [`Tests`](.github
 <!-- LICENSE -->
 ## License
 
-Shield: [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
+[![License: AGPL v3][agpl-shield]][agpl] [![Commercial licence available][commercial-shield]][link-to-commercial-license-file]
 
-This work is licensed under a
-[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa]. The full license description can be read [here][link-to-license-file].
+This project is dual-licensed.
 
-[![CC BY-NC-SA 4.0][cc-by-nc-sa-image]][cc-by-nc-sa]
+**By default, it is free software under the [GNU Affero General Public License version 3][agpl]** (`AGPL-3.0-only`). You may use it, study it, modify it and redistribute it, at no cost and with no formality. The one thing asked in return is reciprocity : if you distribute the program — as-is or modified, as scripts, as an image, or inside a product — the people who receive it must get the corresponding source under those same terms. The full text is in [`LICENSE`][link-to-license-file].
 
-[cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
-[cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
-[cc-by-nc-sa-shield]: https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg
+Running the container is never restricted. On a homelab, on a company's own servers, in production, at any scale : the AGPL asks nothing of you for that, and no permission is needed.
+
+**A [separate commercial licence][link-to-commercial-license-file] is available** for the parties who cannot meet those obligations — typically a vendor embedding the controller in a product whose source cannot be published, or anyone needing a warranty, an indemnity or a support commitment, none of which the AGPL provides. The choice between the two is yours ; see [`LICENSE-COMMERCIAL.md`][link-to-commercial-license-file].
+
+Copyright and attribution notices, the licence history and the third-party terms that apply to the published Docker image are recorded in [`NOTICE`][link-to-notice-file].
+
+> **Note for existing users.** This project was licensed under CC BY-NC-SA 4.0 until the relicensing tracked in [#304](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/304). Copies obtained under those terms keep them ; nothing is withdrawn from anyone. Everything from that point on is AGPL-3.0-only, which grants strictly more than the previous licence did to every non-commercial user, and finally gives commercial users a clear answer.
+
+[agpl]: https://www.gnu.org/licenses/agpl-3.0
+[agpl-shield]: https://img.shields.io/badge/License-AGPL%20v3-blue.svg
+[commercial-shield]: https://img.shields.io/badge/Commercial%20licence-available-brightgreen.svg
 [link-to-license-file]: ./LICENSE
+[link-to-commercial-license-file]: ./LICENSE-COMMERCIAL.md
+[link-to-notice-file]: ./NOTICE
 
 <p align="right">(<a href="#top">back to top</a>)</p>
