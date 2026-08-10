@@ -19,6 +19,10 @@ readonly REJECTED_BY_FIRMWARE_STDERR="Unable to send RAW command (channel=0x0 ne
 
 # What a BMC answers when the command exists but the account may not run it. Reported on an R550 in
 # issue #29, where every raw command answered "Insufficient privilege level"
+# The same answer on a fan control command, which is what an iDRAC 9 running firmware 3.34.34.34 or
+# newer gives : Dell removed a privilege there rather than a command
+readonly FAN_CONTROL_REFUSED_FOR_PRIVILEGE_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd4): Insufficient privilege level"
+
 readonly REFUSED_FOR_PRIVILEGE_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xd4): Insufficient privilege level"
 
 function test_the_user_fan_control_profile_enables_manual_control_then_sets_the_speed() {
@@ -128,10 +132,15 @@ function test_every_recent_generation_that_rejects_the_commands_is_reported_the_
     get_Dell_server_model
     assert_equals "$MODEL" "$SERVER_MODEL" "$MODEL should be identified"
 
+    # A refusal settles the question for the rest of a container's life, and each of the two calls
+    # below stands for the cycle that reached the command first, on another server. So the verdict is
+    # reset before each of them rather than letting one model, or one code path, answer for the others
+    IS_FAN_CONTROL_SUPPORTED=true
     capture_output apply_Dell_default_fan_control_profile
     assert_contains "$CAPTURED_OUTPUT" "Failed to apply Dell default fan control profile" \
       "$MODEL should report the rejected safety profile"
 
+    IS_FAN_CONTROL_SUPPORTED=true
     capture_output apply_user_fan_control_profile
     assert_contains "$CAPTURED_OUTPUT" "Failed to enable manual fan control" \
       "$MODEL should report the rejected user profile"
@@ -301,4 +310,156 @@ function test_an_applied_profile_still_reports_itself_as_applied() {
 
   assert_equals "0" "$EXIT_CODE"
   assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE"
+}
+
+function test_every_other_answer_a_bmc_can_give_settles_nothing() {
+  # test_a_privilege_refusal_is_told_apart_from_a_command_the_server_does_not_have above covers 0xc1,
+  # 0xd4 and an iDRAC that was never reached. This covers the rest of what comes back : the second
+  # code that does settle something, and the ones that must never be allowed to. A busy BMC, a code
+  # neither predicate knows and an empty answer are not a server refusing anything, and concluding
+  # from them would silence the fan control commands for good over a network glitch
+  assert_command_succeeds "0xd5 is the server saying it will not run the command in this state" \
+    does_the_server_lack_this_command "$REJECTED_BY_FIRMWARE_STDERR"
+  assert_command_fails "0xd5 is not a privilege problem either" \
+    does_the_command_need_a_higher_privilege_level "$REJECTED_BY_FIRMWARE_STDERR"
+
+  local ANSWER
+  for ANSWER in \
+    "Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xc0): Node busy" \
+    "Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xff): Unspecified error" \
+    ""; do
+    assert_command_fails "\"$ANSWER\" does not say the command is absent" \
+      does_the_server_lack_this_command "$ANSWER"
+    assert_command_fails "\"$ANSWER\" does not say the account may not run it" \
+      does_the_command_need_a_higher_privilege_level "$ANSWER"
+  done
+}
+
+function test_a_server_that_refused_fan_control_is_not_asked_again() {
+  # The defect this closes : the same two commands were sent, and the same two
+  # errors printed, on every cycle for the life of the container -- twelve times a
+  # minute at the default check interval, on a server that answered the first time
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  assert_contains "$CAPTURED_OUTPUT" "This server refused fan control" \
+    "the verdict must be explained the once it is reached"
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")" \
+    "not a single command must be sent on the cycles that follow"
+  assert_empty "$CAPTURED_OUTPUT" "nor a single line printed"
+  assert_equals "Dell default dynamic fan control profile (refused)" "$CURRENT_FAN_CONTROL_PROFILE" \
+    "the table must name the profile the server is actually running, and say why it is that one"
+}
+
+function test_a_server_that_refuses_the_safety_profile_is_not_asked_again() {
+  # The same verdict, reached through the other door. The overheating branch of
+  # the monitoring loop only ever calls this function, so a server that is
+  # already too hot on the cycle it starts on reaches the verdict here and
+  # nowhere else -- and would otherwise keep being asked, and keep refusing,
+  # for as long as it stayed hot
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+
+  capture_output apply_Dell_default_fan_control_profile
+  assert_contains "$CAPTURED_OUTPUT" "This server refused fan control" \
+    "the verdict must be reached on the path the overheating branch takes too"
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_Dell_default_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")" \
+    "not a single command must be sent on the cycles that follow"
+  assert_empty "$CAPTURED_OUTPUT" "nor a single line printed"
+  assert_equals "Dell default dynamic fan control profile (refused)" "$CURRENT_FAN_CONTROL_PROFILE"
+}
+
+function test_a_forbidden_fan_control_command_settles_it_too() {
+  # 0xd4 rather than 0xd5 : the answer of an iDRAC 9 on 3.34.34.34 or newer, and
+  # the one this container will meet most often from now on
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$FAN_CONTROL_REFUSED_FOR_PRIVILEGE_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_contains "$CAPTURED_OUTPUT" "This server refused fan control"
+  assert_contains "$CAPTURED_OUTPUT" "not an Administrator" \
+    "0xd4 has two causes and only one of them is the firmware, so both must be named"
+
+  forget_recorded_ipmitool_calls
+  apply_user_fan_control_profile 2>/dev/null
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")"
+}
+
+function test_an_unreachable_idrac_never_stops_the_controller_from_trying() {
+  # No completion code at all : the BMC was never reached, and an outage that
+  # silenced the fan control commands for good would leave the fans wherever they
+  # were with nobody raising them once it ended
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Error: Unable to establish IPMI v2 / RMCP+ session"
+
+  apply_user_fan_control_profile 2>/dev/null
+  forget_recorded_ipmitool_calls
+  apply_user_fan_control_profile 2>/dev/null
+
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
+    "the controller must keep asking an iDRAC it merely could not reach"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")"
+}
+
+function test_a_refused_fan_speed_never_stops_the_controller_from_trying() {
+  # The one refusal that must never settle anything. Manual fan control was taken
+  # successfully, so the fans are the controller's : giving up here would leave
+  # them pinned at a speed nothing raises, on a server that is heating up. Only
+  # the command that takes them away from Dell's profile can settle whether this
+  # server hands them over at all
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$FAN_CONTROL_REFUSED_FOR_PRIVILEGE_STDERR"
+
+  apply_user_fan_control_profile 2>/dev/null
+  forget_recorded_ipmitool_calls
+  apply_user_fan_control_profile 2>/dev/null
+
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
+    "the fans are already the controller's, it must keep driving them"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")"
+}
+
+function test_a_refusal_that_follows_an_accepted_command_never_settles_anything() {
+  # The same hazard from the other end : a server that accepted the commands and
+  # starts refusing them mid-run holds fans the controller took. Every refusal
+  # from then on is a failure to give them back, and each retry is another attempt
+  # to -- so the controller keeps asking, however long it takes
+  apply_user_fan_control_profile
+  assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE" \
+    "the fans must have been taken for this test to mean anything"
+
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+  apply_Dell_default_fan_control_profile 2>/dev/null
+
+  forget_recorded_ipmitool_calls
+  apply_Dell_default_fan_control_profile 2>/dev/null
+
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "handing the fans back must be retried for as long as the container runs"
+}
+
+function test_monitoring_only_mode_reaches_no_verdict_because_it_asks_nothing() {
+  # Nothing is sent in this mode, so nothing can be refused : the badge must stay
+  # the monitoring only one rather than become a refusal the server never uttered
+  export MONITORING_ONLY_MODE=true
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
+
+  apply_user_fan_control_profile
+  apply_user_fan_control_profile
+
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "monitoring only, not applied"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")"
 }

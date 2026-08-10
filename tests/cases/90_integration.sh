@@ -569,3 +569,88 @@ function test_an_unreachable_idrac_does_not_open_the_cpu_removal_window() {
   assert_not_contains "$OUTPUT" "considered removed" \
     "no CPU may be dropped : the server never powered off, so none can have left"
 }
+
+function test_the_controller_logs_the_firmware_version_of_the_idrac_it_talks_to() {
+  # The line every report about fan control not being applied starts by asking
+  # for, printed next to the model it belongs with
+  simulate_server "PowerEdge R640" --cpus 2 --cpu-temperatures "40 41"
+  export MOCK_IPMITOOL_MC_INFO_OUTPUT
+  MOCK_IPMITOOL_MC_INFO_OUTPUT=$(make_mc_info_output --firmware-revision "3.21")
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "Server model: DELL PowerEdge R640"
+  assert_contains "$OUTPUT" "iDRAC firmware version: 3.21"
+  assert_equals "1" "$(count_ipmitool_calls_matching "mc info")" \
+    "the iDRAC is asked once at startup, not on every cycle"
+}
+
+function test_a_recent_firmware_version_is_never_turned_into_a_verdict() {
+  # The trap this pins shut : an iDRAC 10 reports 1.x, an iDRAC 9 that removed the
+  # commands reports 7.00, and both are "below 3.34.34.34" or "above" it depending
+  # only on which of the two numbering schemes you assume. So the version is
+  # logged and nothing else -- a server whose BMC accepts the commands is driven
+  # whatever it calls its firmware
+  simulate_server "PowerEdge R760" --cpus 2 --cpu-temperatures "40 41"
+  export MOCK_IPMITOOL_MC_INFO_OUTPUT
+  MOCK_IPMITOOL_MC_INFO_OUTPUT=$(make_mc_info_output --firmware-revision "7.00")
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "iDRAC firmware version: 7.00"
+  assert_contains "$OUTPUT" "User static fan control profile (5%)" \
+    "the fans must be driven on a server that accepts the commands, whatever its firmware says"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
+    "the version must not gate the command"
+  assert_not_contains "$OUTPUT" "This server refused fan control" \
+    "nothing was refused here"
+}
+
+function test_the_controller_says_once_that_the_server_refuses_fan_control() {
+  # A Gen 14 server on a firmware from which Dell removed the commands. Before
+  # this, the controller printed the same two errors on every cycle for the life
+  # of the container ; now it explains it once and keeps doing the half of its job
+  # that is still possible
+  simulate_server "PowerEdge R740" --cpus 2 --cpu-temperatures "45 46"
+  export MOCK_IPMITOOL_MC_INFO_OUTPUT
+  MOCK_IPMITOOL_MC_INFO_OUTPUT=$(make_mc_info_output --firmware-revision "7.00")
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd4): Insufficient privilege level"
+
+  # Well past the cycle the verdict is reached on, so anything still being re-sent
+  # or re-printed shows up
+  local -r OUTPUT=$(run_controller "$CONTROLLER_TEMPERATURE_LINE_PATTERN" 5)
+
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
+    "the command must be sent once and never again"
+  assert_equals "1" "$(grep -c "This server refused fan control" <<< "$OUTPUT")" \
+    "and explained once, not on every cycle"
+  assert_equals "1" "$(grep -c "Failed to enable manual fan control" <<< "$OUTPUT")" \
+    "the answer it was refused with is quoted once too"
+  assert_contains "$OUTPUT" "firmware version 7.00" \
+    "the explanation must carry the firmware version, it is what the reader will be asked for"
+  assert_contains "$OUTPUT" "45°C" "the temperatures must still be read and logged"
+  assert_matches "$OUTPUT" "Dell default dynamic fan control profile \(refused\)" \
+    "the table must name the profile the server is running, and say why it is that one"
+  assert_contains "$OUTPUT" "are now OK (<= 50°C), and this server refused fan control" \
+    "the comment must not claim a user profile this server refused to hand its fans over for"
+}
+
+function test_a_server_that_refuses_fan_control_is_not_told_it_was_handed_anything_back() {
+  # graceful_exit's line is the last thing in the log, and on this server it used
+  # to claim a profile had been applied for safety while the command it names was
+  # refused. Nothing was ever taken from Dell here, so nothing is given back
+  simulate_server "PowerEdge R750" --cpus 2 --cpu-temperatures "44 45"
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state"
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "Container stopped (this server refused fan control" \
+    "the exit line must say what actually happened"
+  assert_not_contains "$OUTPUT" "Dell default dynamic fan control profile applied for safety" \
+    "nothing was applied for safety, and claiming it is the one lie that matters here"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "there is nothing to hand back"
+}
+

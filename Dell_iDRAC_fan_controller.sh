@@ -12,6 +12,16 @@ source constants.sh
 # guessing from the model name
 IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
 
+# The fan control commands themselves are found out the same way, and for the same reason : Dell removed
+# them from the 14th generation on, an iDRAC 9 refusing them from firmware 3.34.34.34 onwards, and no
+# model name says which firmware a server is running. Without this the controller kept sending them and
+# reporting the same two failures every cycle, for the life of the container.
+#
+# The second flag is what keeps the first one safe : a refusal only settles anything while nothing has
+# ever been accepted. Both are declared here, before the trap below, because graceful_exit reads them
+IS_FAN_CONTROL_SUPPORTED=true
+HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
+
 # Trap the signals for container exit and run graceful_exit function
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
@@ -144,12 +154,17 @@ if [[ ! $SERVER_MANUFACTURER == "DELL" ]]; then
   print_error_and_exit "Your server isn't a Dell product"
 fi
 
+# Asked once the server is known to be a Dell, next to the model it belongs with, and never treated as a
+# reason not to start : an iDRAC that will not say which firmware it runs still drives fans
+get_iDRAC_firmware_version
+
 # CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
 # instead of counting values, which no longer depends on the server generation
 
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
+echo "iDRAC firmware version: $IDRAC_FIRMWARE_VERSION"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
@@ -475,7 +490,7 @@ while true; do
       if (( ${#OVERHEATING_CPUS_AND_TEMPERATURES[@]} > 0 )); then
         COMMENT=$(build_fan_control_fallback_comment "${OVERHEATING_CPUS_AND_TEMPERATURES[@]}")
       else
-        COMMENT="No CPU temperature could be read, Dell default dynamic fan control profile applied for safety"
+        COMMENT="No CPU temperature could be read, $(fan_control_comment_clause "Dell default dynamic fan control profile applied for safety")"
       fi
     fi
   else
@@ -489,9 +504,9 @@ while true; do
       # is also applied when a reading can't be parsed : claiming a temperature dropped would contradict
       # the "could not be read" comment printed when that happened
       if [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
-        COMMENT="CPU temperature is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+        COMMENT="CPU temperature is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), $(fan_control_comment_clause "user's fan control profile applied")."
       else
-        COMMENT="All CPU temperatures are now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), user's fan control profile applied."
+        COMMENT="All CPU temperatures are now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), $(fan_control_comment_clause "user's fan control profile applied")."
       fi
     fi
   fi
