@@ -33,6 +33,37 @@ function test_the_server_model_falls_back_on_the_fru_board_fields() {
   assert_equals "PowerEdge R630" "$SERVER_MODEL"
 }
 
+function test_a_populated_power_supply_is_not_mistaken_for_the_server_itself() {
+  # "ipmitool fru" describes every FRU device on the bus, and a populated power supply
+  # fills the same "Product Manufacturer" / "Product Name" fields as the server. Keeping
+  # every match makes the manufacturer "DELL\nDELL", which the caller's
+  # [[ ! $SERVER_MANUFACTURER == "DELL" ]] fails, refusing to start with "Your server
+  # isn't a Dell product" on a server that was just identified correctly
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R740xd" --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_equals "DELL" "$SERVER_MANUFACTURER" "the manufacturer is the server's own, once, not one per FRU device"
+  assert_equals "PowerEdge R740xd" "$SERVER_MODEL" "the model is the server's, not its power supply's"
+  assert_not_contains "$SERVER_MODEL" "PWR SPLY" "the power supply's product name must not leak into the model"
+}
+
+function test_a_populated_power_supply_does_not_poison_the_board_field_fallback_either() {
+  # The same hazard on the fallback path, and the likelier one on real hardware : Dell
+  # power supplies commonly leave the "Product *" fields empty and fill only the board
+  # ones, and the fallback is exactly what runs on a server that filled no product field
+  # either. Nothing about a failing connection is involved -- this inventory is entirely
+  # readable, so "ipmitool fru" exits 0 and no connection check stands in the way
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R630" --board-fields-only --with-readable-psu)
+
+  get_Dell_server_model
+
+  assert_equals "DELL" "$SERVER_MANUFACTURER" "the board fallback must take the first match only"
+  assert_equals "PowerEdge R630" "$SERVER_MODEL" "the board fallback must not append the power supply's board product"
+}
+
 function test_a_failing_ipmi_connection_stops_the_controller_with_an_actionable_error() {
   export MOCK_IPMITOOL_FRU_EXIT_CODE=1
   export MOCK_IPMITOOL_FRU_OUTPUT="Error: Unable to establish IPMI v2 / RMCP+ session"

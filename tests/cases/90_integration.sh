@@ -339,6 +339,23 @@ function test_the_controller_survives_a_recent_server_that_rejects_the_fan_contr
   assert_contains "$OUTPUT" "45°C" "the temperatures must still be monitored and logged"
 }
 
+function test_the_controller_starts_on_a_server_whose_power_supplies_are_populated() {
+  # What the user sees when a second FRU device fills the same fields as the server : the
+  # container refuses to start, claiming the server is not a Dell. The counterpart of
+  # test_the_controller_refuses_to_run_on_a_server_that_is_not_a_dell() below -- that
+  # refusal must keep firing on a real non-Dell, and must never fire on a Dell whose
+  # power supply happens to be readable
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL" --model "PowerEdge R740xd" --with-readable-psu)
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "Server model: DELL PowerEdge R740xd" "the server is named once, without its power supply"
+  assert_not_contains "$OUTPUT" "isn't a Dell product" "a Dell with populated power supplies is still a Dell"
+  assert_not_contains "$OUTPUT" "PWR SPLY" "the power supply must never appear as the server model"
+  assert_contains "$OUTPUT" "User static fan control profile (5%)" "the controller should reach its monitoring loop"
+}
+
 function test_the_controller_refuses_to_run_on_a_server_that_is_not_a_dell() {
   export MOCK_IPMITOOL_FRU_OUTPUT
   MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "Supermicro" --model "Super Server X11DPi-N")

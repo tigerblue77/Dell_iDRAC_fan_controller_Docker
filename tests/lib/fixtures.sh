@@ -12,15 +12,21 @@
 
 # Build an "ipmitool fru" output
 # Usage : make_fru_output [--manufacturer NAME] [--model NAME] [--board-fields-only] [--no-manufacturer]
+#                         [--with-readable-psu]
 #
 # --board-fields-only reproduces the servers that don't fill the "Product *"
 # fields at all and only expose "Board Mfg" / "Board Product", which
 # get_Dell_server_model() falls back on
+#
+# --with-readable-psu appends a POPULATED power supply. It is a FRU device of its
+# own, and it fills the very same manufacturer and product fields as the server, so
+# it is what makes a parse keeping every match collect two values instead of one
 function make_fru_output() {
   local MANUFACTURER="DELL"
   local MODEL="PowerEdge R730xd"
   local BOARD_FIELDS_ONLY=false
   local WITH_MANUFACTURER=true
+  local WITH_READABLE_PSU=false
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,6 +34,7 @@ function make_fru_output() {
       --model) MODEL="$2"; shift 2 ;;
       --board-fields-only) BOARD_FIELDS_ONLY=true; shift ;;
       --no-manufacturer) WITH_MANUFACTURER=false; shift ;;
+      --with-readable-psu) WITH_READABLE_PSU=true; shift ;;
       *) printf 'make_fru_output: unknown option "%s"\n' "$1" >&2; return 1 ;;
     esac
   done
@@ -42,6 +49,9 @@ function make_fru_output() {
   printf ' Board Part Number     : 0599V5A05\n'
 
   if $BOARD_FIELDS_ONLY; then
+    if $WITH_READABLE_PSU; then
+      make_readable_psu_fru_device --board-fields-only
+    fi
     return 0
   fi
 
@@ -53,6 +63,35 @@ function make_fru_output() {
   printf ' Product Version       : A05\n'
   printf ' Product Serial        : 5N7XXX2\n'
   printf ' Product Asset Tag     :\n'
+
+  if $WITH_READABLE_PSU; then
+    make_readable_psu_fru_device
+  fi
+}
+
+# A populated power supply, as "ipmitool fru" lists it after the builtin FRU device
+# (ID 0) that describes the server. Its manufacturer is the same string the server
+# reports, and its product name is the PSU's own, so a parse taking every match hands
+# the caller "DELL\nDELL" and a two-line model.
+#
+# --board-fields-only reproduces the Dell power supplies that leave the "Product *"
+# fields empty : that shape is what reaches get_Dell_server_model()'s board fallback,
+# which only runs when the server itself filled no product field either
+# Usage : make_readable_psu_fru_device [--board-fields-only]
+function make_readable_psu_fru_device() {
+  printf '\n'
+  printf 'FRU Device Description : PSU1 (ID 1)\n'
+  printf ' Board Mfg             : DELL\n'
+  printf ' Board Product         : PWR SPLY,750W,RDNT,LTON\n'
+  printf ' Board Serial          : CN7792165F0J3B\n'
+
+  if [ "${1:-}" == "--board-fields-only" ]; then
+    return 0
+  fi
+
+  printf ' Product Manufacturer  : DELL\n'
+  printf ' Product Name          : PWR SPLY,750W,RDNT,LTON\n'
+  printf ' Product Part Number   : 0PJMDNA01\n'
 }
 
 # Build a single "ipmitool sdr type temperature" line
