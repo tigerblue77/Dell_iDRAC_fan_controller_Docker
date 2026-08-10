@@ -31,29 +31,37 @@ name: Auto-update pull request branches
 # runs it creates are held in an approval-required state : the pull request
 # shows an "Approve workflows to run" banner that somebody with write access has
 # to click before the required checks even start. No repository setting turns
-# that off, and
-# swapping one click per pull request for another is not worth a workflow, so
-# the update has to come from an identity GitHub already trusts.
+# that off, and swapping one click per pull request for another is not worth a
+# workflow, so the update has to come from an identity GitHub already trusts.
 #
 # Two identities qualify, and both are wired up. Whichever is used needs the
 # same three repository permissions : "Contents : read and write", "Pull
 # requests : read and write" and "Workflows : read and write".
 #
-# That third one is the one easily forgotten, and leaving it out is a trap :
-# rebasing replays the branch's commits, and a branch that adds or edits
+# That third one is the one easily forgotten : an update that would write
 # anything under .github/workflows is refused without it, with "refusing to
 # allow [...] to create or update workflow [...] without workflow scope
-# (updatePullRequestBranch)". This repository merges such pull requests
-# regularly, so a credential missing it would work until precisely the pull
-# request that needed it most.
+# (updatePullRequestBranch)". Granting it on an App that is already installed is
+# not enough on its own, either - an installation keeps the permissions it was
+# created with, so one added afterwards has to be accepted again on the
+# installation page before it takes effect.
+#
+# That same message is also what a fork's pull request produces, for an
+# unrelated reason : the credential has no permissions at all on the fork, so it
+# has no "workflows" permission there either. Read it as "cannot write workflow
+# files where it is being asked to" rather than as a verdict on this
+# repository's own configuration. Which of the two it is can be told apart by
+# where the update was headed : the warning below names the pull request, and
+# whether that one comes from a fork is the answer.
 #
 # A GitHub App is what this repository uses, and what GitHub itself points to
 # for this case. Nothing about it has to be renewed by hand, because the private
 # key does not expire ; the installation token minted from it does, after an
 # hour, which is why the key rather than a token is what is stored. The key goes
-# into the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret and the App's identifier
-# into the PULL_REQUESTS_UPDATE_APP_ID variable, and the first step below mints
-# a fresh token from them at the start of every run.
+# into the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret and the App's client
+# identifier into the PULL_REQUESTS_UPDATE_APP_CLIENT_ID variable, and the first
+# step below mints a fresh token from them at the start of every run. That is
+# the client ID shown on the App's settings page, not the App ID next to it.
 #
 # A fine-grained personal access token in the PULL_REQUESTS_UPDATE_TOKEN secret
 # works too, and is quicker to set up : its resource owner has to be this
@@ -93,10 +101,10 @@ jobs:
       # migration, and it needs no change to this file
       - name: Mint an installation token, if a GitHub App is configured
         id: app-token
-        if: vars.PULL_REQUESTS_UPDATE_APP_ID != ''
+        if: vars.PULL_REQUESTS_UPDATE_APP_CLIENT_ID != ''
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.PULL_REQUESTS_UPDATE_APP_ID }}
+          client-id: ${{ vars.PULL_REQUESTS_UPDATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY }}
 
       - name: Rebase every conflict-free pull request that is behind master
@@ -105,7 +113,7 @@ jobs:
           # otherwise. Whichever it is, it needs the three permissions the
           # header describes
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.PULL_REQUESTS_UPDATE_TOKEN }}
-          UPDATING_AS: ${{ vars.PULL_REQUESTS_UPDATE_APP_ID != '' && 'the GitHub App' || 'the personal access token' }}
+          UPDATING_AS: ${{ vars.PULL_REQUESTS_UPDATE_APP_CLIENT_ID != '' && 'the GitHub App' || 'the personal access token' }}
           REPOSITORY: ${{ github.repository }}
           # Whether a pull request whose rebase conflicts is updated with a
           # merge commit rather than left behind
@@ -162,7 +170,7 @@ jobs:
           }
 
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::No credential is configured, so nothing can be updated. Set either the PULL_REQUESTS_UPDATE_TOKEN secret or the PULL_REQUESTS_UPDATE_APP_ID variable together with the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret. The comment at the top of this workflow says what each one needs and why the default token is not enough."
+            echo "::error::No credential is configured, so nothing can be updated. Set either the PULL_REQUESTS_UPDATE_TOKEN secret or the PULL_REQUESTS_UPDATE_APP_CLIENT_ID variable together with the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret. The comment at the top of this workflow says what each one needs and why the default token is not enough."
             exit 1
           fi
 
