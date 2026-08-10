@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Renders README.md into the page Docker Hub shows on the image's repository,
 # and prints it on stdout.
 #
@@ -200,6 +203,16 @@ function footer_for() {
     done
     printf '\n'
   fi
+  # The licence is stated here rather than left to the "License" section, because
+  # that section is the last one in the README and so the first the cut above
+  # drops : today it never reaches the page at all. A link under "these sections
+  # are on GitHub" is not the same thing as saying what the terms are, and this
+  # page is where a company evaluating the image decides whether it may ship it.
+  # One line, outside the cut, is what makes that answerable without leaving
+  # Docker Hub -- and what makes the commercial option discoverable by the only
+  # people who need it
+  printf 'Licensed under the GNU AGPL v3, with a commercial licence available for uses it does not fit : %s/LICENSE-COMMERCIAL.md\n\n' \
+    "$BLOB_URL"
   printf 'Issues, discussions and the full documentation : %s\n' "$REPOSITORY_URL"
 }
 

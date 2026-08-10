@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Docker Hub is where most users meet this image, and the page it shows them is
 # not stored here : it is uploaded by the "Docker Hub description" workflow,
 # which renders README.md through .github/generate_dockerhub_description.sh.
@@ -137,6 +140,30 @@ function test_the_dockerhub_description_keeps_what_the_reader_came_for() {
     "the Docker Hub page has to show how the image is started"
   assert_contains "$DESCRIPTION" "$DOCKERHUB_DESCRIPTION_REPOSITORY_URL" \
     "the Docker Hub page has to link back to the repository it is rendered from"
+}
+
+function test_the_dockerhub_description_states_the_licence_whatever_the_cut() {
+  # The project is dual-licensed, and the page Docker Hub shows is where a
+  # company evaluating the image decides whether it may ship it. The README's
+  # "License" section cannot answer that here : it is the last section, so it is
+  # the first the cut drops, and it has never once reached the page. The footer
+  # is outside the cut, which is why the terms are stated there instead.
+  #
+  # Asserted on the rendered page rather than on the footer function, because
+  # what matters is that the answer is on the page no matter how much of the
+  # README had to be left out
+  if ! dockerhub_description_can_be_rendered; then
+    skip_test "no .github and README next to the scripts"
+    return 0
+  fi
+
+  local DESCRIPTION
+  DESCRIPTION="$(rendered_dockerhub_description)"
+
+  assert_contains "$DESCRIPTION" "AGPL" \
+    "the Docker Hub page has to name the licence the image is published under"
+  assert_contains "$DESCRIPTION" "$DOCKERHUB_DESCRIPTION_REPOSITORY_URL/blob/HEAD/LICENSE-COMMERCIAL.md" \
+    "the Docker Hub page has to link the commercial licence, the reader who needs it arrives here"
 }
 
 function test_the_dockerhub_description_workflow_renders_the_page_it_publishes() {
