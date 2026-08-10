@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # A release note is the announcement that a version is out, and the only artefact
 # of a release a human writes into by hand. It is also written by a step that
 # only ever runs on a version tag, where no pull request looks : issue #337 was
