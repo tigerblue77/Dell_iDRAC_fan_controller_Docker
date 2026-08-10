@@ -1129,6 +1129,19 @@ function retrieve_temperatures() {
   # Parse inlet temperature data, the sensor being located by its name
   INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Inlet")
 
+  # 11th generation servers (iDRAC6 : R610, R710, R510, T610...) call that very sensor "Ambient Temp".
+  # "Inlet Temp" only appears from the 12th generation on, so on every 11G server -- all of which the
+  # catalogue lists as supported -- the intake column showed the "-" placeholder for a sensor that was
+  # answering perfectly well under a name nobody asked it for.
+  #
+  # Deliberately not paired with a "Planar" fallback for the exhaust, although 11G reports one on the
+  # same entity 7.1 : "Planar Temp" is the system board's own temperature, not the air leaving the
+  # chassis. Putting it in the exhaust column would fill it with a number the heading does not describe,
+  # which is worse than leaving it empty. 11G has no exhaust sensor, and "-" is the honest answer
+  if [ -z "$INLET_TEMPERATURE" ]; then
+    INLET_TEMPERATURE=$(retrieve_temperature_by_sensor_name "$DATA" "Ambient")
+  fi
+
   # Parse exhaust temperature data, the sensor being located by its name like the inlet one.
   # It is read on every cycle rather than once, an empty value meaning "nothing on this cycle" rather
   # than "no such sensor" : the presence flag this used to consult was decided from a single pre-loop

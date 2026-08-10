@@ -67,6 +67,24 @@ function test_a_quad_cpu_server_detects_its_cpus_whatever_the_order_they_come_in
   assert_equals "41;40;39;38" "$CPUS_TEMPERATURES" "each reading stays with its own CPU"
 }
 
+function test_a_three_cpu_server_reports_its_three_cpus() {
+  # Three populated sockets on a four socket board, which is a configuration a quad
+  # socket server really ships in, and the count left as an open question in issue
+  # #91. Every other socket count is walked by a test of its own ; this one was only
+  # ever reached obliquely, through the sparse set a depopulated socket leaves
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 3 --cpu-temperatures "41 40 39" --cpu-sensor-id-base 9)
+
+  detect_then_retrieve_temperatures
+
+  assert_equals "3" "${#DETECTED_CPU_ENTITY_IDS[@]}"
+  assert_equals "3.1 3.2 3.3" "${DETECTED_CPU_ENTITY_IDS[*]}"
+  assert_equals "CPU 1 CPU 2 CPU 3" "${DETECTED_CPU_LABELS[*]}"
+  assert_equals "41;40;39" "$CPUS_TEMPERATURES"
+  assert_equals "3 CPU temperature sensors detected (entities 3.1 3.2 3.3)" \
+    "$(format_detected_CPU_temperature_sensors)"
+}
+
 function test_an_empty_second_socket_is_not_counted_as_a_detected_cpu() {
   # A dual socket server sold with one CPU lists the second sensor as disabled :
   # counting it would add a column the header does not have
@@ -77,6 +95,27 @@ function test_an_empty_second_socket_is_not_counted_as_a_detected_cpu() {
 
   assert_equals "1" "${#DETECTED_CPU_ENTITY_IDS[@]}"
   assert_equals "44" "$CPUS_TEMPERATURES"
+}
+
+function test_the_detection_excludes_an_unreadable_socket_on_its_own() {
+  # The test above reaches the detection through retrieve_sdr_temperature_data(), which pipes ipmitool
+  # through "grep degrees" : the depopulated socket is already gone by the time the detection sees the
+  # rows, so what that test pins is the grep, not the guard the detection applies to the reading column
+  # itself. Taking that guard out leaves the whole suite green while the function alone starts counting
+  # sockets Dell reports as "Disabled" -- one column per empty socket, reading "-" forever, and the fans
+  # handed to Dell for good by the reading that never comes.
+  #
+  # So it is called here with rows the grep has not been over, which is the only way the two defences are
+  # held apart. "No Reading" is in there next to "Disabled" because an iDRAC uses both wordings
+  local -r SDR_DATA="$(make_sdr_line "Temp" "0Eh" "ok" "3.1" "40 degrees C")
+$(make_sdr_line "Temp" "0Fh" "ns" "3.2" "Disabled")
+$(make_sdr_line "Temp" "10h" "ns" "3.3" "No Reading")
+$(make_sdr_line "Temp" "11h" "ok" "3.4" "43 degrees C")"
+
+  detect_CPU_temperature_sensors "$SDR_DATA"
+
+  assert_equals "3.1 3.4" "${DETECTED_CPU_ENTITY_IDS[*]}" "only the sockets carrying a reading are counted"
+  assert_equals "CPU 1 CPU 2" "${DETECTED_CPU_LABELS[*]}" "the columns stay numbered from 1"
 }
 
 function test_a_gap_between_two_readable_sockets_does_not_truncate_the_list() {
@@ -212,6 +251,18 @@ function test_the_header_of_a_quad_cpu_server() {
     Date & time      Inlet  CPU 1  CPU 2  CPU 3  CPU 4  Exhaust                 Active fan speed profile                 Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1" "CPU 2" "CPU 3" "CPU 4")"
+}
+
+function test_the_header_of_a_three_cpu_server() {
+  # The last socket count left without a header of its own, 1, 2 and 4 each having one.
+  # An odd number of CPU columns lands the banner on an odd width, where the frame has
+  # no half dash to give and the extra one goes left -- the convention
+  # center_column_heading() follows too. Both even counts come out symmetrical, so that
+  # rounding only ever shows on this table and on the single CPU one
+  local -r EXPECTED_HEADER="                     ----------- Temperatures ----------
+    Date & time      Inlet  CPU 1  CPU 2  CPU 3  Exhaust                 Active fan speed profile                 Third-party PCIe card Dell default cooling response  Comment"
+
+  assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1" "CPU 2" "CPU 3")"
 }
 
 function test_the_header_grows_with_the_cpu_count() {
@@ -449,6 +500,30 @@ function comment_column_start_in_header() {
 readonly COMMENT_HEADING="Comment"
 readonly COMMENT_MARKER="COMMENT-MARKER"
 
+# 1-based position of the last character of the Nth occurrence of a token in a line, or -1 when the line
+# holds fewer than N of them.
+#
+# awk rather than bash string surgery : the token this locates repeats along the line, and "${LINE%%token*}"
+# only ever finds the first one. Positions are counted in characters, so the caller has to hand over a line
+# the degree sign has already been taken out of -- see display_width() for why it would otherwise count two
+function end_position_of_occurrence() {
+  local -r LINE="$1"
+  local -r TOKEN="$2"
+  local -r OCCURRENCE="$3"
+
+  awk -v line="$LINE" -v token="$TOKEN" -v occurrence="$OCCURRENCE" 'BEGIN {
+    position = 0
+    start = 1
+    for (found = 1; found <= occurrence; found++) {
+      offset = index(substr(line, start), token)
+      if (offset == 0) { print -1; exit }
+      position = start + offset - 1
+      start = position + 1
+    }
+    print position + length(token) - 1
+  }'
+}
+
 function assert_the_table_columns_line_up() {
   local -r IS_MONITORING_ONLY_MODE="$1"
   local -r FAN_CONTROL_PROFILE="$2"
@@ -483,6 +558,44 @@ function test_the_table_columns_line_up_whatever_the_profile_and_the_mode() {
     "Disabled (not applied: monitoring only mode)"
   assert_the_table_columns_line_up true "User static fan control profile (100%) (monitoring only, not applied)" \
     "Enabled (not applied: monitoring only mode)"
+}
+
+function test_every_cpu_heading_sits_over_the_reading_it_labels() {
+  # The test above measures a total : where the "Comment" column starts, on a table hardcoded to two CPUs.
+  # That catches the right-hand columns drifting as a block, but not the CPU columns drifting among
+  # themselves -- a header cell is printed by one printf ("' %*s '") and a row cell by another ("\" %s°C \""),
+  # so the two can disagree while the widths still add up to the same total and the comment column never
+  # moves. A reading sitting under the wrong socket's heading is what issue #91 looked like in the logs, and
+  # a table of one or four CPUs, the two @ctark reported on, was never checked for alignment at all.
+  #
+  # Both cells end on their own trailing space, so the heading and the reading it labels have to end on the
+  # same column. The readings are located by their "°C" rather than by their digits, which the timestamp
+  # would otherwise collide with : the first one is the inlet's, so CPU N carries the (N + 1)th
+  local CPU_COUNT CPU_NUMBER COLUMN_WIDTH HEADER_COLUMNS_LINE ROW ROW_IN_SINGLE_BYTE_CHARACTERS
+  local -a CPU_LABELS
+  local CPU_TEMPERATURES
+
+  for CPU_COUNT in 1 2 3 4; do
+    CPU_LABELS=()
+    CPU_TEMPERATURES=""
+    for ((CPU_NUMBER = 1; CPU_NUMBER <= CPU_COUNT; CPU_NUMBER++)); do
+      CPU_LABELS+=("CPU $CPU_NUMBER")
+      CPU_TEMPERATURES+="${CPU_TEMPERATURES:+;}$((40 + CPU_NUMBER))"
+    done
+
+    COLUMN_WIDTH=$(compute_CPU_column_content_width "${CPU_LABELS[@]}")
+    HEADER_COLUMNS_LINE=$(build_header "$COLUMN_WIDTH" "${CPU_LABELS[@]}" | tail -1)
+    ROW=$(print_temperature_array_line "$COLUMN_WIDTH" "21" "$CPU_TEMPERATURES" "34" \
+      "Dell default dynamic fan control profile" "Enabled" "$COMMENT_MARKER")
+    ROW_IN_SINGLE_BYTE_CHARACTERS="${ROW//°/o}"
+
+    for ((CPU_NUMBER = 1; CPU_NUMBER <= CPU_COUNT; CPU_NUMBER++)); do
+      assert_equals \
+        "$(end_position_of_occurrence "$HEADER_COLUMNS_LINE" "CPU $CPU_NUMBER" 1)" \
+        "$(end_position_of_occurrence "$ROW_IN_SINGLE_BYTE_CHARACTERS" "oC" $((CPU_NUMBER + 1)))" \
+        "$CPU_COUNT CPU table : the \"CPU $CPU_NUMBER\" heading must end on the column CPU $CPU_NUMBER's reading ends on"
+    done
+  done
 }
 
 function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {

@@ -1,0 +1,87 @@
+name: Docker Hub description
+
+# Docker Hub keeps an image's page on its own side, and nothing in this
+# repository ever wrote it : half a million pulls in, the page read "No overview
+# available" and its one-line summary held the GitHub URL and nothing else. The
+# registry that most users reach the image through was the only place the
+# documentation did not exist.
+#
+# This renders README.md into that page every time the README moves, so the two
+# can no longer drift apart.
+#
+# Separate from "Docker image CI" on purpose : the page describes the repository
+# and not a version, and README changes land on master between releases, where
+# a workflow that fires on a version tag - and ignores README.md when it does -
+# never runs. GitHub Container Registry needs none of this : it reads the README
+# off the repository the image is linked to, through the
+# org.opencontainers.image.source label docker/metadata-action already writes.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - README.md
+      # The renderer and this file : a change to either can change the page
+      # without the README having moved at all
+      - .github/generate_dockerhub_description.sh
+      - .github/workflows/dockerhub_description.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two pushes in quick succession would otherwise race to write the same page,
+# and which one wins is decided by whichever request Docker Hub happens to serve
+# last. Only the newest README is worth uploading, so the older run is dropped
+concurrency:
+  group: dockerhub-description
+  cancel-in-progress: true
+
+jobs:
+  describe:
+    name: Update the image's page on Docker Hub
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Same derivation as the two publishing workflows, lowercased : this one
+      # names the repository to a Docker Hub API call rather than to
+      # docker/metadata-action, and Docker Hub has no repository whose name
+      # carries a capital letter
+      - name: Calculate final Docker image name
+        id: docker_image_name
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ github.repository }}"
+          FINAL_NAME="${IMAGE_NAME/_Docker/}"
+          echo "value=${FINAL_NAME,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Render README.md into the description
+        run: |
+          set -euo pipefail
+          .github/generate_dockerhub_description.sh > "$RUNNER_TEMP/dockerhub_description.md"
+          echo "Rendered $(wc -c < "$RUNNER_TEMP/dockerhub_description.md") characters" >> "$GITHUB_STEP_SUMMARY"
+
+      # /!\ DOCKERHUB_TOKEN has to be a personal access token with the
+      # "Read, Write, Delete" scope. The narrower "Read & Write" one is enough to
+      # push an image, which is all the other workflows ask of it, but not to
+      # write the repository's description : this step answers a 401 if the token
+      # only carries that
+      - name: Publish it on Docker Hub
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ steps.docker_image_name.outputs.value }}
+          readme-filepath: ${{ runner.temp }}/dockerhub_description.md
+          # The line under the image's name on Docker Hub, capped at 100
+          # characters. Taken from the repository's own description so that the
+          # two are written once, on GitHub
+          short-description: ${{ github.event.repository.description }}
+          # Deliberately left off : the renderer above already rewrote every
+          # relative link, and it does so outside fenced code blocks only, where
+          # this action's own completion would rewrite the paths inside the
+          # docker run examples too
+          enable-url-completion: false
