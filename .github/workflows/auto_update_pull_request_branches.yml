@@ -35,44 +35,42 @@ name: Auto-update pull request branches
 # swapping one click per pull request for another is not worth a workflow, so
 # the update has to come from an identity GitHub already trusts.
 #
-# That identity is the PULL_REQUESTS_UPDATE_TOKEN secret : a fine-grained
-# personal access token, whose resource owner is this account and whose
-# repository access covers this repository, granting three repository
-# permissions : "Contents : read and write", "Pull requests : read and write"
-# and "Workflows : read and write". Create it in Settings > Developer settings >
-# Personal access tokens > Fine-grained tokens, then store it in Settings >
-# Secrets and variables > Actions > New repository secret.
+# Two identities qualify, and both are wired up. Whichever is used needs the
+# same three repository permissions : "Contents : read and write", "Pull
+# requests : read and write" and "Workflows : read and write".
 #
-# The third one is not optional here, and it is the one easily forgotten :
+# That third one is the one easily forgotten, and leaving it out is a trap :
 # rebasing replays the branch's commits, and a branch that adds or edits
 # anything under .github/workflows is refused without it, with "refusing to
 # allow [...] to create or update workflow [...] without workflow scope
 # (updatePullRequestBranch)". This repository merges such pull requests
-# regularly, so a token missing it would work until precisely the pull request
-# that needed it most.
+# regularly, so a credential missing it would work until precisely the pull
+# request that needed it most.
 #
-# A GitHub App is the other identity that works, with the same three
-# permissions, and it is what GitHub itself points to for this case. Nothing
-# about it has to be renewed by hand, because the private key does not expire.
-# Its installation token does, after an hour, so it is not something to paste
-# into a secret : the private key goes into PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY
-# and the App's identifier into the PULL_REQUESTS_UPDATE_APP_ID variable, and
-# the first step below mints a fresh token from them at the start of every run.
+# A GitHub App is what this repository uses, and what GitHub itself points to
+# for this case. Nothing about it has to be renewed by hand, because the private
+# key does not expire ; the installation token minted from it does, after an
+# hour, which is why the key rather than a token is what is stored. The key goes
+# into the PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY secret and the App's identifier
+# into the PULL_REQUESTS_UPDATE_APP_ID variable, and the first step below mints
+# a fresh token from them at the start of every run.
 #
-# Both routes are wired up, and setting the App variable is the whole migration :
-# the minting step only runs once that variable exists, and the token falls back
-# to the personal access token whenever it does not. So the App can be adopted
-# later, or never, without this file changing over the token
+# A fine-grained personal access token in the PULL_REQUESTS_UPDATE_TOKEN secret
+# works too, and is quicker to set up : its resource owner has to be this
+# account and its repository access has to cover this repository. It is what the
+# credential falls back to when no App is configured, so either can be adopted,
+# or swapped for the other, without this file changing. It expires, though, and
+# has to be renewed by hand before it does
 
 on:
   push:
     branches: [master]
-  # Lets the whole set be caught up by hand, after the token expires and is
-  # renewed for instance
+  # Lets the whole set be caught up by hand : after a run failed on a credential
+  # that had lapsed, or simply to see the thing work without waiting for a merge
   workflow_dispatch:
 
-# Everything is done with the personal access token, so the token of the run
-# itself needs nothing at all
+# Everything is done with the credential above, so the token of the run itself
+# needs nothing at all
 permissions: {}
 
 # Two merges landing one after the other would otherwise walk the same list of
