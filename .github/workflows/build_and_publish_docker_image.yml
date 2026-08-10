@@ -54,11 +54,6 @@ jobs:
           # other tag, which the default single-commit fetch does not bring along
           fetch-depth: 0
 
-      - name: Generate release note
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-
       - name: Calculate final Docker image name
         id: docker_image_name
         run: |
@@ -100,18 +95,33 @@ jobs:
       # an image published here has to carry it too : without it that workflow
       # would rebuild once for nothing after every release.
       # Sits between the logins and "Docker meta" on purpose : it consumes the
-      # former because the base lives on Docker Hub, where anonymous requests are
-      # rate limited per IP on shared runner addresses, and the latter consumes
-      # its outputs. A step that can fail stands between a published release and
-      # a pushed image, so it had better not be one that fails for lack of
-      # credentials
+      # former because the base lives on Docker Hub, where requests are rate
+      # limited and anonymous ones are limited per IP on shared runner
+      # addresses, and the latter consumes its outputs
       - name: Resolve the digest of the base image
         id: base
         run: |
           set -euo pipefail
           BASE_IMAGE="$(awk 'toupper($1) == "FROM" { print $2; exit }' Dockerfile)"
           echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
-          echo "digest=$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')" >> "$GITHUB_OUTPUT"
+          # Docker Hub answers 429 once the pull quota for the current window is
+          # spent, and every request this workflow makes there counts against
+          # it : this one, and the two the build below makes to load the base
+          # metadata for amd64 and arm64. Retrying rides out the short spikes,
+          # a quota that is genuinely exhausted outlives the waits and fails
+          # the run, which is the honest outcome
+          for DELAY in 60 300 0; do
+            if DIGEST="$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"; then
+              echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$DELAY" -gt 0 ]; then
+              echo "::warning::Could not resolve $BASE_IMAGE, retrying in ${DELAY}s"
+              sleep "$DELAY"
+            fi
+          done
+          echo "::error::Could not resolve the digest of $BASE_IMAGE"
+          exit 1
 
       - name: Docker meta
         id: meta
@@ -147,7 +157,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      # docker/build-push-action carries no retry of its own, and a 429 kills
+      # the build in its first second, on the metadata of the base image,
+      # before a single layer moves. One more attempt, far enough apart to
+      # outlast a spike
       - name: Build and publish Docker image
+        id: build
+        continue-on-error: true
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -156,3 +172,35 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Wait for the registry before retrying
+        if: steps.build.outcome == 'failure'
+        run: sleep 300
+
+      # Same inputs as the attempt above, deliberately : this is that step
+      # again, not a different build. Should the first attempt have died with
+      # some of its layers already pushed, pushing the same tags a second time
+      # is what a re-fired release does today and the registries take it fine
+      - name: Retry building and publishing Docker image
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # Last, where it used to sit right after the checkout : a release note is
+      # the announcement that a version is out, and announcing it before the
+      # image was pushed is what left seventeen versions, v1.50 and most of
+      # v1.52 to v1.69, behind a GitHub release with nothing to pull from
+      # either registry. Published only once the push went through, a release
+      # that fails simply does not exist, and re-firing the workflow from the
+      # Actions tab publishes it for real : re-firing a tag that already has a
+      # release updates that release in place, so recovering them costs nothing
+      - name: Generate release note
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
