@@ -50,8 +50,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Whether this tag gets "latest" is decided by comparing it against every
-          # other tag, which the default single-commit fetch does not bring along
+          # The tags are the list of versions that could outrank this one, which
+          # the "latest" check below walks. The default single-commit fetch does
+          # not bring them along
           fetch-depth: 0
 
       - name: Calculate final Docker image name
@@ -60,22 +61,6 @@ jobs:
           IMAGE_NAME="${{ github.repository }}"
           FINAL_NAME="${IMAGE_NAME/_Docker/}"
           echo "value=$FINAL_NAME" >> $GITHUB_OUTPUT
-
-      # Builds can run concurrently and old tags can be rebuilt on demand, so the
-      # order in which images reach the registry says nothing about their version.
-      # Only the highest version tag may claim "latest"
-      - name: Check whether this tag is the highest version
-        id: highest_version
-        run: |
-          # sort -V, not sort : lexicographically "v1.9" sorts above "v1.19"
-          HIGHEST_TAG="$(git tag --list 'v[0-9]*.[0-9]*' | sort -V | tail -1)"
-          if [ "$HIGHEST_TAG" = "$GITHUB_REF_NAME" ]; then
-            echo "$GITHUB_REF_NAME is the highest version tag, it will be published as 'latest'"
-            echo "value=true" >> $GITHUB_OUTPUT
-          else
-            echo "$GITHUB_REF_NAME is behind $HIGHEST_TAG, 'latest' will be left untouched"
-            echo "value=false" >> $GITHUB_OUTPUT
-          fi
 
       - name: Login to Docker Hub
         uses: docker/login-action@v4
@@ -123,6 +108,121 @@ jobs:
           echo "::error::Could not resolve the digest of $BASE_IMAGE"
           exit 1
 
+      # Whether this tag may claim "latest" used to be decided by comparing it
+      # against the highest tag that EXISTS in git. A tag existing means someone
+      # typed "git tag" ; it says nothing about an image having come out of it.
+      # Thirty tags, v1.40 to v1.69, were pushed within twenty-five minutes ; the
+      # builds of v1.52 to v1.69 all died on a 429 from Docker Hub while loading
+      # the metadata of the base image ; v1.47 to v1.51 built and pushed
+      # perfectly and every one of them declined "latest", because v1.69 existed
+      # above them. "latest" sat on the v1.46 image for two days with five newer
+      # versions published and none of them structurally able to rescue it, and
+      # only came back when v1.69 was re-fired days later.
+      #
+      # So the question asked here is the one that matters to whoever pulls
+      # "latest" : is a higher version actually PUBLISHED ? A tag whose build
+      # pushed nothing leaves no trace in a registry and can no longer hold
+      # "latest" hostage. And because the answer is re-derived from the registry
+      # by every later release, a wrong answer repairs itself instead of being
+      # reproduced forever, the way a comparison against git necessarily was -
+      # git never changes its mind, which is why all five good builds gave the
+      # same wrong answer.
+      #
+      # Sits here rather than up by the checkout because it needs the two logins
+      # above, and above "Docker meta" because that step consumes its output
+      - name: Check whether a higher version is already published
+        id: highest_version
+        run: |
+          set -euo pipefail
+
+          # Read from GHCR and not from Docker Hub, for the same reason the base
+          # image refresh workflow reads it there. Docker Hub answers 429 once
+          # the pull quota of the window is spent - the very failure that
+          # stranded "latest" - and every request made there competes with the
+          # base image metadata that this build and every concurrent one need.
+          # GHCR reads are authenticated with GITHUB_TOKEN, carry no pull quota,
+          # and the job is already logged in.
+          # The price, stated plainly : a version that reached Docker Hub but
+          # not GHCR is invisible here. Only a half-failed push can produce one,
+          # its own run is red, and the next release settles it
+          IMAGE="ghcr.io/${{ steps.docker_image_name.outputs.value }}"
+          # Registry APIs reject the repository's own capitalisation.
+          # metadata-action lowercases on the publishing side ; this step talks
+          # to a registry by hand, so it does it itself
+          IMAGE="${IMAGE,,}"
+          ERRORS="$RUNNER_TEMP/imagetools-error.txt"
+
+          # Three answers and not two, deliberately : "the registry did not
+          # answer" is not "there is nothing there". 0 published, 1 nothing under
+          # that tag, 2 no usable answer.
+          # Every path returns explicitly, because the caller invokes this on the
+          # left of a "||", which switches errexit off inside the body
+          version_is_published() {
+            if docker buildx imagetools inspect "$IMAGE:$1" --format '{{json .Manifest}}' >/dev/null 2>"$ERRORS"; then
+              return 0
+            fi
+            # The wordings a registry uses for a tag that was never pushed, the
+            # same set the base image refresh workflow already keys on. Note what
+            # is deliberately NOT in that list : "denied" and "unauthorized". A
+            # token that cannot read the package must never look like an empty
+            # registry, that is exactly how "latest" would walk backwards on a
+            # permissions mistake
+            if grep -qiE 'not found|manifest unknown|name unknown' "$ERRORS"; then
+              return 1
+            fi
+            cat "$ERRORS"
+            return 2
+          }
+
+          # "$1 is a strictly higher version than $2". sort -V, not sort :
+          # lexicographically "v1.9" sorts above "v1.19"
+          higher_than() {
+            if [ "$1" = "$2" ]; then
+              return 1
+            fi
+            [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+          }
+
+          # Highest first, so the first published candidate found is the highest
+          # published one and the walk stops there. A release that is the newest
+          # tag - every normal release, and the very first one ever - has no
+          # candidate above it and reads nothing at all : the registry is only
+          # ever consulted in the situation the old check got wrong.
+          # "if ... then break" and not "[ ... ] && break" : this loop is the
+          # whole decision, and it is not the place to lean on how errexit treats
+          # an and-list
+          BLOCKER=""
+          UNREADABLE=""
+          for CANDIDATE in $(git tag --list 'v[0-9]*.[0-9]*' --sort=-v:refname); do
+            if ! higher_than "$CANDIDATE" "$GITHUB_REF_NAME"; then
+              break
+            fi
+            STATUS=0
+            version_is_published "$CANDIDATE" || STATUS=$?
+            case "$STATUS" in
+              0) BLOCKER="$CANDIDATE"; break ;;
+              1) ;;  # tagged in git, never pushed : it outranks nothing
+              *) UNREADABLE="$CANDIDATE"; break ;;
+            esac
+          done
+
+          if [ -n "$UNREADABLE" ]; then
+            # Declining is what this workflow already did whenever it was unsure,
+            # so an unreadable registry costs nothing that was not already being
+            # lost - and never the release itself, the version tag and the
+            # release note still go out. Unlike before, the decision is not
+            # final : the next release asks the registry again, and re-firing
+            # this tag from the Actions tab retries it immediately
+            echo "::warning::Could not tell whether $UNREADABLE is published, 'latest' will be left untouched"
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "$BLOCKER" ]; then
+            echo "$BLOCKER is already published and outranks $GITHUB_REF_NAME, 'latest' will be left untouched"
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No published version outranks $GITHUB_REF_NAME, it will be published as 'latest'"
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v6
@@ -141,15 +241,25 @@ jobs:
             type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=latest,enable=${{ steps.highest_version.outputs.value == 'true' }}
           # The explicit "latest" entry above is the only thing that may publish it,
-          # gated on the highest version check. latest=auto is already inert for
+          # gated on the check above. latest=auto is already inert for
           # type=raw entries - procRaw() hardcodes latest=false under auto - so this
           # pins that behaviour rather than changing it, and keeps it pinned should a
           # type=semver or type=ref entry ever be added here
           flavor: |
             latest=false
+          # base.digest is what "Base image refresh" compares against to tell
+          # whether the base moved. image.version is stamped explicitly rather
+          # than left to whatever metadata-action derives when two type=raw
+          # entries are present : it is what that same workflow reads back off
+          # "latest" to tell which version "latest" is currently on, and a
+          # "latest" it cannot place would make it rebuild every night for
+          # nothing. It is deliberately not consulted by the check above, which
+          # asks whether the VERSION TAG resolves - so a mislabelled "latest"
+          # can cost one redundant nightly rebuild and can never freeze a release
           labels: |
             org.opencontainers.image.base.name=${{ steps.base.outputs.image }}
             org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
+            org.opencontainers.image.version=${{ github.ref_name }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
