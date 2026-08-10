@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Points "latest" at the highest version actually published, in each registry it
 # is given, and leaves alone the ones where it already does.
 #

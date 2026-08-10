@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # "latest" is the tag almost every user actually pulls, and the only one whose
 # value is a decision rather than a name. That decision is taken twice : once
 # before the build, by the check that gates it, and once after the push, by
