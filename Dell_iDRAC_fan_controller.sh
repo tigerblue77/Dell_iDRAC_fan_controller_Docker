@@ -115,9 +115,16 @@ elif [[ "$CPU_TEMPERATURE_THRESHOLD" =~ ^[0-9]{1,3}$ ]]; then
   CPU_TEMPERATURE_THRESHOLD=$((10#$CPU_TEMPERATURE_THRESHOLD))
   # Hold a user-supplied value to the same plausibility window as an automatically detected one. A typo
   # such as "500" (or a Fahrenheit value) is otherwise accepted silently and no CPU ever reaches it, so
-  # the Dell default profile is never restored and the fans stay low for the life of the container
+  # the Dell default profile is never restored and the fans stay low for the life of the container.
+  #
+  # A high value is not always a typo though : it is also how users expressed "never hand the fans back
+  # to Dell's profile", there being no parameter that says so, and refusing it without naming what to
+  # use instead is what issue #326 reported. The maximum is that expression -- no Dell server CPU
+  # reaches 125°C, its own thermal protection having shut the machine down first -- so the refusal
+  # points at it rather than merely stating a window. The README documents the same range, and
+  # test_the_readme_documents_the_plausible_temperature_threshold_window() keeps the two from drifting
   if [ "$CPU_TEMPERATURE_THRESHOLD" -lt "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -gt "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
-    print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "${CPU_TEMPERATURE_THRESHOLD}°C" "a temperature between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C, no CPU throttling below the first nor tolerating more than the second"
+    print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "${CPU_TEMPERATURE_THRESHOLD}°C" "a temperature between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C, no CPU throttling below the first nor tolerating more than the second. If yours was a deliberately high value meant to keep your own fan control profile applied whatever the CPU temperature, set ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD} : no Dell server CPU reaches it, thermal protection shutting the machine down first, so it is that intent expressed inside the window. It does not disable the safety fallback outright -- a CPU temperature that cannot be read at all still hands the fans back to Dell's profile, whatever this threshold is"
   fi
 else
   # Reject an unusable threshold right away : every temperature comparison would fail against it, which

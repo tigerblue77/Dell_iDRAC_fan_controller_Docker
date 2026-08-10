@@ -10,7 +10,12 @@ readonly FALLBACK_CPU_TEMPERATURE_THRESHOLD=50
 
 # Window (in °C) a CPU temperature threshold must fall into to be plausible. No CPU throttles below 20°C,
 # and none tolerates more than 125°C, so a value outside it is a misreading or a typo rather than a
-# setting : left in place it would either pin the fans low forever or never let them slow down at all
+# setting : left in place it would either pin the fans low forever or never let them slow down at all.
+#
+# The maximum carries a second meaning the README states and the refusal points at : it is what a user
+# who wants their own fan control profile kept whatever the CPU temperature is told to set, no Dell
+# server CPU reaching 125°C before its own thermal protection shuts the machine down. Lowering it would
+# take that answer away, not merely tighten a sanity check (issue #326)
 readonly MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=20
 readonly MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=125
 

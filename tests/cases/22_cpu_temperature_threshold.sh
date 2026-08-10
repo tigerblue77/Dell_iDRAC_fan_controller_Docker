@@ -224,3 +224,37 @@ function test_an_implausible_threshold_stops_the_controller() {
     assert_startup_is_refused "[$VALUE] should stop the controller"
   done
 }
+
+function test_both_ends_of_the_plausible_window_are_themselves_accepted() {
+  # A window stated as "between 20°C and 125°C" that refuses 20 or 125 would be a
+  # window the documentation describes wrongly, and the maximum is not just a bound
+  # here : it is the value the refusal tells the user to set. Refusing the very
+  # value the error recommends is the one way this could fail silently
+  export CPU_TEMPERATURE_THRESHOLD="$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
+  assert_startup_reports "CPU temperature threshold: ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C" \
+    "the bottom of the plausible window should be accepted"
+
+  export CPU_TEMPERATURE_THRESHOLD="$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD"
+  assert_startup_reports "CPU temperature threshold: ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C" \
+    "the top of the plausible window should be accepted, the refusal pointing users at it"
+}
+
+function test_the_refusal_names_the_window_and_what_to_set_instead() {
+  # 160 is the value issue #326 was reported with. It was not a typo : setting a
+  # very high threshold was how users expressed "never hand the fans back to Dell's
+  # profile", there being no parameter that says so. Refusing it while naming a
+  # range no document mentioned, and nothing to use instead, is what left that user
+  # with a container restarting into the same error and no way to act on it
+  export CPU_TEMPERATURE_THRESHOLD=160
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "42 44"
+
+  local -r OUTPUT=$(run_controller 'Error')
+
+  assert_contains "$OUTPUT" \
+    "between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C" \
+    "the refusal should state the window rather than leave the user to find it"
+  assert_contains "$OUTPUT" "set ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}" \
+    "the refusal should name the maximum as what expresses that intent inside the window"
+  assert_contains "$OUTPUT" "cannot be read" \
+    "and should not let the user believe the maximum disables the safety fallback outright"
+}
