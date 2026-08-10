@@ -87,7 +87,30 @@ jobs:
         id: base
         run: |
           set -euo pipefail
-          BASE_IMAGE="$(awk 'toupper($1) == "FROM" { print $2; exit }' Dockerfile)"
+          # The FROM line is "FROM ${BASE_IMAGE}" and the reference lives on the
+          # ARG above it, so the name has to be followed there. A Dockerfile that
+          # still names its base directly on the FROM line - every tag released
+          # before that ARG existed, which is what "Base image refresh" reads -
+          # is parsed exactly as before
+          BASE_IMAGE="$(awk '
+            toupper($1) == "ARG" {
+              eq = index($2, "=")
+              if (eq > 1) default_of[substr($2, 1, eq - 1)] = substr($2, eq + 1)
+            }
+            toupper($1) == "FROM" {
+              ref = $2
+              if (ref ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) {
+                name = ref
+                gsub(/^\$\{?|\}$/, "", name)
+                ref = default_of[name]
+              }
+              print ref
+              exit
+            }' Dockerfile)"
+          if [ -z "$BASE_IMAGE" ]; then
+            echo "::error::Could not work out the base image from the Dockerfile"
+            exit 1
+          fi
           echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
           # Docker Hub answers 429 once the pull quota for the current window is
           # spent, and every request this workflow makes there counts against
@@ -95,9 +118,24 @@ jobs:
           # metadata for amd64 and arm64. Retrying rides out the short spikes,
           # a quota that is genuinely exhausted outlives the waits and fails
           # the run, which is the honest outcome
+          # Drop an existing digest, then drop a tag, then pin to the digest just
+          # resolved. A colon only introduces a tag when it sits in the last path
+          # segment : in "registry:5000/image" it is a host and a port
+          pin_to_digest() {
+            local REF="${BASE_IMAGE%%@*}" REPO
+            case "${REF##*/}" in
+              *:*) REPO="${REF%:*}" ;;
+              *)   REPO="$REF" ;;
+            esac
+            printf '%s@%s\n' "$REPO" "$1"
+          }
+
           for DELAY in 60 300 0; do
             if DIGEST="$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"; then
               echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+              # What the build below is actually given, so the label above and
+              # the bytes underneath the image describe the same base
+              echo "pinned=$(pin_to_digest "$DIGEST")" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             if [ "$DELAY" -gt 0 ]; then
@@ -295,6 +333,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           file: ./Dockerfile
           push: true
+          # Built from the digest resolved above rather than from "latest" a
+          # second time, so org.opencontainers.image.base.digest describes the
+          # base these bytes were actually built on
+          build-args: |
+            BASE_IMAGE=${{ steps.base.outputs.pinned }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
@@ -314,6 +357,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           file: ./Dockerfile
           push: true
+          # The same digest the first attempt was given, deliberately : a retry
+          # that re-resolved "latest" could build on a different base from the
+          # one the label records, which is the defect this pinning removes
+          build-args: |
+            BASE_IMAGE=${{ steps.base.outputs.pinned }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 

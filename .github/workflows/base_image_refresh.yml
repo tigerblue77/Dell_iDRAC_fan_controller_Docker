@@ -53,6 +53,7 @@ jobs:
       changed: ${{ steps.compare.outputs.changed }}
       base-image: ${{ steps.base.outputs.image }}
       base-digest: ${{ steps.base.outputs.digest }}
+      base-pinned: ${{ steps.base.outputs.pinned }}
       release-tag: ${{ steps.release.outputs.tag }}
       release-sha: ${{ steps.release.outputs.sha }}
       image-name: ${{ steps.image-name.outputs.value }}
@@ -131,20 +132,55 @@ jobs:
           # being refreshed is built from that tag, so its base is the one that
           # matters. A base already pinned by digest simply never moves, and
           # this workflow then never has anything to do
-          BASE_IMAGE="$(git show "${{ steps.release.outputs.tag }}:Dockerfile" \
-            | awk 'toupper($1) == "FROM" { print $2; exit }')"
+          # Two Dockerfile shapes have to parse here, and both are live : the
+          # tags released from now on name their base on an ARG above the FROM
+          # line, every tag released before that ARG existed names it on the
+          # FROM line itself. This job reads whichever the last published
+          # release happens to carry
+          BASE_IMAGE="$(git show "${{ steps.release.outputs.tag }}:Dockerfile" | awk '
+            toupper($1) == "ARG" {
+              eq = index($2, "=")
+              if (eq > 1) default_of[substr($2, 1, eq - 1)] = substr($2, eq + 1)
+            }
+            toupper($1) == "FROM" {
+              ref = $2
+              if (ref ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) {
+                name = ref
+                gsub(/^\$\{?|\}$/, "", name)
+                ref = default_of[name]
+              }
+              print ref
+              exit
+            }')"
           if [ -z "$BASE_IMAGE" ]; then
-            echo "::error::No FROM instruction found in the Dockerfile of ${{ steps.release.outputs.tag }}"
+            echo "::error::Could not work out the base image from the Dockerfile of ${{ steps.release.outputs.tag }}"
             exit 1
           fi
           # Same ladder as "Docker image CI" uses on this exact call : the base
           # lives on Docker Hub, which answers 429 once the pull quota of the
           # window is spent. Without it the nightly repair is down precisely
           # during the rate limit storms it exists to repair
+          # Drop an existing digest, then drop a tag, then pin to the digest just
+          # resolved. A colon only introduces a tag when it sits in the last path
+          # segment : in "registry:5000/image" it is a host and a port
+          pin_to_digest() {
+            local REF="${BASE_IMAGE%%@*}" REPO
+            case "${REF##*/}" in
+              *:*) REPO="${REF%:*}" ;;
+              *)   REPO="$REF" ;;
+            esac
+            printf '%s@%s\n' "$REPO" "$1"
+          }
+
           for DELAY in 60 300 0; do
             if DIGEST="$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{json .Manifest}}' | jq -r '.digest')"; then
               echo "image=$BASE_IMAGE" >> "$GITHUB_OUTPUT"
               echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+              # Both builds below are given this, so the base the suite runs on,
+              # the base that gets pushed and the digest recorded as a label are
+              # the same one - the whole point of a run that exists because the
+              # base moved
+              echo "pinned=$(pin_to_digest "$DIGEST")" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             if [ "$DELAY" -gt 0 ]; then
@@ -292,6 +328,11 @@ jobs:
           # Resolve the base from the registry rather than reuse whatever the
           # runner already had : that resolution is the whole point of the run
           pull: true
+          # The exact digest the check job compared against, not "latest"
+          # re-resolved here. A release tag predating this ARG ignores it and
+          # resolves its own FROM line, exactly as this job did before
+          build-args: |
+            BASE_IMAGE=${{ needs.check.outputs.base-pinned }}
           tags: dell_idrac_fan_controller:test
 
       - name: Run the test suite inside the image
@@ -369,8 +410,12 @@ jobs:
           push: true
           # Deliberately no "pull" here, unlike the test build above : the base
           # was resolved there, and re-resolving it would miss the builder cache
-          # and rebuild amd64 into something the suite never ran on. Should the
-          # base move between the two, the label records the digest the check
-          # job saw, one behind, and the next run picks the difference up
+          # and rebuild amd64 into something the suite never ran on
+          # The same pinned digest the test build was given. The base moving
+          # between the two builds used to leave the label one behind the bytes ;
+          # pinned, both builds are on the digest the check job saw and the label
+          # records, and a base that moves mid-run is simply picked up tomorrow
+          build-args: |
+            BASE_IMAGE=${{ needs.check.outputs.base-pinned }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

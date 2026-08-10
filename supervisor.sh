@@ -68,7 +68,10 @@ function apply_Dell_default_fan_control_profile_on_behalf_of_the_monitoring_proc
 # case -- and no further signal it can catch will change that, so it is killed outright. Docker's own
 # grace period is ten seconds by default, so this deadline has to be comfortably inside it or the
 # container is SIGKILLed as a whole before this ever gets to act
-# shellcheck disable=SC2317  # Only invoked indirectly, via the trap below; shellcheck's reachability analysis can't see that
+# shellcheck disable=SC2317,SC2329  # Only invoked indirectly, via the trap below; shellcheck's reachability analysis can't see that.
+# Both codes are needed : shellcheck 0.11.0 split the "defined but only reached through a trap" case out of
+# SC2317, which still covers the commands in the body, into SC2329 on the definition itself. Neither version
+# objects to the code it does not know, so this one line is green on both sides of the runner image's bump
 function stop_the_monitored_process() {
   SIGNAL_WAS_FORWARDED=true
 
