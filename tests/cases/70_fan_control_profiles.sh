@@ -2,8 +2,10 @@
 
 # The commands actually sent to the server, and what happens when the server
 # refuses them - which is the normal situation on an iDRAC 9 running firmware
-# 3.30.30.30 or newer (Gen 15, 16) and on the iDRAC 10 of a Gen 17 server, where
-# Dell removed the IPMI raw fan control commands altogether.
+# 3.34.34.34 or newer (Gen 15, 16) and on the iDRAC 10 of a Gen 17 server, where
+# Dell removed the IPMI raw fan control commands altogether. 3.30.30.30 is the
+# newest firmware they are confirmed to still work on, and what the two releases
+# between the two, 3.31.31.31 and 3.32.32.32, answer has never been reported.
 #
 # Applying a fan control profile is the one thing the controller exists for, so
 # a silent failure here is the worst possible outcome : the user believes their
@@ -14,7 +16,7 @@ readonly FAN_SPEED_COMMAND="raw 0x30 0x30 0x02 0xff"
 readonly DELL_DEFAULT_FAN_CONTROL_COMMAND="raw 0x30 0x30 0x01 0x01"
 readonly THIRD_PARTY_PCIE_CARD_COMMAND="raw 0x30 0xce 0x00 0x16 0x05"
 
-# What an iDRAC 9 running firmware >= 3.30.30.30 answers to a fan control command
+# What an iDRAC 9 running firmware >= 3.34.34.34 answers to a fan control command
 readonly REJECTED_BY_FIRMWARE_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xd5): Command not supported in present state"
 
 # What a BMC answers when the command exists but the account may not run it. Reported on an R550 in
@@ -76,7 +78,7 @@ function test_harmless_firmware_noise_is_not_reported_when_the_command_succeeds(
 }
 
 function test_a_rejected_manual_fan_control_command_is_reported() {
-  # A Gen 15/16/17 server, or a Gen 14 whose firmware was updated past 3.30.30.30
+  # A Gen 15/16/17 server, or a Gen 14 whose firmware was updated to 3.34.34.34 or newer
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x01 0x00"
   export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
 

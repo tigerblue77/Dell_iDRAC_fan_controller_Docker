@@ -67,7 +67,7 @@
 #                                  MOCK_IPMITOOL_RAW_FAIL_STDERR /
 #                                  MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE. This is how
 #                                  a specific command is made to fail (an iDRAC 9
-#                                  firmware >= 3.30.30.30 rejecting 0x30 0x30, or
+#                                  firmware >= 3.34.34.34 rejecting 0x30 0x30, or
 #                                  a Gen 14+ server rejecting 0x30 0xce) while
 #                                  the others keep succeeding
 
