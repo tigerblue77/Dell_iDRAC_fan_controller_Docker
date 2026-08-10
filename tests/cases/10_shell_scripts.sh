@@ -462,6 +462,38 @@ function test_the_readme_documents_the_check_interval_bounds() {
     ".env.example should carry the same, being the other file users copy from"
 }
 
+function test_the_documented_unreachable_duration_spelling_is_one_the_validator_takes() {
+  # This parameter's placeholders said "how long" and stopped there -- the only one
+  # of the four naming no unit at all -- so nothing told a user filling the file in
+  # that 5 is five seconds. They now name it, and show a suffixed spelling, which
+  # is worth holding to the grammar that really accepts it : a documented example
+  # the validator would refuse is worse than no example (#332)
+  if [ ! -f "$REPO_ROOT/README.md" ] || [ ! -f "$REPO_ROOT/.env.example" ]; then
+    # The suite is running inside the built image, which carries neither the
+    # README (excluded by .dockerignore) nor the example file shipped beside it
+    skip_test "no README and .env.example next to the scripts"
+    return 0
+  fi
+
+  local -r DOCUMENTED_SPELLING="5m"
+  local -r PLACEHOLDER="in seconds or suffixed like $DOCUMENTED_SPELLING"
+
+  assert_contains "$(cat "$REPO_ROOT/README.md")" "$PLACEHOLDER" \
+    "the README's MAXIMUM_IPMI_UNREACHABLE_DURATION placeholders should name the unit"
+  assert_contains "$(cat "$REPO_ROOT/.env.example")" "$PLACEHOLDER" \
+    ".env.example should name it too, being the other file users copy from"
+
+  # The validator answers by stopping the controller, so the call has to happen in
+  # the subshell a command substitution creates
+  local OUTPUT
+  OUTPUT=$(validate_IPMI_unreachable_duration_parameter "MAXIMUM_IPMI_UNREACHABLE_DURATION" "$DOCUMENTED_SPELLING" 2>&1)
+  local -r EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" \
+    "[$DOCUMENTED_SPELLING] is the spelling the documentation shows, so the validator has to take it"
+  assert_empty "$OUTPUT" "and take it without a word"
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a

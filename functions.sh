@@ -233,6 +233,80 @@ function exit_if_iDRAC_unreachable_for_too_long() {
   print_error_and_exit "The iDRAC could not be reached $CONSECUTIVE_IPMI_FAILURES times in a row, i.e. for about $UNREACHABLE_FOR_SECONDS seconds. Exiting so that a restart policy can retry with a fresh IPMI session. An unreachable iDRAC accepts no command, so this cannot and does not try to move the fans : they keep the speed they were last set to until something reaches the iDRAC again"
 }
 
+# Describe the resolved escalation, for the startup log
+# Usage : describe_IPMI_unreachable_escalation "$COUNT" "$DURATION" $IPMI_FAILURES_BEFORE_EXIT
+#
+# Every other configured parameter states what it resolved to, and this one is the only whose
+# resolution performs a conversion the user did not write : a duration becomes a number of checks,
+# rounded up against CHECK_INTERVAL. Leaving that unsaid is what let a value collapse to a single
+# check without anybody being able to see it from the log (issue #332)
+function describe_IPMI_unreachable_escalation() {
+  local -r COUNT="$1"
+  local -r DURATION="$2"
+  local -r FAILURES_BEFORE_EXIT="$3"
+
+  if [ -z "$FAILURES_BEFORE_EXIT" ]; then
+    echo "Disabled (the iDRAC is retried until it answers)"
+    return 0
+  fi
+
+  # The count is the user's own number of checks, so there is no conversion to report -- only which
+  # of the two parameters is the one in force, the count taking precedence when both are set
+  if [ -n "$COUNT" ]; then
+    echo "After $(pluralize_checks "$FAILURES_BEFORE_EXIT") (set by MAXIMUM_CONSECUTIVE_IPMI_FAILURES)"
+    return 0
+  fi
+
+  echo "After $(pluralize_checks "$FAILURES_BEFORE_EXIT") ($DURATION, rounded up to whole check intervals)"
+}
+
+# "1 check" / "12 checks", so the line reads as a sentence in the case that matters most
+# Usage : pluralize_checks $COUNT
+function pluralize_checks() {
+  local -r COUNT="$1"
+
+  if [ "$COUNT" -eq 1 ]; then
+    echo "1 check"
+    return 0
+  fi
+
+  echo "$COUNT checks"
+}
+
+# Warn when the escalation would exit on the very first unreachable reading
+# Usage : warn_if_the_escalation_exits_on_the_first_failure "$COUNT" "$DURATION" $IPMI_FAILURES_BEFORE_EXIT
+#
+# A single check is exiting on the first unreachable reading -- word for word the behaviour
+# validate_IPMI_unreachable_duration_parameter refuses a zero for. It is reached two ways, and both
+# are warned about : the consequence is the same for the server whichever parameter produced it, and
+# a warning that fires on one and not the other would read as the other being safe.
+#
+# They are worded apart because they are not the same mistake. A duration at or below CHECK_INTERVAL
+# was rounded there without the user seeing it -- the rounding itself is right, nothing being
+# concluded from less than one observed failure -- while a count of one was typed. Neither is refused,
+# both being legitimate on a rock-solid LAN ; this only makes sure nobody arrives there unaware, the
+# way validate_check_interval_parameter warns above its own threshold rather than accepting in silence
+function warn_if_the_escalation_exits_on_the_first_failure() {
+  local -r COUNT="$1"
+  local -r DURATION="$2"
+  local -r FAILURES_BEFORE_EXIT="$3"
+
+  [ "$FAILURES_BEFORE_EXIT" == "1" ] || return 0
+
+  local WHAT_WAS_CONFIGURED
+  if [ -n "$COUNT" ]; then
+    WHAT_WAS_CONFIGURED="MAXIMUM_CONSECUTIVE_IPMI_FAILURES is \"$COUNT\""
+  elif [ -n "$DURATION" ]; then
+    WHAT_WAS_CONFIGURED="MAXIMUM_IPMI_UNREACHABLE_DURATION is \"$DURATION\", at or below CHECK_INTERVAL, so it resolves to a single check"
+  else
+    # Unreachable through resolve_IPMI_failures_before_exit, which leaves the threshold empty when
+    # neither parameter is set. Guarded all the same rather than naming a parameter nobody configured
+    return 0
+  fi
+
+  print_warning "$WHAT_WAS_CONFIGURED : the container will exit on the very first unreachable reading, i.e. on any transient glitch, which is what a zero is refused for. Raise it so that more than one failure has to be observed before anything is concluded"
+}
+
 # Stop the container unless the given parameter is a usable unreachable-iDRAC duration
 # Usage : validate_IPMI_unreachable_duration_parameter "$PARAMETER_NAME" "$VALUE"
 #
