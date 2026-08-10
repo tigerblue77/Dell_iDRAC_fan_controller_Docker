@@ -13,7 +13,13 @@ LABEL org.opencontainers.image.documentation="https://github.com/tigerblue77/Del
 # under and a pointer to its source : this label and image.source above are what a scanner reads, and
 # the files copied into /app below are what a human reads. The identifier names the AGPL alone because
 # that is the licence this published image is conveyed under ; the commercial alternative is
-# negotiated per licensee rather than attached here, and no scanner would know what to do with it
+# negotiated per licensee rather than attached here, and no scanner would know what to do with it.
+#
+# These labels hold for anyone running "docker build" on this file, which is what the README tells
+# contributors to do. They do NOT survive a release : docker/metadata-action generates its own set,
+# build_and_publish_docker_image.yml hands it to build-push-action as --label arguments, and those win
+# over a LABEL instruction. That workflow therefore states the licence identifier itself, and the two
+# have to be changed together
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 
 RUN apt-get update
