@@ -27,6 +27,39 @@ function test_every_shell_script_has_a_valid_syntax() {
   done
 }
 
+function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
+  local -r SHELLCHECK_WORKFLOW="$REPO_ROOT/.github/workflows/shellcheck.yml"
+
+  if [ ! -f "$SHELLCHECK_WORKFLOW" ]; then
+    # The suite is running inside the built image, which does not carry the
+    # workflows that built it
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # That workflow names its scripts one by one rather than globbing them, which
+  # is what lets it leave the tests/ tree out - and what let two scripts added
+  # to .github/ afterwards stay out of it for months without a word. The list is
+  # hand-maintained, so it is worth a guard : nothing else lints these files.
+  # "bash -n" above is a syntax check and the suite invokes shellcheck nowhere,
+  # so a script missing from that list is analysed by nothing at all, and the
+  # ones under .github/ run first on the tag or the push that publishes
+  local -r LINTED_SCRIPTS="$(sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p' "$SHELLCHECK_WORKFLOW")"
+
+  local SCRIPT RELATIVE_PATH
+  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+
+    RELATIVE_PATH="${SCRIPT#$REPO_ROOT/}"
+    if printf '%s\n' "$LINTED_SCRIPTS" | grep -qxF "$RELATIVE_PATH"; then
+      pass
+    else
+      fail "$RELATIVE_PATH is linted by nothing, the Shellcheck workflow does not name it" \
+        "it checks : $(printf '%s' "$LINTED_SCRIPTS" | tr '\n' ' ')"
+    fi
+  done
+}
+
 function test_no_statement_expands_two_command_substitutions() {
   # Bash re-parses the text of every $( ) at expansion time, and it runs pending
   # trap handlers from inside that same reader loop. A SIGTERM landing there gets
