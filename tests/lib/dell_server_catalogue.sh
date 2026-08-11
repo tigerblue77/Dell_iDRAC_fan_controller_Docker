@@ -12,7 +12,7 @@
 #   3. maximum number of CPU sockets of that model
 #   4. whether Dell's IPMI raw fan control commands work on that server :
 #        supported          - iDRAC 6/7/8, the raw commands work
-#        firmware-dependent - iDRAC 9, works below firmware 3.30.30.30 only
+#        firmware-dependent - iDRAC 9, works up to firmware 3.30.30.30 only
 #        unsupported        - iDRAC 9 (recent firmware) / iDRAC 10, the raw
 #                             commands are rejected by the BMC
 #        chassis-managed    - the server carries no fan of its own : they belong

@@ -119,10 +119,15 @@ function test_every_enclosure_housed_server_reports_its_rejected_fan_control_com
     get_Dell_server_model
     assert_equals "$MODEL" "$SERVER_MODEL" "$MODEL should be identified"
 
+    # A refusal settles the question for the rest of a container's life, and each of the two calls
+    # below stands for the cycle that reached the command first, on another server. So the verdict is
+    # reset before each of them rather than letting one model, or one code path, answer for the others
+    IS_FAN_CONTROL_SUPPORTED=true
     capture_output apply_Dell_default_fan_control_profile
     assert_contains "$CAPTURED_OUTPUT" "Failed to apply Dell default fan control profile" \
       "$MODEL should report the rejected safety profile"
 
+    IS_FAN_CONTROL_SUPPORTED=true
     capture_output apply_user_fan_control_profile
     assert_contains "$CAPTURED_OUTPUT" "Failed to enable manual fan control" \
       "$MODEL should report the rejected user profile"
@@ -159,10 +164,13 @@ function test_the_controller_keeps_monitoring_a_server_it_cannot_cool() {
   done
 }
 
-function test_an_overheating_blade_still_falls_back_on_dells_profile() {
-  # The fallback is a request the CMC is free to refuse, but the controller must
-  # still make it, and say so : that log line is what tells the user their blade
-  # is hot and that nothing this container does will cool it
+function test_an_overheating_blade_is_reported_although_nothing_here_can_cool_it() {
+  # The fallback is a request the CMC refuses, and it refuses it identically on
+  # every cycle : the controller asks once, is told the command is not there, and
+  # from then on says why rather than repeating the same failure forever.
+  # What must survive that is the news itself -- this blade is hot and nothing
+  # this container does will cool it -- which is the whole reason the comment is
+  # printed at all
   simulate_enclosure_housed_server "PowerEdge M640" --cpus 2 --cpu-temperatures "42 44"
   export MOCK_IPMITOOL_SDR_SECOND_OUTPUT
   MOCK_IPMITOOL_SDR_SECOND_OUTPUT=$(make_sdr_output --cpus 2 --cpu-temperatures "42 79" --no-exhaust)
@@ -170,13 +178,16 @@ function test_an_overheating_blade_still_falls_back_on_dells_profile() {
 
   local -r OUTPUT=$(run_controller "temperature is too high")
 
-  assert_contains "$OUTPUT" "CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
-  assert_contains "$OUTPUT" "Failed to apply Dell default fan control profile"
-  if [ "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" -ge 1 ]; then
-    pass
-  else
-    fail "the overheating blade should have been sent Dell's dynamic fan control profile"
-  fi
+  assert_contains "$OUTPUT" "CPU 2 temperature is too high, and this server refused fan control" \
+    "the hot CPU must still be named, and the comment must not claim a profile the CMC never applied"
+  assert_contains "$OUTPUT" "This server refused fan control" \
+    "the refusal must be explained once, in full"
+  assert_contains "$OUTPUT" "Failed to enable manual fan control" \
+    "the answer the blade actually gave must be quoted before any conclusion is drawn from it"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
+    "the command is sent once and not on every cycle afterwards"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "there is nothing to hand back to Dell on fans this container was never given"
 }
 
 function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_safe() {

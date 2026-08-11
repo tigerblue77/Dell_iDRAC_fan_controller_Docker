@@ -38,6 +38,10 @@ function setup_test_context() {
   CONTROLLER_WORKING_DIRECTORY="$REPO_ROOT"
   # Set before the trap by the controller, so graceful_exit can read it whenever a signal lands
   IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
+  # Same, for the fan control commands : a test starts against a server that has refused nothing and
+  # accepted nothing, which is what the controller starts from too
+  IS_FAN_CONTROL_SUPPORTED=true
+  HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
   # Settled once at startup by the controller, and read by build_header() and by every row it prints
   resolve_fan_control_profile_column_width
 
@@ -48,6 +52,8 @@ function setup_test_context() {
   MOCK_IPMITOOL_FRU_OUTPUT="$(make_fru_output)"
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT="$(make_sdr_output)"
+  export MOCK_IPMITOOL_MC_INFO_OUTPUT
+  MOCK_IPMITOOL_MC_INFO_OUTPUT="$(make_mc_info_output)"
   export MOCK_IPMITOOL_POWER_STATUS="Chassis Power is on"
   export MOCK_SENSORS_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/sensors_calls.log"
   : > "$MOCK_SENSORS_CALL_LOG"

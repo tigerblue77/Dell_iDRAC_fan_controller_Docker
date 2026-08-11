@@ -3,9 +3,10 @@
 # SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Builders for the two ipmitool outputs the controller parses: the FRU inventory
-# ("ipmitool fru", used to identify the server) and the temperature sensor
-# records ("ipmitool sdr type temperature").
+# Builders for the ipmitool outputs the controller parses: the FRU inventory
+# ("ipmitool fru", used to identify the server), the controller's own description
+# ("ipmitool mc info", used to log the iDRAC firmware version) and the temperature
+# sensor records ("ipmitool sdr type temperature").
 #
 # Both are generated rather than stored as flat files because the interesting
 # dimension is combinatorial: every generation from 9 to 17, in 1, 2 and 4 CPU
@@ -148,6 +149,55 @@ function simulate_partially_readable_fru_inventory() {
   MOCK_IPMITOOL_FRU_OUTPUT="$(make_fru_output --with-unreadable-devices "$@")"
   MOCK_IPMITOOL_FRU_STDERR="$UNREADABLE_FRU_DEVICES_STDERR"
   MOCK_IPMITOOL_FRU_EXIT_CODE=1
+}
+
+# Build an "ipmitool mc info" output, the one the iDRAC's own firmware version is read from
+# Usage : make_mc_info_output [--firmware-revision VERSION] [--no-firmware-revision]
+#
+# --firmware-revision takes the two numbers the command reports, not the four a Dell firmware bundle is
+# named after : an iDRAC 9 on 6.10.30.00 answers "6.10", the IPMI Get Device ID response having one byte
+# for the major version and one for the minor one. The remaining two live in the vendor-specific
+# auxiliary field reproduced below, undecoded, exactly as ipmitool prints it -- one hex byte per line,
+# which is also what makes it a line the version parser must not pick up
+#
+# --no-firmware-revision drops the line entirely, for the BMCs that report none
+function make_mc_info_output() {
+  local FIRMWARE_REVISION="2.86"
+  local WITH_FIRMWARE_REVISION=true
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --firmware-revision) FIRMWARE_REVISION="$2"; shift 2 ;;
+      --no-firmware-revision) WITH_FIRMWARE_REVISION=false; shift ;;
+      *) printf 'make_mc_info_output: unknown option "%s"\n' "$1" >&2; return 1 ;;
+    esac
+  done
+
+  printf 'Device ID                 : 32\n'
+  printf 'Device Revision           : 1\n'
+  if $WITH_FIRMWARE_REVISION; then
+    printf 'Firmware Revision         : %s\n' "$FIRMWARE_REVISION"
+  fi
+  printf 'IPMI Version              : 2.0\n'
+  printf 'Manufacturer ID           : 674\n'
+  printf 'Manufacturer Name         : DELL Inc\n'
+  printf 'Product ID                : 256 (0x0100)\n'
+  printf 'Product Name              : Unknown (0x100)\n'
+  printf 'Device Available          : yes\n'
+  printf 'Provides Device SDRs      : yes\n'
+  printf 'Additional Device Support :\n'
+  printf '    Sensor Device\n'
+  printf '    SDR Repository Device\n'
+  printf '    SEL Device\n'
+  printf '    FRU Inventory Device\n'
+  printf '    IPMB Event Receiver\n'
+  printf '    IPMB Event Generator\n'
+  printf '    Chassis Device\n'
+  printf 'Aux Firmware Rev Info     : \n'
+  printf '    0x00\n'
+  printf '    0x1d\n'
+  printf '    0x1e\n'
+  printf '    0x00\n'
 }
 
 # Build a single "ipmitool sdr type temperature" line

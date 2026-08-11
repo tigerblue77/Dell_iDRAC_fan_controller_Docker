@@ -612,6 +612,10 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
   # Leaving it out is how #170's overflow came back : the column was still sized on the bare name while
   # the rows had started printing 14 characters more into it
   local -r NOT_APPLIED_BADGE=" (not applied)"
+  # And once the server has been seen to refuse fan control outright, the controller stops sending
+  # anything and reports the profile the server is actually running -- Dell's own, whatever profile was
+  # asked for -- with the reason it is that one. Another string the code really produces
+  local -r REFUSED_BADGE=" (refused)"
   local SPEED PROFILE VARIANT
   local IS_MONITORING_ONLY_MODE
 
@@ -633,6 +637,12 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
         VARIANTS=("$PROFILE$MONITORING_ONLY_MODE_BADGE")
       else
         VARIANTS=("$PROFILE" "$PROFILE$NOT_APPLIED_BADGE")
+        # The refused form only ever carries Dell's own profile name : nothing is sent any more, so the
+        # user profile is not what the server is running and naming it would be the lie the badge exists
+        # to stop. Monitoring only mode reaches no verdict at all, having sent nothing to be refused
+        if [ "$PROFILE" == "Dell default dynamic fan control profile" ]; then
+          VARIANTS+=("$PROFILE$REFUSED_BADGE")
+        fi
       fi
 
       for VARIANT in "${VARIANTS[@]}"; do

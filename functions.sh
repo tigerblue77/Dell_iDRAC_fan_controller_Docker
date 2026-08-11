@@ -13,6 +13,13 @@ function apply_Dell_default_fan_control_profile() {
     CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (monitoring only, not applied)"
     return
   fi
+  # A server that answered "I will not do this" answers it again every cycle, so the command is not sent
+  # any more once it has. The fans are Dell's own -- they are what the refused command would have taken
+  # them from -- which is what the badge says
+  if has_the_server_refused_fan_control; then
+    CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (refused)"
+    return 1
+  fi
   # Use ipmitool to send the raw command to set fan control to Dell default.
   # Some iDRAC/BMC firmwares print a harmless protocol warning on stderr (e.g. "Received an Unexpected
   # message...") even when the command actually succeeds. Rather than discard stderr unconditionally (which
@@ -23,11 +30,13 @@ function apply_Dell_default_fan_control_profile() {
   # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     print_error "Failed to apply Dell default fan control profile. ipmitool said: $ipmitool_stderr"
+    note_that_the_server_refuses_fan_control "$ipmitool_stderr"
     # The table says what the server is actually doing, not what was attempted : this profile is the
     # safety fallback, so claiming it while the command was refused is the one lie that matters here
     CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (not applied)"
     return 1
   fi
+  HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=true
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
@@ -38,6 +47,13 @@ function apply_user_fan_control_profile() {
     CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (monitoring only, not applied)"
     return
   fi
+  # Same as above : a server that refused to hand its fans over is not asked again, and the profile it
+  # is actually running -- Dell's own, since the refused command is the one that would have taken the
+  # fans from it -- is what the table reports rather than a user profile that was never applied
+  if has_the_server_refused_fan_control; then
+    CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (refused)"
+    return 1
+  fi
   # Use ipmitool to send the raw command to set fan control to user-specified value.
   # Same reasoning as apply_Dell_default_fan_control_profile: only surface stderr if the command
   # actually failed, instead of always discarding it (this profile changes real fan speed)
@@ -47,18 +63,33 @@ function apply_user_fan_control_profile() {
   # drive -- so either failure means the profile was not applied
   local ipmitool_stderr
   local IS_PROFILE_APPLIED=true
+  # What the server answered to the command that takes the fans, kept until both commands have run so
+  # that the verdict below is drawn after everything this cycle had to say, rather than between two
+  # error lines it would then look like it did not cover
+  local MANUAL_FAN_CONTROL_STDERR=""
 
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
   # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     print_error "Failed to enable manual fan control. ipmitool said: $ipmitool_stderr"
+    MANUAL_FAN_CONTROL_STDERR="$ipmitool_stderr"
     IS_PROFILE_APPLIED=false
+  else
+    HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=true
   fi
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
   # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
     IS_PROFILE_APPLIED=false
+  fi
+
+  # Only the first of the two commands can settle whether this server lets its fans be taken at all.
+  # The speed command runs on fans the controller already holds, so its refusal is a failure to obey and
+  # not a refusal to hand anything over : concluding from it would stop the controller from ever giving
+  # back fans it had already taken, which is the one outcome that leaves them pinned with nobody watching
+  if [ -n "$MANUAL_FAN_CONTROL_STDERR" ]; then
+    note_that_the_server_refuses_fan_control "$MANUAL_FAN_CONTROL_STDERR"
   fi
 
   if ! $IS_PROFILE_APPLIED; then
@@ -1346,6 +1377,51 @@ function does_the_command_need_a_higher_privilege_level() {
   [[ "$IPMITOOL_STDERR" == *"rsp=0xd4"* ]]
 }
 
+# Whether this server has been seen to refuse fan control outright, in which case the controller stops
+# sending it. The fan control profile functions at the top of this file are the ones that stop on it ;
+# graceful_exit() and fan_control_comment_clause() only read it to word what they report.
+# Usage : has_the_server_refused_fan_control
+#
+# The default matters, and the supervisor is why. functions.sh is also sourced by the healthcheck, which
+# sends no fan control command at all, by the test harness, and by supervisor.sh, which sends exactly one
+# -- the hand-back of apply_Dell_default_fan_control_profile(), on the path issues #188 and #249 exist
+# for -- from a process that never watched a single answer and therefore never reached a verdict. Left
+# undefined there, the guard would read empty and the safety net would skip the one command it exists to
+# send. Nowhere the verdict was never made can be a place where it was made against the server
+function has_the_server_refused_fan_control() {
+  ! "${IS_FAN_CONTROL_SUPPORTED:-true}"
+}
+
+# Read a refused fan control command and, if the server itself refused it, record that it is not worth
+# sending again and say so once.
+# Usage : note_that_the_server_refuses_fan_control "$IPMITOOL_STDERR"
+# Returns : IS_FAN_CONTROL_SUPPORTED, and 0 if the verdict was reached on this call
+#
+# Two conditions, and the second is the one that keeps this safe. A refusal only settles anything while
+# nothing has ever been accepted : once a fan control command has landed, the fans are the controller's
+# and a later refusal is a failure to give them back rather than a server that never let them go. Giving
+# up there would leave them pinned at the user's speed with nobody raising them, which is the accident
+# this whole container exists to avoid
+function note_that_the_server_refuses_fan_control() {
+  local -r IPMITOOL_STDERR="$1"
+
+  if "${HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED:-false}"; then
+    return 1
+  fi
+
+  if ! does_the_server_lack_this_command "$IPMITOOL_STDERR" && ! does_the_command_need_a_higher_privilege_level "$IPMITOOL_STDERR"; then
+    return 1
+  fi
+
+  IS_FAN_CONTROL_SUPPORTED=false
+
+  print_warning "This server refused fan control, so the container will stop asking and keep reading temperatures instead.
+ Its fans are not left in an unknown state : the command that was refused is the one that takes them away from Dell's own dynamic fan control profile, so they never left it.
+ Two things answer like this, and the completion code does not say which. Dell removed these commands from the 14th generation on -- an iDRAC 9 refuses them from firmware 3.34.34.34 onwards, and an iDRAC 10 has never had them -- and an iDRAC also refuses them to an account that is not an Administrator. This iDRAC reports firmware version ${IDRAC_FIRMWARE_VERSION:-unknown}.
+ If your iDRAC is one that used to accept them, check the privilege level of IDRAC_USERNAME before concluding that the firmware is the reason. The README's \"iDRAC version\" section covers both.
+ Nothing else changes : temperatures keep being read and logged every cycle, as MONITORING_ONLY_MODE would"
+}
+
 # Prepare traps in case of container exit
 function graceful_exit() {
   if "$MONITORING_ONLY_MODE"; then
@@ -1362,6 +1438,13 @@ function graceful_exit() {
   # nothing; a setting left behind on a server nothing is monitoring any more does
   if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then
     enable_third_party_PCIe_card_Dell_default_cooling_response
+  fi
+
+  # Nothing was handed back on a server that never let anything be taken, and saying otherwise would be
+  # the same lie as naming a profile the server is not running. The verdict itself only holds while no
+  # fan control command has ever been accepted, so there is no state left behind for this line to hide
+  if has_the_server_refused_fan_control; then
+    print_warning_and_exit "Container stopped (this server refused fan control, so no profile was ever applied and its fans never left Dell's own dynamic fan control profile)"
   fi
 
   print_warning_and_exit "Container stopped, Dell default dynamic fan control profile applied for safety"
@@ -1451,6 +1534,40 @@ container again. Alternatively, set IDRAC_HOST to your iDRAC's address to use ne
   # through. It is also the escalation MAXIMUM_IPMI_UNREACHABLE_DURATION relies on once the loop is
   # running, and the README already tells its readers to run under a restart policy because of it
   print_configuration_error_and_exit "IDRAC_HOST / IDRAC_USERNAME / IDRAC_PASSWORD" "$IDRAC_HOST" "credentials that can open an IPMI session. $IPMITOOL_REPORT" "" "false"
+}
+
+# Read the firmware version the iDRAC reports about itself, for the startup log.
+# Usage : get_iDRAC_firmware_version
+# Returns : IDRAC_FIRMWARE_VERSION, or "unknown" when the iDRAC reported none
+#
+# Also helps debugging when people are posting their output : the firmware version is the first thing
+# asked for on every report about fan control not being applied, and it was the one thing about the
+# server this container never printed.
+#
+# "ipmitool mc info" reports two numbers where Dell's own firmware bundles carry four -- an iDRAC 9 on
+# 6.10.30.00 answers "6.10" -- and that is a property of IPMI rather than of Dell : the Get Device ID
+# response spends one byte on the major version and one on the minor one, and leaves the rest to a
+# vendor-specific auxiliary field this does not try to decode. Two numbers are enough for what this is
+# for, which is a log line a human reads, and the exact build is one "racadm getversion" away for
+# anyone who needs it.
+#
+# /!\ What it is NOT for is deciding whether this server accepts fan control. Nothing here compares the
+# version against 3.34.34.34, because the numbering restarted at 1.x with the iDRAC 10 of the 17th
+# generation : every comparison that reads "below 3.34.34.34, so the commands are there" calls the
+# newest hardware Dell makes the oldest. The controller settles that question the way it settles every
+# other one, by sending the command and reading the answer
+function get_iDRAC_firmware_version() {
+  local IPMI_MC_INFO
+  # stderr is discarded : this is a read-only diagnostic call, some iDRAC firmwares print a harmless
+  # protocol warning on every call, and a version that could not be read is reported as unknown rather
+  # than turned into an error. Nothing the controller does depends on it
+  IPMI_MC_INFO=$(ipmitool -I $IDRAC_LOGIN_STRING mc info 2>/dev/null)
+
+  IDRAC_FIRMWARE_VERSION=$(echo "$IPMI_MC_INFO" | grep -m 1 "Firmware Revision" | awk -F ':' '{print $2}' | tr -d '[:space:]')
+
+  if [ -z "$IDRAC_FIRMWARE_VERSION" ]; then
+    IDRAC_FIRMWARE_VERSION="unknown"
+  fi
 }
 
 # Settle the width of the "Active fan speed profile" column, which the header and the rows both lay
@@ -1688,6 +1805,25 @@ function join_with_and() {
   echo "$result"
 }
 
+# The clause a comment ends on, naming what the controller did about the fans.
+# Usage : fan_control_comment_clause "$WHAT_THE_CONTROLLER_ASKED_FOR"
+#
+# The comment column explains a profile change, and on a server that refused fan control there is none
+# to explain : the fans have been Dell's own since before the container started and no command of its
+# own reached them. The reason the profile would have changed is still worth printing -- a hot CPU is
+# news whoever drives the fans -- so only the half of the sentence that names an applied profile is
+# replaced, rather than the whole comment being dropped
+function fan_control_comment_clause() {
+  local -r APPLIED_CLAUSE="$1"
+
+  if has_the_server_refused_fan_control; then
+    echo "and this server refused fan control, so its fans stay Dell's own to drive"
+    return
+  fi
+
+  echo "$APPLIED_CLAUSE"
+}
+
 # Build the comment explaining why the Dell default fan control profile was applied.
 # Usage : build_fan_control_fallback_comment $CPU_NAME $CPU_TEMPERATURE [$CPU_NAME $CPU_TEMPERATURE]...
 #
@@ -1721,7 +1857,10 @@ function build_fan_control_fallback_comment() {
     reasons+=("$(join_with_and "${unreadable[@]}") temperatures could not be read")
   fi
 
-  echo "$(join_with_and "${reasons[@]}"), Dell default dynamic fan control profile applied for safety"
+  local FAN_CONTROL_CLAUSE
+  FAN_CONTROL_CLAUSE=$(fan_control_comment_clause "Dell default dynamic fan control profile applied for safety")
+
+  echo "$(join_with_and "${reasons[@]}"), $FAN_CONTROL_CLAUSE"
 }
 
 # Stop the container on an invalid configuration parameter, with everything needed to fix it

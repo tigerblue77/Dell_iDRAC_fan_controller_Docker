@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   shellcheck:
-    name: Lint the shipped scripts
+    name: Lint the shell scripts
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

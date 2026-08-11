@@ -26,7 +26,24 @@
 ## Requirements
 ### iDRAC version
 
-This Docker container only works on Dell PowerEdge servers that support IPMI commands, i.e. < iDRAC 9 firmware 3.30.30.30.
+This container drives the fans with two IPMI raw commands Dell removed from its recent hardware. What decides whether yours takes them is the iDRAC firmware, not the model :
+
+| iDRAC | Dell's IPMI raw fan control commands |
+| --- | --- |
+| iDRAC 6, 7 and 8 (generations 11 to 13) | Available |
+| iDRAC 9 up to firmware `3.30.30.30` | Available, that being the newest version they are confirmed to work on |
+| iDRAC 9 from firmware `3.34.34.34` on | **Removed by Dell**, deliberately and for good |
+| iDRAC 10 (17th generation) | Never had them |
+
+`3.31.31.31` and `3.32.32.32` sit between those two versions and what either answers has never been reported. Blades and modular servers refuse them whatever their generation, their fans belonging to the enclosure.
+
+**Downgrading is no longer a way out** : an iDRAC 9 that has installed Dell's June 2024 release or any later one [cannot go back to `4.40.10.00` or older](https://www.dell.com/support/kbdoc/en-us/000225924/rac0181-idrac9-firmware-downgrade-failures-on-14-15g-poweredge-servers).
+
+None of it has to be worked out in advance : the container asks the server, logs its iDRAC firmware version at startup and [says what it was answered](#your-fan-speed-never-changes-and-the-log-says-the-server-refused-fan-control).
+
+### iDRAC user privileges
+
+The account this container uses must be an **Administrator** on the iDRAC : fan control is not read-only, and a lesser account is refused it with the very completion code (`0xd4`) a firmware that removed the commands returns.
 
 ### To access iDRAC over LAN (not needed in "local" mode) :
 
@@ -323,6 +340,28 @@ Read its log rather than its restart count: a container that stops on a **config
 Nothing about that can self-correct — the value is the same on every attempt — so the restart policy the [Usage](#usage) examples recommend, which is what protects you against a transient failure, turns a permanent refusal into an endless loop. `docker logs --tail 40 Dell_iDRAC_fan_controller` shows the block; fix what it names and the loop ends. The most common case is a `CPU_TEMPERATURE_THRESHOLD` above 125, which versions up to v1.27 accepted (see the [Parameters](#parameters) section).
 
 A refusal **without** that "Restarting will not help" line is the opposite case, and the only one worth waiting out: an iDRAC that did not answer this time may answer the next, so the restart policy is what recovers it without you doing anything.
+
+### Your fan speed never changes and the log says the server refused fan control
+
+That server does not let its fans be driven over IPMI. The container says so once, in full, and then stops asking :
+
+```
+/!\ Warning /!\ This server refused fan control, so the container will stop asking and keep reading temperatures instead.
+ Its fans are not left in an unknown state : the command that was refused is the one that takes them away from Dell's own dynamic fan control profile, so they never left it.
+ [...]
+```
+
+Three things are worth knowing about it.
+
+**Nothing is left half-done.** The refused command is the one that takes the fans *from* Dell's own dynamic profile, so they never left it : the server cools itself exactly as it did before the container started, and stopping the container changes nothing either.
+
+**It is a verdict about this server, not about this cycle.** An iDRAC that answers with an IPMI completion code answers with the same one every time, so re-sending the command only fills the log. An iDRAC that could not be *reached* prints no completion code at all, and that case is never treated as a refusal — the commands keep being sent for as long as the outage lasts.
+
+**Two things produce this answer**, and the completion code does not say which : a firmware that removed the commands, or an iDRAC account that is not an Administrator. The [iDRAC version](#idrac-version) and [iDRAC user privileges](#idrac-user-privileges) sections cover both. Check the account first if this server used to work — that is the half you can fix.
+
+The container keeps running, keeps reading the temperatures and keeps logging them, which is what `MONITORING_ONLY_MODE` does on purpose.
+
+**If it is the firmware, downgrading will not get you out of it.** Dell removed the commands on purpose — *"going forward access is not going to be allowed as it affects the thermal algorithms and cooling the system"*, [on its own forum](https://www.dell.com/community/en/conversations/poweredge-hardware-general/dell-eng-is-taking-away-fan-speed-control-away-from-users-idrac-3343434/647f8593f4ccf8a8de47aa9b) — and since the June 2024 release (`7.00.00.172` on the 14th generation, `7.10.50.00` on the 15th) an iDRAC 9 [cannot be downgraded to `4.40.10.00` or older](https://www.dell.com/support/kbdoc/en-us/000225924/rac0181-idrac9-firmware-downgrade-failures-on-14-15g-poweredge-servers), the bootloader having changed in a way older firmware cannot boot. The restriction carries forward to every version since, and Dell documents that *"while the firmware downgrade job may reflect a successful status, the Lifecycle Log records a RAC0181 informational event on iDRAC9 reboot"* : check the version the iDRAC reports afterwards rather than the job's outcome.
 
 ### Your server frequently switches back to the default Dell fan mode:
 1. Check `Tcase` (case temperature) of your CPU on Intel Ark website and then set `CPU_TEMPERATURE_THRESHOLD` to a slightly lower value. Example with my CPUs ([Intel Xeon E5-2630L v2](https://www.intel.com/content/www/us/en/products/sku/75791/intel-xeon-processor-e52630l-v2-15m-cache-2-40-ghz/specifications.html)) : Tcase = 63°C, I set `CPU_TEMPERATURE_THRESHOLD` to 60(°C). Note that the default "auto" value does **not** do this for you : Tcase is a case (heat spreader) temperature, while "auto" uses the junction-scale "high" value, which is usually well above Tcase (on a Xeon Gold 5122 for instance, Tcase is 71°C but "high" is around 94°C). If you want a Tcase-derived threshold, set it explicitly. The startup log always states which threshold was picked and where it comes from.
