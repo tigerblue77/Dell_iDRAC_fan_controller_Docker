@@ -427,7 +427,17 @@ jobs:
       # answer that no longer depends on when it is asked : concurrent releases
       # reaching this step agree, and whichever writes last writes the same
       # thing. See .github/reconcile_latest_tag.sh
+      #
+      # Guarded so that a failure above cannot withhold it. The ordering serves
+      # the release note ; it must not hand it a veto. A run that dies writing
+      # the announcement leaves "latest" wherever the racing pushes put it, on a
+      # version whose image did go out -- the state #325 was filed for, reached
+      # through another door. Running this after a failed build is safe by
+      # construction : the script walks the versions the registry actually
+      # serves, so a release that never pushed is not a candidate, and it writes
+      # nothing when the tag already agrees
       - name: Point "latest" at the highest published version
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           IMAGE="${{ steps.docker_image_name.outputs.value }}"

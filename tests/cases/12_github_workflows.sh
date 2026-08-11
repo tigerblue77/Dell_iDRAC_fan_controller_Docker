@@ -9,6 +9,35 @@
 # after, by which point it has already cost a release or a night's rebuild.
 # This is where they get read anyway.
 
+function test_the_latest_reconciliation_survives_a_failure_above_it() {
+  # It is placed after the release note so that a registry hiccup in it cannot
+  # withhold the announcement of a version whose image did go out. Without a
+  # guard the ordering also hands the release note a veto : a run that dies
+  # writing the announcement skips the reconciliation and leaves "latest"
+  # wherever the racing pushes put it, which is the state issue #325 was filed
+  # for, reached through another door (issue #355).
+  #
+  # Running it after a failure is safe by construction -- the script walks the
+  # versions the registry actually serves, so a release that never pushed is not
+  # a candidate -- so the guard costs nothing and closes the window
+  local -r RELEASE_WORKFLOW="$REPO_ROOT/.github/workflows/build_and_publish_docker_image.yml"
+  if [ ! -f "$RELEASE_WORKFLOW" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # The two lines of the step, in order : its name, then whatever follows before
+  # the next key. A guard placed anywhere else in the file would not apply to it
+  local -r GUARD_AFTER_THE_STEP=$(awk '
+    /- name: Point "latest" at the highest published version/ { found = 1; next }
+    found && /^ *if:/ { print; exit }
+    found && /^ *- name:/ { exit }
+  ' "$RELEASE_WORKFLOW")
+
+  assert_contains "$GUARD_AFTER_THE_STEP" "cancelled()" \
+    "the latest reconciliation has to run even when a step above it failed"
+}
+
 function test_no_docker_action_list_entry_ends_with_a_comment() {
   # docker/metadata-action reads its multi-line inputs with a CSV parser it asks
   # to treat "#" as a comment. Up to v5 that stripped a "#" found anywhere on the
