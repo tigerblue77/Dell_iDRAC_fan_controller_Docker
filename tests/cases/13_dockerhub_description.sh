@@ -18,6 +18,25 @@ readonly DOCKERHUB_DESCRIPTION_REPOSITORY_URL="https://github.com/$DOCKERHUB_DES
 # its own constant should fail here, not agree with itself
 readonly DOCKERHUB_DESCRIPTION_SIZE_LIMIT=25000
 
+# How close the page may come to losing its next section before this suite says
+# so. The renderer never overflows : it drops whole sections from the end until
+# what is left fits, so the room measured here is not room before a broken page
+# but room before the next section leaves it. Once the section next in line is
+# one the page cannot do without, that distance is the only warning there is.
+#
+# 500 is chosen against what documentation changes to this README actually
+# weigh, not against the limit : of the thirteen that touched it before this
+# guard was written, eleven added more than 500 characters and the median added
+# about 1 500. So this fires while there is still less than a third of an
+# ordinary paragraph in hand -- deliberately, because by then the next edit is
+# what removes the section rather than what is warned about
+readonly DOCKERHUB_DESCRIPTION_MINIMUM_HEADROOM=500
+
+# The sections the page is worth publishing only while it still holds them,
+# named once here and asserted by two cases : the one that checks they are on
+# the page, and the one that checks the page is not about to lose one
+readonly DOCKERHUB_DESCRIPTION_REQUIRED_SECTIONS=("Requirements" "Supported architectures" "Usage" "Parameters")
+
 readonly DOCKERHUB_DESCRIPTION_GENERATOR=".github/generate_dockerhub_description.sh"
 readonly DOCKERHUB_DESCRIPTION_WORKFLOW=".github/workflows/dockerhub_description.yml"
 
@@ -56,6 +75,59 @@ function test_the_dockerhub_description_fits_the_page_docker_hub_allows() {
     pass
   else
     fail "the rendered page is $SIZE characters long, Docker Hub keeps the first $DOCKERHUB_DESCRIPTION_SIZE_LIMIT and drops the rest"
+  fi
+}
+
+function test_the_dockerhub_description_is_not_about_to_lose_a_section_it_needs() {
+  # The case above holds the page under Docker Hub's limit, and the renderer
+  # guarantees that on its own by dropping sections. What neither of them says
+  # is which section goes next, and how much prose is left before it does.
+  #
+  # That distance is what nobody can see : a documentation change three sections
+  # away is what spends it, the page it breaks is published by a workflow no
+  # pull request runs, and the failure lands on whoever wrote the paragraph
+  # rather than on whoever chose what the page carries
+  if ! dockerhub_description_can_be_rendered; then
+    skip_test "no .github and README next to the scripts"
+    return 0
+  fi
+
+  local DESCRIPTION
+  DESCRIPTION="$(rendered_dockerhub_description)"
+
+  local SIZE
+  SIZE="$(printf '%s' "$DESCRIPTION" | wc -c)"
+  SIZE="${SIZE//[[:space:]]/}"
+  local -r HEADROOM=$(( DOCKERHUB_DESCRIPTION_SIZE_LIMIT - SIZE ))
+
+  # The section that goes next is the last one still on the page : the renderer
+  # drops them from the end
+  local SECTION_AT_RISK
+  SECTION_AT_RISK="$(printf '%s' "$DESCRIPTION" | grep '^## ' | tail -1)"
+  SECTION_AT_RISK="${SECTION_AT_RISK#\#\# }"
+
+  local SECTION
+  local IS_AT_RISK_SECTION_REQUIRED=false
+  for SECTION in "${DOCKERHUB_DESCRIPTION_REQUIRED_SECTIONS[@]}"; do
+    if [ "$SECTION_AT_RISK" == "$SECTION" ]; then
+      IS_AT_RISK_SECTION_REQUIRED=true
+    fi
+  done
+
+  # A page whose next casualty is a section it can do without has nothing to
+  # warn about : losing it costs a footer link, which is what the footer is for
+  if ! $IS_AT_RISK_SECTION_REQUIRED; then
+    pass
+    return 0
+  fi
+
+  if [ "$HEADROOM" -ge "$DOCKERHUB_DESCRIPTION_MINIMUM_HEADROOM" ]; then
+    pass
+  else
+    fail "the Docker Hub page is $HEADROOM characters from dropping \"$SECTION_AT_RISK\", which it cannot do without" \
+      "rendered: $SIZE of $DOCKERHUB_DESCRIPTION_SIZE_LIMIT characters" \
+      "the next section the renderer drops is \"$SECTION_AT_RISK\", and this suite requires it" \
+      "free room on the page rather than shrink the paragraph that tripped this : the sections are dropped from the end, so what the page carries is the thing to decide"
   fi
 }
 
@@ -128,7 +200,7 @@ function test_the_dockerhub_description_keeps_what_the_reader_came_for() {
   DESCRIPTION="$(rendered_dockerhub_description)"
 
   local SECTION
-  for SECTION in "Requirements" "Supported architectures" "Usage" "Parameters"; do
+  for SECTION in "${DOCKERHUB_DESCRIPTION_REQUIRED_SECTIONS[@]}"; do
     assert_contains "$DESCRIPTION" "## $SECTION" \
       "the Docker Hub page has to keep its \"$SECTION\" section"
   done
