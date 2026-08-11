@@ -1,9 +1,17 @@
 name: Shellcheck
 
-# Scoped to the 5 scripts actually shipped in the Docker image, not the tests/ tree : those are the ones
-# a finding here can affect at runtime, on real hardware. -x resolves the "source functions.sh" /
-# "source constants.sh" lines so shared declarations are understood correctly instead of reported as
-# unknown or unused when the sourcing file is linted on its own.
+# Scoped to the scripts nothing else would catch a mistake in, which is two groups and not one.
+#
+# The 5 shipped in the Docker image, because a finding there affects runtime, on real hardware. And the 3
+# under .github/, because they decide what gets published - which version "latest" points at, whether a
+# release note is written, what the Docker Hub page says - and the first time any of them runs is on the
+# tag or the push that publishes it. Neither of the workflows carrying them fires on a pull request.
+#
+# The tests/ tree stays out for the reason those three do not have : the suite runs on every pull request,
+# so a mistake in it is found the moment it is pushed rather than at release time.
+#
+# -x resolves the "source functions.sh" / "source constants.sh" lines so shared declarations are understood
+# correctly instead of reported as unknown or unused when the sourcing file is linted on its own.
 #
 # See .shellcheckrc for the two codes disabled project-wide, and the "shellcheck disable" comments at the
 # handful of call sites where a warning is intentional rather than fixed.
@@ -33,4 +41,7 @@ jobs:
             functions.sh \
             constants.sh \
             healthcheck.sh \
-            supervisor.sh
+            supervisor.sh \
+            .github/generate_dockerhub_description.sh \
+            .github/reconcile_latest_tag.sh \
+            .github/release_note_already_exists.sh
