@@ -22,6 +22,14 @@
 #                                  is the partial failure of a healthy server whose
 #                                  empty bays answer "Device not present", and it comes
 #                                  with a non-zero MOCK_IPMITOOL_FRU_EXIT_CODE
+#   MOCK_IPMITOOL_MC_INFO_OUTPUT   stdout of "ipmitool mc info", where the iDRAC
+#                                  describes itself and reports its firmware version
+#   MOCK_IPMITOOL_MC_INFO_STDERR   stderr of the same command, for the firmwares
+#                                  that print a protocol warning on every call
+#   MOCK_IPMITOOL_MC_INFO_EXIT_CODE  its exit code (default 0). A non-zero one with
+#                                  no output is an iDRAC that never answered, which
+#                                  must leave the version unknown rather than stop
+#                                  the controller
 #   MOCK_IPMITOOL_SDR_OUTPUT       stdout of "ipmitool sdr type temperature"
 #   MOCK_IPMITOOL_SDR_STDERR       stderr of the same command (firmware noise)
 #   MOCK_IPMITOOL_SDR_EXIT_CODE    its exit code (default 0)
@@ -59,7 +67,7 @@
 #                                  MOCK_IPMITOOL_RAW_FAIL_STDERR /
 #                                  MOCK_IPMITOOL_RAW_FAIL_EXIT_CODE. This is how
 #                                  a specific command is made to fail (an iDRAC 9
-#                                  firmware >= 3.30.30.30 rejecting 0x30 0x30, or
+#                                  firmware >= 3.34.34.34 rejecting 0x30 0x30, or
 #                                  a Gen 14+ server rejecting 0x30 0xce) while
 #                                  the others keep succeeding
 
@@ -103,6 +111,16 @@ case "$SUB_COMMAND" in
       exit "${MOCK_IPMITOOL_FRU_EXIT_CODE}"
     fi
     printf '%s\n' "${MOCK_IPMITOOL_FRU_OUTPUT:-}"
+    ;;
+
+  mc)
+    if [ -n "${MOCK_IPMITOOL_MC_INFO_STDERR:-}" ]; then
+      printf '%s\n' "$MOCK_IPMITOOL_MC_INFO_STDERR" >&2
+    fi
+    if [ -n "${MOCK_IPMITOOL_MC_INFO_OUTPUT:-}" ]; then
+      printf '%s\n' "$MOCK_IPMITOOL_MC_INFO_OUTPUT"
+    fi
+    exit "${MOCK_IPMITOOL_MC_INFO_EXIT_CODE:-0}"
     ;;
 
   sdr)

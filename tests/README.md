@@ -38,10 +38,11 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/30_idrac_login_string.sh` | Local (`/dev/ipmi0`) and network (`lanplus`) modes, password handling |
 | `cases/35_message_output.sh` | How error and warning messages reach the log, read at their junction with the line that follows |
 | `cases/40_temperature_parsing.sh` | Reading the sensors out of `ipmitool sdr type temperature` |
+| `cases/45_idrac_firmware_version.sh` | Reading the iDRAC's own firmware version out of `ipmitool mc info`, and never turning it into a verdict about fan control |
 | `cases/50_server_model_detection.sh` | Reading the manufacturer and model out of the FRU inventory, and refusing to run on an unreachable iDRAC |
 | `cases/55_enclosure_housed_servers.sh` | Blades and modular servers, whose fans belong to their enclosure |
 | `cases/60_cpu_topologies.sh` | 1, 2 and 4 socket servers, missing sensors, table layout |
-| `cases/70_fan_control_profiles.sh` | The raw commands sent to the server, and their rejections |
+| `cases/70_fan_control_profiles.sh` | The raw commands sent to the server, what their rejections mean, and the one refusal that must never stop the controller from trying again |
 | `cases/80_temperature_thresholds.sh` | The overheating decision, including its fail-safe behavior |
 | `cases/85_power_state.sh` | Skipping the cycle when the target server is powered off |
 | `cases/90_integration.sh` | The whole controller, started like its Docker image does |
