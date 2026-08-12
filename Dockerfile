@@ -37,10 +37,15 @@ LABEL org.opencontainers.image.documentation="https://github.com/tigerblue77/Del
 # have to be changed together
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 
-RUN apt-get update
-
+# The three commands are one RUN because the layer, not the filesystem, is what gets pulled : deleting
+# /var/lib/apt/lists from a later layer would hide the package lists without making this one any
+# smaller, and they would still be transferred. Merged, they are never committed in the first place.
+# apt-get install keeps its recommends on purpose - dropping them is a change to what is installed,
+# not to what is shipped, and is argued in its own right rather than smuggled in beside a size fix
 # lm-sensors is used to read the CPUs' own "high" temperature, which is the default CPU_TEMPERATURE_THRESHOLD
-RUN apt-get install ipmitool lm-sensors -y
+RUN apt-get update \
+ && apt-get install ipmitool lm-sensors -y \
+ && rm -rf /var/lib/apt/lists/*
 
 # AGPL section 4 asks that the notices travel with every copy conveyed, and an image is a copy. They
 # are added before the scripts so that a change to a script does not invalidate their layer
