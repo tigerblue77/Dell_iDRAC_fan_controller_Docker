@@ -21,8 +21,8 @@ It exits `0` when every test case passed, `1` otherwise.
 | File | What it checks |
 | --- | --- |
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, drift between the code and what documents it, healthcheck |
-| `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh |
-| `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, rendered from `README.md` by a workflow no pull request fires either |
+| `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh. Also that every workflow carries the licence header, which is the whole directory rather than those two |
+| `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, built by a workflow no pull request fires either : that it stays a pointer at the documentation rather than a copy of it, and that no change to `README.md` can alter it |
 | `cases/14_latest_tag_reconciliation.sh` | Which version `latest` ends up on after a release, against a stubbed registry. Skipped where `jq` is missing, the one thing the script needs that the suite does not |
 | `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified |
 | `cases/16_release_note_publication.sh` | Whether a version tag still needs its GitHub release note written, against a stubbed GitHub : the decision that keeps a re-fired release from appending a second copy of its changelog to the one it already carries |
