@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # shellcheck disable=SC2034  # Every function/constant here is consumed by the scripts that source this file, not by this file itself
 
 # Define global functions

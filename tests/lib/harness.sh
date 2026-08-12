@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The environment every test case runs in, and the few helpers that talk to the
 # code under test : the mocked ipmitool's call log, and running the controller
 # itself from end to end.

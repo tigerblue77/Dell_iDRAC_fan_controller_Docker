@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The JUnit XML and Markdown reports. Nothing covered them until a malformed
 # duration reached the publisher and turned a run red with every test case
 # passing :

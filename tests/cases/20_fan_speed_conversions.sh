@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # FAN_SPEED can be given either as a percentage (5) or as the hexadecimal byte
 # ipmitool actually sends (0x05), and the controller keeps both representations :
 # the decimal one for the logs, the hexadecimal one for the raw IPMI command.

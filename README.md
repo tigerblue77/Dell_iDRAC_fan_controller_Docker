@@ -278,7 +278,7 @@ All parameters are optional as they have default values (including default iDRAC
   - The minimum is **1**, `0` being refused: nothing can be concluded from fewer than one observed failure. Use an empty value, not `0`, to disable the escalation.
   - `1` is accepted but **warned about** at startup, since it means exiting on the very first unreachable reading — on any transient glitch. It is legitimate on a rock-solid LAN, which is why it is a warning rather than a refusal; the same warning fires when `MAXIMUM_IPMI_UNREACHABLE_DURATION` resolves to a single check.
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
-- `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that allows to keep the third-party PCIe card Dell default cooling response state upon exit. **Default** value is false, so that it resets the third-party PCIe card Dell default cooling response to Dell default.
+- `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` parameter is a boolean that decides what becomes of the third-party PCIe card cooling response when the container stops : `true` leaves it as the container set it, `false` restores Dell's own. **Default** value is false.
 - `MONITORING_ONLY_MODE` parameter is a boolean that allows to run the container in a read-only, monitoring-only mode: temperatures are still read and logged at each `CHECK_INTERVAL`, but no fan control profile (neither the user-defined one nor Dell's default) and no third-party PCIe card cooling response change is ever sent to the server. Useful to observe temperatures and validate your `FAN_SPEED`/`CPU_TEMPERATURE_THRESHOLD` values before letting the container actually take control of the fans. **Default** value is false.
 
 The three boolean parameters above accept **only the lowercase literals `true` and `false`**, and the container refuses to start on anything else — `True`, `TRUE`, `1`, `on` and `yes` included. This is not pickiness: these parameters are dispatched by running their value, so those spellings used to be taken as `false` without a word. `MONITORING_ONLY_MODE=True` would take control of the fans on a server you had explicitly asked the container to leave alone, while logging "Monitoring only mode: Disabled".
@@ -446,9 +446,11 @@ Don't forget to give the project a star! Thanks again!
 
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+3. Commit your Changes, signed off (`git commit -s -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
+
+Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before you do : it explains the sign-off in step 3, and the terms your contribution arrives under in a project that is [dual-licensed](#license).
 
 To test locally, use either :
 ```bash
@@ -495,16 +497,49 @@ The suite also runs on every push and pull request through the [`Tests`](.github
 <!-- LICENSE -->
 ## License
 
-Shield: [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
+[![License: AGPL v3][agpl-shield]][agpl] [![Commercial licence available][commercial-shield]][link-to-commercial-license-file]
 
-This work is licensed under a
-[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa]. The full license description can be read [here][link-to-license-file].
+This project is dual-licensed.
 
-[![CC BY-NC-SA 4.0][cc-by-nc-sa-image]][cc-by-nc-sa]
+**By default, it is free software under the [GNU Affero General Public License version 3][agpl]** (`AGPL-3.0-only`). You may use it, study it, modify it and redistribute it, at no cost and with no formality. The one thing asked in return is reciprocity : if you distribute the program — as-is or modified, as scripts, as an image, or inside a product — the people who receive it must get the corresponding source under those same terms. The full text is in [`LICENSE`][link-to-license-file].
 
-[cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
-[cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
-[cc-by-nc-sa-shield]: https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg
+Running the container is never restricted. On a homelab, on a company's own servers, in production, at any scale : the AGPL asks nothing of you for that, and no permission is needed.
+
+**A [separate commercial licence][link-to-commercial-license-file] is available** for the parties who cannot meet those obligations — typically a vendor embedding the controller in a product whose source cannot be published, or anyone needing a warranty, an indemnity or a support commitment, none of which the AGPL provides. The choice between the two is yours ; see [`LICENSE-COMMERCIAL.md`][link-to-commercial-license-file].
+
+### What you may do
+
+**Using it**
+
+| | Under `AGPL-3.0-only` |
+|---|---|
+| Run it in a homelab | ✅ |
+| Run it at work, in production, at any scale | ✅ no permission needed |
+| Modify it for your own use, without distributing it | ✅ |
+| Redistribute it, modified or not, commercially or not | ✅ provided the corresponding source goes with it |
+| Combine it with GPL / AGPL code | ✅ |
+| Patent licence | ✅ granted (§11) |
+
+**Putting it inside something you ship**
+
+| | What you need |
+|---|---|
+| Ship it in your product, publishing your modified source | ✅ nothing — the AGPL covers it |
+| Ship it in your product, keeping your source closed | 💼 commercial licence |
+| Build a service on it and decline the §13 source obligation | 💼 commercial licence |
+| Get a warranty, an indemnity or a support commitment | 💼 commercial licence |
+
+The short version : **using** it never requires a commercial licence, and never requires permission. Only **conveying** it while withholding the corresponding source does.
+
+Copyright and attribution notices, the licence history and the third-party terms that apply to the published Docker image are recorded in [`NOTICE`][link-to-notice-file].
+
+> **Already running a version from before the change ?** Nothing is withdrawn from you. This project was under CC BY-NC-SA 4.0 until the relicensing tracked in [#304](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/304), and that licence is irrevocable (§2(a)(1)) : the copies obtained under it keep those terms for good. Everything released from that point on comes under the AGPL, which permits more than the old licence did — commercial use included, for everybody — at the cost of the one obligation in the first table, which never triggers unless you redistribute the program.
+
+[agpl]: https://www.gnu.org/licenses/agpl-3.0
+[agpl-shield]: https://img.shields.io/badge/License-AGPL%20v3-blue.svg
+[commercial-shield]: https://img.shields.io/badge/Commercial%20licence-available-brightgreen.svg
 [link-to-license-file]: ./LICENSE
+[link-to-commercial-license-file]: ./LICENSE-COMMERCIAL.md
+[link-to-notice-file]: ./NOTICE
 
 <p align="right">(<a href="#top">back to top</a>)</p>

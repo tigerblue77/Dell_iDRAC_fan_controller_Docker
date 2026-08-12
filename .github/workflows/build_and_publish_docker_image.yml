@@ -286,6 +286,20 @@ jobs:
           # type=semver or type=ref entry ever be added here
           flavor: |
             latest=false
+          # The licences entry is spelled out rather than left to the action.
+          # metadata-action fills org.opencontainers.image.licenses on its own,
+          # from whatever GitHub's licence detection reports for the repository,
+          # and every label it emits is handed to build-push-action as a --label,
+          # which wins over the LABEL lines in the Dockerfile. So the identifier
+          # the released image carries would be GitHub's guess, not the project's
+          # own statement of its terms, and GitHub reports the plain "AGPL-3.0"
+          # rather than the "-only" the project actually chose. Stating it here
+          # is what makes the two agree, and what keeps a licence change a matter
+          # of editing this repository rather than of waiting for a scanner to
+          # notice. See LICENSE, and LICENSE-COMMERCIAL.md for the other arm --
+          # which is deliberately absent, being negotiated per licensee instead
+          # of attached to a public artefact.
+          #
           # base.digest is what "Base image refresh" compares against to tell
           # whether the base moved. image.version is stamped explicitly rather
           # than left to whatever metadata-action derives when two type=raw
@@ -296,6 +310,7 @@ jobs:
           # asks whether the VERSION TAG resolves - so a mislabelled "latest"
           # can cost one redundant nightly rebuild and can never freeze a release
           labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-only
             org.opencontainers.image.base.name=${{ steps.base.outputs.image }}
             org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
             org.opencontainers.image.version=${{ github.ref_name }}

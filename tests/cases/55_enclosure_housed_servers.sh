@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Blades and modular servers : the M1000e and VRTX blades (M600 to M640), the FX2
 # sleds (FC430, FC630, FC830, FC640), the MX7000 sleds (MX740c to MX760c) and the
 # nodes of a C-series chassis (C6320 to C6620).

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Fake sleep used by the integration tests, so that a CHECK_INTERVAL of 60
 # seconds does not make a test take a minute.
 #

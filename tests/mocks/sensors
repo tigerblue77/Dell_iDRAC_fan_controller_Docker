@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Fake lm-sensors "sensors" used by the test suite.
 #
 # It stands in for the utility the controller asks for the CPUs' own "high"

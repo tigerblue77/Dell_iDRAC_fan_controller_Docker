@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Every parameter the container refuses to start on reports the same way. The
 # block form exists because refusing to start is only useful if the reason
 # survives a "docker logs" scroll : the user has to see, without reading the

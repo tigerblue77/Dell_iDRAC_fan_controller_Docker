@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The three boolean parameters, which the controller dispatches by running their
 # value as a command : "if $MONITORING_ONLY_MODE; then". That idiom is exact for
 # the two literals and a trap for everything else, because everything else is a

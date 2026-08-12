@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The two workflows that publish the image are the only ones no pull request
 # ever runs : "Docker image CI" fires on a version tag, "Base image refresh" on
 # a schedule. A mistake in either is found at release time, or the morning

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The controller talks to the iDRAC either through the host's IPMI device
 # ("local" mode, the container runs on the server it cools) or over the network
 # ("lanplus"). Everything else in the script depends on the login string built

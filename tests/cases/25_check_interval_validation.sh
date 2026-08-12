@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # The check interval, the monitoring loop's only pacing mechanism. It is handed
 # straight to sleep, whose exit status the loop cannot observe : it waits on the
 # background timer's PID, and wait returns as soon as the already-dead child is

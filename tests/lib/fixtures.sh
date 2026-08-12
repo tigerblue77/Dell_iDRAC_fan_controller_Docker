@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Builders for the ipmitool outputs the controller parses: the FRU inventory
 # ("ipmitool fru", used to identify the server), the controller's own description
 # ("ipmitool mc info", used to log the iDRAC firmware version) and the temperature

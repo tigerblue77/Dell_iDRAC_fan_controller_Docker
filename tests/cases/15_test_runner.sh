@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Checks on the runner itself. Every other case file trusts it to turn a broken
 # controller into a red run ; these pin the four ways it used to stay green
 # while nothing had been verified. A suite that guards master has to be able to

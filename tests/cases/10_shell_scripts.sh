@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Checks on the scripts themselves, before any behavior is exercised : a syntax
 # error or a file missing from the Docker image breaks every server at once,
 # whatever its generation.

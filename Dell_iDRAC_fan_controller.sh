@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Enable strict bash mode to stop the script if an uninitialized variable is used, if a command fails, or if a command with a pipe fails
 # Not working in some setups : https://github.com/tigerblue77/Dell_iDRAC_fan_controller/issues/48
 # set -euo pipefail
@@ -22,7 +25,7 @@ IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
 IS_FAN_CONTROL_SUPPORTED=true
 HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
 
-# Trap the signals for container exit and run graceful_exit function
+# Catch the stop signals Docker sends so graceful_exit runs before the process ends
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Prepare, format and define initial variables

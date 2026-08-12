@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # In network mode the container keeps running while the server it cools is
 # powered off. Reading temperatures then would be meaningless, and applying a fan
 # control profile would either fail or wake the fans of a sleeping chassis, so

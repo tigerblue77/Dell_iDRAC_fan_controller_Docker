@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Named so the publishing workflows can build from the exact base digest they
 # resolved and recorded as org.opencontainers.image.base.digest, instead of
 # letting this line resolve "latest" a second time. Those two resolutions are
@@ -16,11 +19,34 @@ ARG BASE_IMAGE=ubuntu:latest
 FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.authors="tigerblue77"
+LABEL org.opencontainers.image.title="Dell iDRAC fan controller"
+LABEL org.opencontainers.image.description="Control the fan speed of a Dell PowerEdge server from its CPU temperatures, through IPMI"
+LABEL org.opencontainers.image.url="https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker"
+LABEL org.opencontainers.image.source="https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker"
+LABEL org.opencontainers.image.documentation="https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker#readme"
+# The image is the object form of an AGPL program, so it has to carry both the terms it is conveyed
+# under and a pointer to its source : this label and image.source above are what a scanner reads, and
+# the files copied into /app below are what a human reads. The identifier names the AGPL alone because
+# that is the licence this published image is conveyed under ; the commercial alternative is
+# negotiated per licensee rather than attached here, and no scanner would know what to do with it.
+#
+# These labels hold for anyone running "docker build" on this file, which is what the README tells
+# contributors to do. They do NOT survive a release : docker/metadata-action generates its own set,
+# build_and_publish_docker_image.yml hands it to build-push-action as --label arguments, and those win
+# over a LABEL instruction. That workflow therefore states the licence identifier itself, and the two
+# have to be changed together
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 
 RUN apt-get update
 
 # lm-sensors is used to read the CPUs' own "high" temperature, which is the default CPU_TEMPERATURE_THRESHOLD
 RUN apt-get install ipmitool lm-sensors -y
+
+# AGPL section 4 asks that the notices travel with every copy conveyed, and an image is a copy. They
+# are added before the scripts so that a change to a script does not invalidate their layer
+ADD LICENSE /app/LICENSE
+ADD LICENSE-COMMERCIAL.md /app/LICENSE-COMMERCIAL.md
+ADD NOTICE /app/NOTICE
 
 ADD functions.sh /app/functions.sh
 ADD constants.sh /app/constants.sh
