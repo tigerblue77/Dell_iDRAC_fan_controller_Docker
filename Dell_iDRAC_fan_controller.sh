@@ -25,7 +25,7 @@ IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
 IS_FAN_CONTROL_SUPPORTED=true
 HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
 
-# Trap the signals for container exit and run graceful_exit function
+# Catch the stop signals Docker sends so graceful_exit runs before the process ends
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
 # Prepare, format and define initial variables
