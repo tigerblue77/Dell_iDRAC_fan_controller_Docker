@@ -110,3 +110,38 @@ function test_no_docker_action_list_entry_ends_with_a_comment() {
     fi
   done
 }
+
+function test_every_workflow_carries_the_licence_header() {
+  # NOTICE names the SPDX headers as part of what discharges AGPL 5(a) and 7(b) :
+  # "Keeping this file, the LICENSE file and the SPDX headers in the source files
+  # intact is what satisfies them". That was true of every script and the
+  # Dockerfile, and of none of these files, which are the only programs here that
+  # carried no licence statement at all -- and there is no REUSE.toml or
+  # .reuse/dep5 covering them by fallback either (issue #367).
+  #
+  # Asserted over the directory rather than a list, so that a workflow added
+  # later fails here instead of quietly reopening the gap. That is the shape of
+  # test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to, and for the
+  # same reason : a list somebody has to remember to extend is one that falls
+  # behind
+  local -r WORKFLOW_DIRECTORY="$REPO_ROOT/.github/workflows"
+  if [ ! -d "$WORKFLOW_DIRECTORY" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  local WORKFLOW
+  local UNCOVERED=""
+  for WORKFLOW in "$WORKFLOW_DIRECTORY"/*.yml "$WORKFLOW_DIRECTORY"/*.yaml; do
+    [ -f "$WORKFLOW" ] || continue
+    # Read from the head of the file : a header is only a header where a reader
+    # and a scanner both find it, and one buried below the job it belongs to
+    # discharges nothing
+    if ! head -5 "$WORKFLOW" | grep -q '^# SPDX-License-Identifier: AGPL-3.0-only$'; then
+      UNCOVERED="$UNCOVERED ${WORKFLOW#"$REPO_ROOT"/}"
+    fi
+  done
+
+  assert_empty "$UNCOVERED" \
+    "every workflow has to open with the two SPDX lines the scripts and the Dockerfile carry"
+}

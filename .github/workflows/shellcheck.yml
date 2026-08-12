@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 name: Shellcheck
 
 # Scoped to the scripts nothing else would catch a mistake in, which is two groups and not one.
