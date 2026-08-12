@@ -210,8 +210,14 @@ function footer_for() {
   # page is where a company evaluating the image decides whether it may ship it.
   # One line, outside the cut, is what makes that answerable without leaving
   # Docker Hub -- and what makes the commercial option discoverable by the only
-  # people who need it
-  printf 'Licensed under the GNU AGPL v3, with a commercial licence available for uses it does not fit : %s/LICENSE-COMMERCIAL.md\n\n' \
+  # people who need it.
+  #
+  # Kept to a label rather than a sentence because the page is nearly full : it
+  # renders within a few hundred characters of the limit, and the section next in
+  # line to be dropped is "Parameters", which it cannot do without. The two facts
+  # a reader needs here are the licence name and that a paid alternative exists ;
+  # why it exists is one click away, in the file this links to
+  printf 'GNU AGPL v3, or a commercial licence : %s/LICENSE-COMMERCIAL.md\n\n' \
     "$BLOB_URL"
   printf 'Issues, discussions and the full documentation : %s\n' "$REPOSITORY_URL"
 }
