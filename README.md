@@ -2,6 +2,9 @@
 
 # Dell iDRAC fan controller Docker image
 
+**❤️ This project now has a Sponsor button.** It stays free and open source, and always will.
+If it has made your server(s) quieter, you can [thank me by sponsoring me](https://github.com/sponsors/tigerblue77). Thank you 🙏
+
 ## Table of contents
 <ol>
   <li><a href="#container-console-log-example">Container console log example</a></li>
