@@ -6,23 +6,24 @@ name: Docker Hub description
 # registry that most users reach the image through was the only place the
 # documentation did not exist.
 #
-# This renders README.md into that page every time the README moves, so the two
-# can no longer drift apart.
+# This writes it : a short page pointing at the documentation on GitHub.
 #
-# Separate from "Docker image CI" on purpose : the page describes the repository
-# and not a version, and README changes land on master between releases, where
-# a workflow that fires on a version tag - and ignores README.md when it does -
-# never runs. GitHub Container Registry needs none of this : it reads the README
-# off the repository the image is linked to, through the
-# org.opencontainers.image.source label docker/metadata-action already writes.
+# It used to render README.md down to Docker Hub's 25,000-character limit, and
+# republish on every README change. That is why this workflow is separate from
+# "Docker image CI" - the page describes the repository and not a version, and
+# README changes land on master between releases. The page no longer contains
+# any documentation, so a README change can no longer alter it and no longer
+# needs to republish it ; what remains is the generator and this file.
+#
+# GitHub Container Registry needs none of this : it reads the README off the
+# repository the image is linked to, through the org.opencontainers.image.source
+# label docker/metadata-action already writes.
 
 on:
   push:
     branches: [master]
     paths:
-      - README.md
-      # The renderer and this file : a change to either can change the page
-      # without the README having moved at all
+      # The generator and this file : the page is built entirely from them
       - .github/generate_dockerhub_description.sh
       - .github/workflows/dockerhub_description.yml
   workflow_dispatch:
@@ -58,11 +59,11 @@ jobs:
           FINAL_NAME="${IMAGE_NAME/_Docker/}"
           echo "value=${FINAL_NAME,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Render README.md into the description
+      - name: Build the description
         run: |
           set -euo pipefail
           .github/generate_dockerhub_description.sh > "$RUNNER_TEMP/dockerhub_description.md"
-          echo "Rendered $(wc -c < "$RUNNER_TEMP/dockerhub_description.md") characters" >> "$GITHUB_STEP_SUMMARY"
+          echo "Built $(wc -c < "$RUNNER_TEMP/dockerhub_description.md") characters" >> "$GITHUB_STEP_SUMMARY"
 
       # /!\ DOCKERHUB_TOKEN has to be a personal access token with the
       # "Read, Write, Delete" scope. The narrower "Read & Write" one is enough to
