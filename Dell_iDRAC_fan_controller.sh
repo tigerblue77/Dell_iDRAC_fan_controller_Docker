@@ -563,7 +563,7 @@ while true; do
       #
       # Asked once, on the cycle the verdict is reached, and never again : the answer cannot change while
       # this container runs, and this is the one place that already knows the IPMI command is gone
-      if does_this_server_expose_the_cooling_response_over_redfish; then
+      if does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS"; then
         IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=true
 
         # "Automatic" is Dell's default and is what "enabled" means for a slot : the iDRAC decides that
