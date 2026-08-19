@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Fake perl used by the test suite.
+#
+# The controller's only use of perl is redfish_get(), which runs a script on stdin
+# with the URL and the username in argv. This mock stands in for that one call, so
+# that the Redfish paths can be exercised without an iDRAC and without a network,
+# and it answers on the URL it was given -- which is what lets a test describe a
+# server where one of the two URIs exists and the other does not.
+#
+# The real script is discarded rather than interpreted : what is under test is the
+# controller's reaction to an HTTP status and a body, not perl.
+#
+# Every invocation is appended verbatim to $MOCK_PERL_CALL_LOG (when set), which is
+# how tests assert that the conformant URI is tried first and the legacy one only
+# after a 404.
+#
+# Recognized environment variables:
+#   MOCK_PERL_CALL_LOG                the file invocations are appended to
+#   MOCK_REDFISH_CONFORMANT_STATUS    HTTP status for the DellAttributes URI (default 404)
+#   MOCK_REDFISH_CONFORMANT_BODY      its response body
+#   MOCK_REDFISH_LEGACY_STATUS        HTTP status for the Managers/System.Embedded.1 URI (default 404)
+#   MOCK_REDFISH_LEGACY_BODY          its response body
+#
+# A status of 599 is what HTTP::Tiny reports for a request that never completed --
+# an unreachable iDRAC, a refused connection, a TLS failure -- and tests use it for
+# exactly that.
+
+# Drain the script on stdin so the caller's heredoc never blocks
+cat > /dev/null 2>&1
+
+URL=""
+for ARGUMENT in "$@"; do
+  case "$ARGUMENT" in
+    https://*) URL="$ARGUMENT" ;;
+  esac
+done
+
+if [ -n "$MOCK_PERL_CALL_LOG" ]; then
+  echo "perl $*" >> "$MOCK_PERL_CALL_LOG"
+fi
+
+case "$URL" in
+  *"/Oem/Dell/DellAttributes/System.Embedded.1")
+    echo "${MOCK_REDFISH_CONFORMANT_STATUS:-404}"
+    [ -n "$MOCK_REDFISH_CONFORMANT_BODY" ] && printf '%s\n' "$MOCK_REDFISH_CONFORMANT_BODY"
+    ;;
+  *"/Managers/System.Embedded.1/Attributes")
+    echo "${MOCK_REDFISH_LEGACY_STATUS:-404}"
+    [ -n "$MOCK_REDFISH_LEGACY_BODY" ] && printf '%s\n' "$MOCK_REDFISH_LEGACY_BODY"
+    ;;
+  *)
+    echo "599"
+    ;;
+esac
+
+exit 0

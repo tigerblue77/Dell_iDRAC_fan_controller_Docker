@@ -43,8 +43,13 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 # apt-get install keeps its recommends on purpose - dropping them is a change to what is installed,
 # not to what is shipped, and is argued in its own right rather than smuggled in beside a size fix
 # lm-sensors is used to read the CPUs' own "high" temperature, which is the default CPU_TEMPERATURE_THRESHOLD
+# perl and libio-socket-ssl-perl are the HTTPS client : Redfish is HTTPS and the base image ships no client
+# at all - no curl, no wget, no openssl, no python3. perl and its core HTTP::Tiny already arrive here as a
+# recommends of lm-sensors, so only the TLS layer is really added, about 2 MB against curl's 13.5 MB and its
+# 24 packages of dependency surface. perl is named explicitly all the same rather than relied upon as
+# somebody else's recommends, so that a later --no-install-recommends cannot silently take it away
 RUN apt-get update \
- && apt-get install ipmitool lm-sensors -y \
+ && apt-get install ipmitool lm-sensors perl libio-socket-ssl-perl -y \
  && rm -rf /var/lib/apt/lists/*
 
 # AGPL section 4 asks that the notices travel with every copy conveyed, and an image is a copy. They
