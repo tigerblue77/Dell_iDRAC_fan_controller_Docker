@@ -84,8 +84,8 @@ readonly MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=71
 
 # The cooling response column is sized by its own heading, "Third-party PCIe card Dell default cooling
 # response", which is 51 characters and longer than anything that column ever holds : its widest value
-# is "Refused: this account lacks the privilege level" at 47. So, unlike the profile column, it does not
-# move with the mode.
+# is 47 characters, reached by both "Refused: this account lacks the privilege level" and "Not over IPMI
+# (this server has it over Redfish)". So, unlike the profile column, it does not move with the mode.
 #
 # That sentence used to name a value of 44 that a later status overtook, and nothing went red over it --
 # the suite asserted every status fits, which stayed true, but never that this number is the heading's

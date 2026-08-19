@@ -1377,6 +1377,100 @@ function does_the_command_need_a_higher_privilege_level() {
   [[ "$IPMITOOL_STDERR" == *"rsp=0xd4"* ]]
 }
 
+# Read one Redfish resource from the iDRAC and print what it answered.
+# Usage : redfish_get "<resource path>"
+# Prints : the HTTP status code on its own first line, then the response body
+# Returns : 0 if the request could be attempted at all, 1 if it could not
+#
+# Redfish is HTTPS, a transport this container has never needed before, so three things are stated here
+# rather than left to be discovered.
+#
+# It only exists in NETWORK mode. In local mode the controller reaches the BMC through /dev/ipmi0 and is
+# given no iDRAC address and no credentials at all -- IDRAC_USERNAME and IDRAC_PASSWORD are documented as
+# unused there -- so there is nothing to address an HTTPS request to. That is a property of the mode
+# rather than a failure, which is why callers check it up front instead of discovering it as a timeout.
+#
+# Certificate verification is off, and that is a decision rather than a shortcut. An iDRAC ships a
+# self-signed certificate from the factory and the overwhelming majority are never replaced, so verifying
+# would fail on nearly every server this runs against. The request carries the credentials the IPMI
+# session already carries, to the host it already talks to, on the same management network : it is the
+# same trust decision, taken once more over a different transport. Turning verification on would not make
+# those servers safer, it would make the feature unavailable on them.
+#
+# The password travels in the environment rather than in the argument list, for the reason
+# set_iDRAC_login_string() passes ipmitool -E instead of -P : anything in argv is readable in ps
+function redfish_get() {
+  local -r RESOURCE_PATH="$1"
+
+  if [ "$IDRAC_HOST" == "local" ]; then
+    return 1
+  fi
+
+  perl - "https://${IDRAC_HOST}${RESOURCE_PATH}" "$IDRAC_USERNAME" <<'PERL_SCRIPT'
+use strict;
+use warnings;
+use HTTP::Tiny;
+use MIME::Base64 qw(encode_base64);
+
+my ($url, $username) = @ARGV;
+my $password = defined $ENV{'IPMI_PASSWORD'} ? $ENV{'IPMI_PASSWORD'} : '';
+my $credentials = encode_base64("$username:$password", '');
+
+# HTTP::Tiny reports anything that stopped the request from completing -- an unreachable host, a refused
+# connection, a TLS failure -- as status 599, which is how an iDRAC that never answered stays
+# distinguishable from one that answered 401 or 404
+my $response = HTTP::Tiny->new(timeout => 10, verify_SSL => 0)
+  ->get($url, { headers => { 'Authorization' => "Basic $credentials" } });
+
+print $response->{status}, "\n";
+print $response->{content} if defined $response->{content};
+PERL_SCRIPT
+}
+
+# Whether this server exposes the third-party PCIe card cooling response over Redfish, asked of a server
+# whose BMC has just answered that it does not have the IPMI command for it.
+# Usage : does_this_server_expose_the_cooling_response_over_redfish
+# Returns : 0 if the per-slot control was found, 1 otherwise, and
+#           REDFISH_COOLING_RESPONSE_SLOT_COUNT, how many slots carry it
+#
+# TWO URIs, because neither reaches every iDRAC on its own. That is measured rather than assumed
+# (issue #360) : the conformant one does not exist before iDRAC 9 5.x, where it answers 404 with
+# Base.1.2.ResourceMissingAtURI -- the resource is absent, it is not a refusal, which would be 401 or
+# 403 -- while the legacy one is documented as removed on iDRAC 10. The conformant path is therefore
+# tried first and the legacy one only after a 404. Trying them the other way round would work on every
+# machine reported so far and stop working on the newest hardware Dell sells.
+#
+# WHAT IS LOOKED FOR is the PCIeSlotLFM.<n>.LFMMode instances, and deliberately not the
+# ThermalSettings.1.PCIeSlotLFMSupport flag that appears to exist for exactly this question. That flag
+# reads "Not Supported" on a T550 whose 42 slot instances are populated and one of which is actively
+# configured, and "Supported" on machines with fewer. The instances are evidence ; the flag is not, and
+# believing it would switch this off on servers that support it perfectly well
+function does_this_server_expose_the_cooling_response_over_redfish() {
+  REDFISH_COOLING_RESPONSE_SLOT_COUNT=0
+
+  local REDFISH_ANSWER
+  local REDFISH_STATUS
+
+  local -r CONFORMANT_URI="/redfish/v1/Managers/iDRAC.Embedded.1/Oem/Dell/DellAttributes/System.Embedded.1"
+  local -r LEGACY_URI="/redfish/v1/Managers/System.Embedded.1/Attributes"
+
+  REDFISH_ANSWER=$(redfish_get "$CONFORMANT_URI") || return 1
+  REDFISH_STATUS=$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)
+
+  if [ "$REDFISH_STATUS" == "404" ]; then
+    REDFISH_ANSWER=$(redfish_get "$LEGACY_URI") || return 1
+    REDFISH_STATUS=$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)
+  fi
+
+  if [ "$REDFISH_STATUS" != "200" ]; then
+    return 1
+  fi
+
+  REDFISH_COOLING_RESPONSE_SLOT_COUNT=$(printf '%s\n' "$REDFISH_ANSWER" | grep -o '"PCIeSlotLFM\.[0-9]\+\.LFMMode"' | wc -l)
+
+  [ "$REDFISH_COOLING_RESPONSE_SLOT_COUNT" -gt 0 ]
+}
+
 # Whether this server has been seen to refuse fan control outright, in which case the controller stops
 # sending it. The fan control profile functions at the top of this file are the ones that stop on it ;
 # graceful_exit() and fan_control_comment_clause() only read it to word what they report.

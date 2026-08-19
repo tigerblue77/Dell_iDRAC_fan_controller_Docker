@@ -39,6 +39,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/35_message_output.sh` | How error and warning messages reach the log, read at their junction with the line that follows |
 | `cases/40_temperature_parsing.sh` | Reading the sensors out of `ipmitool sdr type temperature` |
 | `cases/45_idrac_firmware_version.sh` | Reading the iDRAC's own firmware version out of `ipmitool mc info`, and never turning it into a verdict about fan control |
+| `cases/46_redfish_cooling_response.sh` | Asking a server that lost the IPMI cooling response command whether it still exposes the setting over Redfish, and never inventing a capability out of an answer that never came |
 | `cases/50_server_model_detection.sh` | Reading the manufacturer and model out of the FRU inventory, and refusing to run on an unreachable iDRAC |
 | `cases/55_enclosure_housed_servers.sh` | Blades and modular servers, whose fans belong to their enclosure |
 | `cases/60_cpu_topologies.sh` | 1, 2 and 4 socket servers, missing sensors, table layout |

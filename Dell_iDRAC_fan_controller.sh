@@ -547,7 +547,25 @@ while true; do
       # The BMC answered, and answered that it does not have this command. That will not change while
       # this container runs, so stop sending it
       IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=false
-      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+
+      # "Not supported by this server" is true of the COMMAND and can be false of the SERVER. Dell moved
+      # this setting from one global IPMI command to a per-slot Redfish attribute at the 14th generation,
+      # so a machine that has just said it lacks the command may expose the very same control on
+      # PCIeSlotLFM.<n>.LFMMode -- and some owners already drive it there by hand. Reporting the loss
+      # without asking would send them to look at their hardware for something their hardware has, which
+      # is the shape of wrong diagnosis #195 and #347 exist to remove.
+      #
+      # Asked once, on the cycle the verdict is reached, and never again : the answer cannot change while
+      # this container runs, and this is the one place that already knows the IPMI command is gone
+      if does_this_server_expose_the_cooling_response_over_redfish; then
+        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (this server has it over Redfish)"
+        print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, but it does have the setting.
+ Dell moved it at the 14th generation, from one command covering the whole server to one attribute per PCIe slot, reachable over Redfish rather than IPMI. This iDRAC exposes it on $REDFISH_COOLING_RESPONSE_SLOT_COUNT slots.
+ This container cannot drive it there yet, so DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE has no effect on this server. You can set it yourself in the iDRAC web interface, under Configuration > System Settings > Hardware Settings, in Cooling Configuration -- named Fans Configuration on older firmware -- in the PCIe Airflow Settings table, by setting LFM Mode to Disabled on the slot holding the card.
+ Nothing else changes : temperatures keep being read and logged, and the fan control profile is unaffected."
+      else
+        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+      fi
     elif does_the_command_need_a_higher_privilege_level "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
       # The BMC answered too, and answered that this account may not run the command. Also permanent for
       # this run -- the credentials do not change while the container does -- so it stops being sent for
