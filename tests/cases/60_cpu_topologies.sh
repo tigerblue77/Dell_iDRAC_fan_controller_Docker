@@ -666,6 +666,11 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
     "Enabled over Redfish" "Disabled over Redfish" \
     "No third-party PCIe card to apply it to" \
     "Redfish refused this change (see the log)" \
+    "Redfish refused this change, retrying" \
+    "Not over IPMI (Redfish needs network mode)" \
+    "Cannot reach Redfish yet, retrying" \
+    "Redfish could not be reached (see the log)" \
+    "Redfish refused to answer (see the log)" \
     "Redfish (not applied: monitoring only mode)" \
     "Enabled (not applied: monitoring only mode)" \
     "Disabled (not applied: monitoring only mode)"; do

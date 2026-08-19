@@ -1478,17 +1478,22 @@ function does_this_server_expose_the_cooling_response_over_redfish() {
   REDFISH_COOLING_RESPONSE_SLOT_COUNT=0
   REDFISH_ATTRIBUTES_URI=""
   REDFISH_THIRD_PARTY_SLOTS=""
+  # Empty means the request could not be made at all -- local mode, or no client to make it with --
+  # which is a different thing from an iDRAC that answered something
+  REDFISH_LAST_PROBE_STATUS=""
 
   local REDFISH_ANSWER
   local REDFISH_STATUS
 
   REDFISH_ANSWER=$(redfish_get "$REDFISH_CONFORMANT_ATTRIBUTES_URI" "$TIMEOUT_IN_SECONDS") || return 1
   REDFISH_STATUS=$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)
+  REDFISH_LAST_PROBE_STATUS="$REDFISH_STATUS"
   REDFISH_ATTRIBUTES_URI="$REDFISH_CONFORMANT_ATTRIBUTES_URI"
 
   if [ "$REDFISH_STATUS" == "404" ]; then
     REDFISH_ANSWER=$(redfish_get "$REDFISH_LEGACY_ATTRIBUTES_URI" "$TIMEOUT_IN_SECONDS") || return 1
     REDFISH_STATUS=$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)
+    REDFISH_LAST_PROBE_STATUS="$REDFISH_STATUS"
     REDFISH_ATTRIBUTES_URI="$REDFISH_LEGACY_ATTRIBUTES_URI"
   fi
 
@@ -1577,12 +1582,162 @@ function set_the_cooling_response_over_redfish() {
   # Every slot in one PATCH rather than one request each : the iDRAC applies the whole Attributes object
   # in a single configuration job, which is both faster and one job instead of N on a server that may
   # have forty of them
-  local -r PATCH_STATUS=$(redfish_patch "$REDFISH_ATTRIBUTES_URI" "{\"Attributes\":{${ATTRIBUTES_TO_WRITE}}}" "$TIMEOUT_IN_SECONDS" | head -n 1)
+  REDFISH_LAST_WRITE_STATUS=$(redfish_patch "$REDFISH_ATTRIBUTES_URI" "{\"Attributes\":{${ATTRIBUTES_TO_WRITE}}}" "$TIMEOUT_IN_SECONDS" | head -n 1)
 
-  case "$PATCH_STATUS" in
+  case "$REDFISH_LAST_WRITE_STATUS" in
     200|202|204) return 0 ;;
     *) REDFISH_SLOTS_WRITTEN=0 ; return 1 ;;
   esac
+}
+
+# Whether an answer to a Redfish write settles the question for the life of this container, as opposed
+# to describing a moment this iDRAC was having.
+# Usage : is_this_redfish_answer_a_verdict "$REDFISH_LAST_WRITE_STATUS"
+#
+# Only the answers about the REQUEST, the RESOURCE or the CREDENTIALS count, none of which changes while
+# the container runs : 400 a body this iDRAC will reject identically every time, 401 and 403 an account
+# whose rights are what they are, 404 a resource that is not there -- and both URIs have already been
+# tried by then -- and 405 a method this resource does not take.
+#
+# Everything else is a moment rather than a verdict -- 409 a configuration job already running, 500 a
+# busy iDRAC, 503 a full job queue, 599 a request that never completed at all because something between
+# here and the BMC was down. AND SO IS ANY ANSWER NOT LISTED HERE, deliberately : concluding from a code
+# nobody here has seen would be drawing a permanent conclusion from something that was never understood,
+# which is the mistake does_the_server_lack_this_command() is written to avoid on the IPMI side (#376)
+function is_this_redfish_answer_a_verdict() {
+  local -r WRITE_STATUS="$1"
+
+  case "$WRITE_STATUS" in
+    400|401|403|404|405) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Try to put the third-party PCIe card cooling response into the wanted state over Redfish, count the
+# attempt, and decide whether there is any point in another one.
+# Usage : apply_the_cooling_response_over_redfish "<wanted LFM mode>" "<Enabled|Disabled>"
+# Returns : THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS, what the table says
+#           REDFISH_COOLING_RESPONSE_SETTLED, whether this stops being attempted
+#           REDFISH_ATTEMPTS, how many have been made
+#
+# Called on the cycle the IPMI verdict is reached and, while nothing has settled it, on later cycles --
+# which is what spaces the attempts a CHECK_INTERVAL apart instead of looping here and starving the
+# temperature reading this container still does correctly on these servers
+function apply_the_cooling_response_over_redfish() {
+  local -r WANTED_LFM_MODE="$1"
+  local -r REQUESTED_STATE="$2"
+
+  REDFISH_ATTEMPTS=$(( ${REDFISH_ATTEMPTS:-0} + 1 ))
+
+  if set_the_cooling_response_over_redfish "$WANTED_LFM_MODE"; then
+    REDFISH_COOLING_RESPONSE_SETTLED=true
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_STATE over Redfish"
+    print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, so it is being set over Redfish instead.
+ Dell moved it at the 14th generation, from one command covering the whole server to one attribute per PCIe slot. This iDRAC exposes it on $REDFISH_COOLING_RESPONSE_SLOT_COUNT slots, of which $(printf '%s' "$REDFISH_THIRD_PARTY_SLOTS" | wc -w) hold a third-party card : $REDFISH_THIRD_PARTY_SLOTS.
+ Those are the only ones written to, and $REDFISH_SLOTS_WRITTEN of them needed changing. A slot holding a Dell card or no card at all is left alone, its airflow being something Dell has real data for.
+ Written once rather than on every cycle : a Redfish write creates a configuration job on the iDRAC, so re-sending it every CHECK_INTERVAL would fill that queue for nothing."
+    return 0
+  fi
+
+  # An answer about the request or the credentials will not read differently on the next cycle, so
+  # trying again would only make the same wrong request twice more
+  if is_this_redfish_answer_a_verdict "$REDFISH_LAST_WRITE_STATUS"; then
+    REDFISH_COOLING_RESPONSE_SETTLED=true
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish refused this change (see the log)"
+    print_error "This server exposes the third-party PCIe card cooling response over Redfish, but refused to change it with HTTP $REDFISH_LAST_WRITE_STATUS. That answer is about this request or these credentials rather than about a moment the iDRAC was having, so it will not read differently on the next cycle and is not retried. $REDFISH_MANUAL_INSTRUCTIONS"
+    return 1
+  fi
+
+  if [ "$REDFISH_ATTEMPTS" -lt "$MAXIMUM_REDFISH_ATTEMPTS" ]; then
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish refused this change, retrying"
+    return 1
+  fi
+
+  # The span between the first attempt and this one, which is what the reader needs : "three times" says
+  # nothing without the interval they were spread over, and CHECK_INTERVAL ranges from seconds to minutes
+  REDFISH_COOLING_RESPONSE_SETTLED=true
+  local -r REFUSED_OVER_SECONDS=$(( (REDFISH_ATTEMPTS - 1) * ${CHECK_INTERVAL_IN_SECONDS:-0} ))
+  THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish refused this change (see the log)"
+  print_error "This server exposes the third-party PCIe card cooling response over Redfish, but refused to change it $REDFISH_ATTEMPTS times, i.e. over about $REFUSED_OVER_SECONDS seconds. The last answer was HTTP $REDFISH_LAST_WRITE_STATUS. Answers like that one describe a moment rather than a decision -- a busy iDRAC, a full configuration job queue, a request that never completed -- so they were retried rather than concluded from, and $MAXIMUM_REDFISH_ATTEMPTS attempts is where that stops. $REDFISH_MANUAL_INSTRUCTIONS"
+  return 1
+}
+
+# The whole Redfish errand for the cooling response : find out whether the server has the setting, then
+# put it into the wanted state. One entry point, so that the cycle the IPMI verdict is reached and every
+# retry after it take exactly the same path.
+# Usage : attempt_the_redfish_cooling_response "<wanted LFM mode>" "<Enabled|Disabled>"
+#
+# THE PROBE FAILING IS NOT AN ANSWER ABOUT THE SERVER. It was treated as one, and that put back the
+# exact falsehood #374 was written to remove : an iDRAC whose HTTPS stack did not answer at that second
+# -- reachable over IPMI, merely busy or briefly unreachable -- had its server reported as not having a
+# setting it has, for the life of the container. So the same split the write uses applies here : an
+# answer about the resource or the credentials settles it, a moment is tried again (#376)
+function attempt_the_redfish_cooling_response() {
+  local -r WANTED_LFM_MODE="$1"
+  local -r REQUESTED_STATE="$2"
+
+  if does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS"; then
+    IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=true
+
+    if [ -z "$REDFISH_THIRD_PARTY_SLOTS" ]; then
+      # The server has the setting and nothing to apply it to. Saying that is worth more than either
+      # alternative : "not supported" would be false about the machine, and reporting it applied would be
+      # false about what was done
+      REDFISH_COOLING_RESPONSE_SETTLED=true
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="No third-party PCIe card to apply it to"
+      print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, but it does have the setting, on $REDFISH_COOLING_RESPONSE_SLOT_COUNT PCIe slots over Redfish.
+ None of them currently holds a third-party card, so there is nothing to apply DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to. Dell's own airflow data covers the cards that are there.
+ Nothing else changes : temperatures keep being read and logged every cycle."
+      return 0
+    fi
+
+    if "$MONITORING_ONLY_MODE"; then
+      REDFISH_COOLING_RESPONSE_SETTLED=true
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish (not applied: monitoring only mode)"
+      return 0
+    fi
+
+    apply_the_cooling_response_over_redfish "$WANTED_LFM_MODE" "$REQUESTED_STATE"
+    return $?
+  fi
+
+  REDFISH_ATTEMPTS=$(( ${REDFISH_ATTEMPTS:-0} + 1 ))
+
+  # Nothing was asked, because there was nothing to ask. In local mode the controller reaches the BMC
+  # through /dev/ipmi0 and is given no iDRAC address and no credentials, so this says what is true --
+  # the transport is missing -- rather than blaming a server that may well have the setting
+  if [ -z "$REDFISH_LAST_PROBE_STATUS" ]; then
+    REDFISH_COOLING_RESPONSE_SETTLED=true
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (Redfish needs network mode)"
+    print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server. Nothing else changes : temperatures keep being read and logged every cycle."
+    return 1
+  fi
+
+  # Read, understood, and the answer is no : the attribute document is there and carries no per-slot
+  # control at all. That is the one case where naming the server is the honest thing to do
+  if [ "$REDFISH_LAST_PROBE_STATUS" == "200" ] || [ "$REDFISH_LAST_PROBE_STATUS" == "404" ]; then
+    REDFISH_COOLING_RESPONSE_SETTLED=true
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+    return 1
+  fi
+
+  if is_this_redfish_answer_a_verdict "$REDFISH_LAST_PROBE_STATUS"; then
+    REDFISH_COOLING_RESPONSE_SETTLED=true
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish refused to answer (see the log)"
+    print_error "This server does not have the IPMI command for the third-party PCIe card cooling response, and its Redfish interface answered HTTP $REDFISH_LAST_PROBE_STATUS when asked whether it has the setting instead. That answer is about these credentials or this request rather than about a moment the iDRAC was having, so it will not read differently on the next cycle and is not retried. Whether this server has the setting is therefore unknown rather than answered : check that IDRAC_USERNAME may read the iDRAC attributes. $REDFISH_MANUAL_INSTRUCTIONS"
+    return 1
+  fi
+
+  if [ "$REDFISH_ATTEMPTS" -lt "$MAXIMUM_REDFISH_ATTEMPTS" ]; then
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Cannot reach Redfish yet, retrying"
+    return 1
+  fi
+
+  REDFISH_COOLING_RESPONSE_SETTLED=true
+  local -r UNREACHED_OVER_SECONDS=$(( (REDFISH_ATTEMPTS - 1) * ${CHECK_INTERVAL_IN_SECONDS:-0} ))
+  THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish could not be reached (see the log)"
+  print_error "This server does not have the IPMI command for the third-party PCIe card cooling response, and its Redfish interface could not be reached to find out whether it has the setting instead : $REDFISH_ATTEMPTS attempts, i.e. over about $UNREACHED_OVER_SECONDS seconds, the last answering HTTP $REDFISH_LAST_PROBE_STATUS. This says nothing about the server, only about reaching it, so it is deliberately NOT reported as a server without the setting. $REDFISH_MANUAL_INSTRUCTIONS"
+  return 1
 }
 
 # Whether this server has been seen to refuse fan control outright, in which case the controller stops
