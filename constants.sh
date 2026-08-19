@@ -97,3 +97,19 @@ readonly COOLING_RESPONSE_COLUMN_WIDTH=51
 # before killing it outright. Docker's own grace period is 10 seconds by default, so this has to stay
 # comfortably inside it or the container is SIGKILLed as a whole before the supervisor gets to act
 readonly SUPERVISOR_GRACE_PERIOD_IN_SECONDS=3
+
+# The two URIs the System attributes answer on, and the order they are tried in. Neither reaches every
+# iDRAC : the conformant one does not exist before iDRAC 9 5.x, where it answers 404 with
+# Base.1.2.ResourceMissingAtURI -- the resource is absent, which is not a refusal, that would be 401 or
+# 403 -- and the legacy one is documented as removed on iDRAC 10. Both measured on real hardware in
+# issue #360, which is also why the conformant one goes first : trying them the other way round works on
+# every machine reported there and stops working on the newest hardware Dell sells
+readonly REDFISH_CONFORMANT_ATTRIBUTES_URI="/redfish/v1/Managers/iDRAC.Embedded.1/Oem/Dell/DellAttributes/System.Embedded.1"
+readonly REDFISH_LEGACY_ATTRIBUTES_URI="/redfish/v1/Managers/System.Embedded.1/Attributes"
+
+# How long a Redfish request is given. The startup probe can afford to wait ; the one on the way out
+# cannot, because it runs after the fans have been handed back but still inside Docker's ten second
+# stop grace period, and a container killed for taking too long to stop would be a worse outcome than a
+# cooling response left as the user set it
+readonly REDFISH_REQUEST_TIMEOUT_IN_SECONDS=10
+readonly REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS=3

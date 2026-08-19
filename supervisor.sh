@@ -57,7 +57,21 @@ function apply_Dell_default_fan_control_profile_on_behalf_of_the_monitoring_proc
   apply_Dell_default_fan_control_profile
 
   if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then
-    enable_third_party_PCIe_card_Dell_default_cooling_response
+    # This process never watched a single answer, so unlike graceful_exit() it cannot know which
+    # transport the cooling response was driven over. It asks. On a 14th generation server the IPMI
+    # command below is the one the BMC answers "invalid command" to, so sending it would undo nothing
+    # and the per-slot Redfish attribute would be left as the monitoring process set it.
+    #
+    # Both requests use the short timeout and run AFTER the fans have been handed back, so the worst
+    # case is this being cut short by Docker's stop grace period -- which leaves the setting exactly
+    # where it already was, never somewhere new
+    if does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
+      && [ -n "$REDFISH_THIRD_PARTY_SLOTS" ]; then
+      set_the_cooling_response_over_redfish "Automatic" "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
+        || print_error "Could not hand the third-party PCIe card cooling response back to Dell's default over Redfish. It is left as the monitoring process set it, and can be put back in the iDRAC web interface"
+    else
+      enable_third_party_PCIe_card_Dell_default_cooling_response
+    fi
   fi
 }
 

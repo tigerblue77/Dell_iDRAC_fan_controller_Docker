@@ -26,11 +26,15 @@
 function make_redfish_attributes_body() {
   local SLOT_COUNT=2
   local SUPPORT_FLAG="Supported"
+  local THIRD_PARTY_SLOTS=""
+  local LFM_MODE="Automatic"
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --slots) SLOT_COUNT="$2"; shift 2 ;;
       --support) SUPPORT_FLAG="$2"; shift 2 ;;
+      --third-party) THIRD_PARTY_SLOTS=" $2 "; shift 2 ;;
+      --mode) LFM_MODE="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -39,8 +43,14 @@ function make_redfish_attributes_body() {
   BODY+=',"ThermalSettings.1.PCIeSlotLFMSupport":"'"$SUPPORT_FLAG"'"'
 
   local SLOT
+  local CARD
   for ((SLOT = 1; SLOT <= SLOT_COUNT; SLOT++)); do
-    BODY+=',"PCIeSlotLFM.'"$SLOT"'.LFMMode":"Automatic","PCIeSlotLFM.'"$SLOT"'.3rdPartyCard":"No"'
+    if [[ "$THIRD_PARTY_SLOTS" == *" $SLOT "* ]]; then
+      CARD="Yes"
+    else
+      CARD="No"
+    fi
+    BODY+=',"PCIeSlotLFM.'"$SLOT"'.LFMMode":"'"$LFM_MODE"'","PCIeSlotLFM.'"$SLOT"'.3rdPartyCard":"'"$CARD"'"'
   done
 
   BODY+='}}'
@@ -163,4 +173,118 @@ function test_the_support_flag_is_not_believed_over_the_instances_it_contradicts
   assert_equals "0" "$?" \
     "the slot instances are there and configurable, whatever the support flag claims"
   assert_equals "42" "$REDFISH_COOLING_RESPONSE_SLOT_COUNT"
+}
+
+function test_only_the_slots_holding_a_third_party_card_are_written_to() {
+  # A slot answering "No" holds a Dell card, whose airflow Dell has real data for ; one answering "N/A"
+  # is empty. Writing to either would change a setting nobody asked about, on a slot where the cooling
+  # response was never the problem
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 8 --third-party "3 6"
+
+  does_this_server_expose_the_cooling_response_over_redfish
+  set_the_cooling_response_over_redfish "Disabled"
+
+  assert_equals "0" "$?" "the write should succeed"
+  assert_equals "2" "$REDFISH_SLOTS_WRITTEN" "only the two third-party slots needed changing"
+  local -r PATCH_BODY=$(cat "$MOCK_REDFISH_PATCH_LOG")
+  assert_matches "$PATCH_BODY" 'PCIeSlotLFM.3.LFMMode":"Disabled"'
+  assert_matches "$PATCH_BODY" 'PCIeSlotLFM.6.LFMMode":"Disabled"'
+  assert_not_contains "$PATCH_BODY" 'PCIeSlotLFM.1.LFMMode' \
+    "slot 1 holds a Dell card and must be left alone"
+}
+
+function test_every_slot_is_written_in_one_request_rather_than_one_each() {
+  # A Redfish write creates a configuration job on the iDRAC. Forty slots must not become forty jobs
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 40 --third-party "2 5 9 34"
+
+  does_this_server_expose_the_cooling_response_over_redfish
+  set_the_cooling_response_over_redfish "Disabled"
+
+  assert_equals "4" "$REDFISH_SLOTS_WRITTEN"
+  assert_equals "1" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "one PATCH carrying every slot, not one per slot"
+}
+
+function test_a_slot_already_in_the_wanted_state_is_not_written_again() {
+  # The IPMI command is re-sent every cycle because it is stateless and cheap. This is neither, and a
+  # human who sets a slot back by hand should not be fought over it every five seconds
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2" --mode "Disabled"
+
+  does_this_server_expose_the_cooling_response_over_redfish
+  set_the_cooling_response_over_redfish "Disabled"
+
+  assert_equals "0" "$?" "already being in the wanted state is a success, not a failure"
+  assert_equals "0" "$REDFISH_SLOTS_WRITTEN"
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" "nothing needed changing, so nothing was sent"
+}
+
+function test_a_server_with_no_third_party_card_is_written_to_at_all() {
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 6
+
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  assert_equals "" "$REDFISH_THIRD_PARTY_SLOTS" "no slot holds a third-party card"
+
+  set_the_cooling_response_over_redfish "Disabled"
+
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "there is nothing this parameter is about on such a server"
+}
+
+function test_a_refused_write_is_never_reported_as_applied() {
+  local STATUS
+  for STATUS in "400" "401" "403" "500" "599"; do
+    export MOCK_REDFISH_PATCH_STATUS="$STATUS"
+    simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+
+    does_this_server_expose_the_cooling_response_over_redfish
+    set_the_cooling_response_over_redfish "Disabled"
+
+    assert_equals "1" "$?" "HTTP $STATUS is a refusal, and the setting is left where it was"
+    assert_equals "0" "$REDFISH_SLOTS_WRITTEN" \
+      "nothing may be counted as written when the request was refused"
+  done
+}
+
+function test_handing_it_back_asks_for_dells_default_rather_than_what_was_found() {
+  # KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false means "put Dell's default back", not
+  # "put back what I found" -- which is exactly what the IPMI path has always done. Keeping one meaning
+  # across both transports is also what lets the supervisor do this without remembering anything
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2" --mode "Disabled"
+
+  does_this_server_expose_the_cooling_response_over_redfish
+  set_the_cooling_response_over_redfish "Automatic"
+
+  assert_matches "$(cat "$MOCK_REDFISH_PATCH_LOG")" 'PCIeSlotLFM.2.LFMMode":"Automatic"' \
+    "the slot goes back to Dell's default"
+}
+
+function test_the_digit_inside_the_attribute_name_is_never_read_as_a_slot_number() {
+  # "PCIeSlotLFM.10.3rdPartyCard" carries two numbers, and only the first is a slot :
+  # "3rdPartyCard" begins with a digit of its own. Collecting digits out of the matched
+  # attribute name reads as two slots, 10 and 3, and the setting then goes to slot 3 --
+  # somebody else's card, on a server where nothing asked for it
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 12 --third-party "10"
+
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  assert_equals "10 " "$REDFISH_THIRD_PARTY_SLOTS" "one slot holds a third-party card, and it is slot 10"
+
+  set_the_cooling_response_over_redfish "Disabled"
+
+  assert_equals "1" "$REDFISH_SLOTS_WRITTEN"
+  assert_not_contains "$(cat "$MOCK_REDFISH_PATCH_LOG")" 'PCIeSlotLFM.3.LFMMode' \
+    "slot 3 was never asked for and must not be touched"
 }

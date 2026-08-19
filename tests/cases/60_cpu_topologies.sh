@@ -663,6 +663,10 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
   for COOLING_RESPONSE_STATUS in "Enabled" "Disabled" "Not supported by this server" \
     "Could not be applied on this cycle" "Refused: this account lacks the privilege level" \
     "Not over IPMI (this server has it over Redfish)" \
+    "Enabled over Redfish" "Disabled over Redfish" \
+    "No third-party PCIe card to apply it to" \
+    "Redfish refused this change (see the log)" \
+    "Redfish (not applied: monitoring only mode)" \
     "Enabled (not applied: monitoring only mode)" \
     "Disabled (not applied: monitoring only mode)"; do
     (( ${#COOLING_RESPONSE_STATUS} > WIDEST_COOLING_RESPONSE_WIDTH )) && WIDEST_COOLING_RESPONSE_WIDTH=${#COOLING_RESPONSE_STATUS}
