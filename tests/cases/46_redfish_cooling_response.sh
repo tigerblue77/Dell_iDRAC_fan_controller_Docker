@@ -62,6 +62,10 @@ function simulate_a_server_exposing_the_cooling_response_over_redfish() {
   export MOCK_REDFISH_CONFORMANT_STATUS="200"
   export MOCK_REDFISH_CONFORMANT_BODY
   MOCK_REDFISH_CONFORMANT_BODY=$(make_redfish_attributes_body "$@")
+  # A server that remembers what it was told, which is what makes "written once"
+  # and "put back on the way out" mean anything
+  export MOCK_REDFISH_STATE_FILE="$TEST_TEMPORARY_DIRECTORY/redfish_state"
+  : > "$MOCK_REDFISH_STATE_FILE"
 }
 
 function test_a_server_that_lost_the_command_but_kept_the_setting_is_not_told_it_lacks_it() {
@@ -287,4 +291,54 @@ function test_the_digit_inside_the_attribute_name_is_never_read_as_a_slot_number
   assert_equals "1" "$REDFISH_SLOTS_WRITTEN"
   assert_not_contains "$(cat "$MOCK_REDFISH_PATCH_LOG")" 'PCIeSlotLFM.3.LFMMode' \
     "slot 3 was never asked for and must not be touched"
+}
+
+# The cases above exercise the functions directly. These two run the whole
+# controller, because the wiring between the IPMI verdict and the Redfish write is
+# where a mistake would not show up anywhere else : every unit case here would stay
+# green on a branch that never reached this code at all.
+
+function test_the_controller_applies_the_setting_over_redfish_and_says_so_in_the_table() {
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_server "PowerEdge R6515" --cpus 1
+  # The 14th generation answer : the BMC has the fan control commands but not this one
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 8 --third-party "4"
+
+  local -r OUTPUT=$(run_controller "" 3)
+
+  assert_matches "$OUTPUT" "fan control profile.*Disabled over Redfish" \
+    "the table must report the transport the setting was actually applied over"
+  assert_not_contains "$OUTPUT" "Not supported by this server" \
+    "the server has the setting, so it must never be told it does not"
+  assert_matches "$(cat "$MOCK_REDFISH_PATCH_LOG")" 'PCIeSlotLFM.4.LFMMode":"Disabled"' \
+    "the slot holding the third-party card is the one written to"
+}
+
+function test_stopping_the_container_hands_the_setting_back_over_redfish_and_not_over_ipmi() {
+  # graceful_exit() has always re-sent the IPMI command on the way out. On a server
+  # that answered "invalid command" to it, doing that again would undo nothing and
+  # leave the slot exactly as this container set it -- which is the whole failure
+  # this branch exists to stop. The hand-back has to follow the transport that took
+  # the setting, not the one the code was written for
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_server "PowerEdge R6515" --cpus 1
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 8 --third-party "4"
+
+  run_controller "" 3 > /dev/null
+
+  assert_matches "$(tail -n 1 "$MOCK_REDFISH_PATCH_LOG")" 'PCIeSlotLFM.4.LFMMode":"Automatic"' \
+    "stopping the container puts Dell's default back on the slot it changed"
+  # One call on the first cycle, and none on the way out : the IPMI hand-back would
+  # be sent to a command this BMC has already said it does not have
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "the dead IPMI command must not be re-sent on exit once Redfish is driving this"
 }
