@@ -24,6 +24,16 @@
 #   MOCK_REDFISH_CONFORMANT_BODY      its response body
 #   MOCK_REDFISH_LEGACY_STATUS        HTTP status for the Managers/System.Embedded.1 URI (default 404)
 #   MOCK_REDFISH_LEGACY_BODY          its response body
+#   MOCK_REDFISH_PATCH_STATUS         HTTP status every PATCH answers (default 200)
+#   MOCK_REDFISH_PATCH_LOG            the file PATCH bodies are appended to, one per line, which is how
+#                                     tests assert exactly which slots were written and to what
+#   MOCK_REDFISH_STATE_FILE           when set, makes this mock REMEMBER what was written : every
+#                                     LFMMode a PATCH carries is recorded here and applied over the
+#                                     configured body on later GETs. Without it the mock answers the
+#                                     same document however often it is written to, which reads as a
+#                                     server that silently discards changes -- and would let "the
+#                                     setting is put back on the way out" pass for the wrong reason,
+#                                     the value having never appeared to change in the first place
 #
 # A status of 599 is what HTTP::Tiny reports for a request that never completed --
 # an unreachable iDRAC, a refused connection, a TLS failure -- and tests use it for
@@ -33,9 +43,11 @@
 cat > /dev/null 2>&1
 
 URL=""
+HTTP_METHOD="GET"
 for ARGUMENT in "$@"; do
   case "$ARGUMENT" in
     https://*) URL="$ARGUMENT" ;;
+    GET|PATCH|POST|PUT) HTTP_METHOD="$ARGUMENT" ;;
   esac
 done
 
@@ -43,14 +55,51 @@ if [ -n "$MOCK_PERL_CALL_LOG" ]; then
   echo "perl $*" >> "$MOCK_PERL_CALL_LOG"
 fi
 
+# Print a configured body with everything a PATCH has already changed applied over it
+function emit_body() {
+  local BODY="$1"
+
+  if [ -n "$MOCK_REDFISH_STATE_FILE" ] && [ -s "$MOCK_REDFISH_STATE_FILE" ]; then
+    local ATTRIBUTE
+    local VALUE
+    local ESCAPED_ATTRIBUTE
+    # "|| [ -n ... ]" so a last line without a trailing newline is still read : read returns
+    # non-zero at that EOF, and a plain while loop drops the very record it was given
+    while read -r ATTRIBUTE VALUE || [ -n "$ATTRIBUTE" ]; do
+      [ -z "$ATTRIBUTE" ] && continue
+      # The attribute names are full of dots, which a regex would otherwise take as "any character"
+      ESCAPED_ATTRIBUTE=$(printf '%s' "$ATTRIBUTE" | sed 's/\./\\./g')
+      BODY=$(printf '%s' "$BODY" | sed "s/\"$ESCAPED_ATTRIBUTE\":\"[^\"]*\"/\"$ATTRIBUTE\":\"$VALUE\"/g")
+    done < "$MOCK_REDFISH_STATE_FILE"
+  fi
+
+  printf '%s\n' "$BODY"
+}
+
+if [ "$HTTP_METHOD" == "PATCH" ]; then
+  if [ -n "$MOCK_REDFISH_PATCH_LOG" ]; then
+    printf '%s\n' "$REDFISH_REQUEST_BODY" >> "$MOCK_REDFISH_PATCH_LOG"
+  fi
+
+  # A refused write changes nothing, here as on a real iDRAC
+  if [ -n "$MOCK_REDFISH_STATE_FILE" ] && [ "${MOCK_REDFISH_PATCH_STATUS:-200}" -lt 300 ] 2>/dev/null; then
+    printf '%s\n' "$REDFISH_REQUEST_BODY" | tr ',' '\n' \
+      | sed -n 's/.*"\(PCIeSlotLFM\.[0-9]\+\.LFMMode\)":"\([^"]*\)".*/\1 \2/p' \
+      >> "$MOCK_REDFISH_STATE_FILE"
+  fi
+
+  echo "${MOCK_REDFISH_PATCH_STATUS:-200}"
+  exit 0
+fi
+
 case "$URL" in
   *"/Oem/Dell/DellAttributes/System.Embedded.1")
     echo "${MOCK_REDFISH_CONFORMANT_STATUS:-404}"
-    [ -n "$MOCK_REDFISH_CONFORMANT_BODY" ] && printf '%s\n' "$MOCK_REDFISH_CONFORMANT_BODY"
+    [ -n "$MOCK_REDFISH_CONFORMANT_BODY" ] && emit_body "$MOCK_REDFISH_CONFORMANT_BODY"
     ;;
   *"/Managers/System.Embedded.1/Attributes")
     echo "${MOCK_REDFISH_LEGACY_STATUS:-404}"
-    [ -n "$MOCK_REDFISH_LEGACY_BODY" ] && printf '%s\n' "$MOCK_REDFISH_LEGACY_BODY"
+    [ -n "$MOCK_REDFISH_LEGACY_BODY" ] && emit_body "$MOCK_REDFISH_LEGACY_BODY"
     ;;
   *)
     echo "599"

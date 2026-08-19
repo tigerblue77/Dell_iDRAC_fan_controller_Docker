@@ -1399,32 +1399,59 @@ function does_the_command_need_a_higher_privilege_level() {
 #
 # The password travels in the environment rather than in the argument list, for the reason
 # set_iDRAC_login_string() passes ipmitool -E instead of -P : anything in argv is readable in ps
-function redfish_get() {
-  local -r RESOURCE_PATH="$1"
+function redfish_request() {
+  local -r HTTP_METHOD="$1"
+  local -r RESOURCE_PATH="$2"
+  local -r REQUEST_BODY="${3:-}"
+  local -r TIMEOUT_IN_SECONDS="${4:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
 
   if [ "$IDRAC_HOST" == "local" ]; then
     return 1
   fi
 
-  perl - "https://${IDRAC_HOST}${RESOURCE_PATH}" "$IDRAC_USERNAME" <<'PERL_SCRIPT'
+  REDFISH_REQUEST_BODY="$REQUEST_BODY" perl - "https://${IDRAC_HOST}${RESOURCE_PATH}" "$IDRAC_USERNAME" "$HTTP_METHOD" "$TIMEOUT_IN_SECONDS" <<'PERL_SCRIPT'
 use strict;
 use warnings;
 use HTTP::Tiny;
 use MIME::Base64 qw(encode_base64);
 
-my ($url, $username) = @ARGV;
+my ($url, $username, $method, $timeout) = @ARGV;
 my $password = defined $ENV{'IPMI_PASSWORD'} ? $ENV{'IPMI_PASSWORD'} : '';
+my $body     = defined $ENV{'REDFISH_REQUEST_BODY'} ? $ENV{'REDFISH_REQUEST_BODY'} : '';
 my $credentials = encode_base64("$username:$password", '');
+
+my %options = (headers => { 'Authorization' => "Basic $credentials" });
+if (length $body) {
+  $options{'content'} = $body;
+  $options{'headers'}{'Content-Type'} = 'application/json';
+}
 
 # HTTP::Tiny reports anything that stopped the request from completing -- an unreachable host, a refused
 # connection, a TLS failure -- as status 599, which is how an iDRAC that never answered stays
 # distinguishable from one that answered 401 or 404
-my $response = HTTP::Tiny->new(timeout => 10, verify_SSL => 0)
-  ->get($url, { headers => { 'Authorization' => "Basic $credentials" } });
+my $response = HTTP::Tiny->new(timeout => $timeout, verify_SSL => 0)
+  ->request($method, $url, \%options);
 
 print $response->{status}, "\n";
 print $response->{content} if defined $response->{content};
 PERL_SCRIPT
+}
+
+# Read one Redfish resource. See redfish_request() above.
+# Usage : redfish_get "<resource path>" ["<timeout>"]
+function redfish_get() {
+  redfish_request "GET" "$1" "" "${2:-}"
+}
+
+# Change Redfish attributes. See redfish_request() above.
+# Usage : redfish_patch "<resource path>" "<json body>" ["<timeout>"]
+#
+# This is the only place in this container that writes anything over anything other than IPMI, and it is
+# reached only for the third-party PCIe card cooling response : never for a fan speed, never for a
+# thermal profile, and never for a minimum fan speed, none of which Redfish could make this container's
+# job possible anyway (issue #360)
+function redfish_patch() {
+  redfish_request "PATCH" "$1" "$2" "${3:-}"
 }
 
 # Whether this server exposes the third-party PCIe card cooling response over Redfish, asked of a server
@@ -1446,29 +1473,116 @@ PERL_SCRIPT
 # configured, and "Supported" on machines with fewer. The instances are evidence ; the flag is not, and
 # believing it would switch this off on servers that support it perfectly well
 function does_this_server_expose_the_cooling_response_over_redfish() {
+  local -r TIMEOUT_IN_SECONDS="${1:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
+
   REDFISH_COOLING_RESPONSE_SLOT_COUNT=0
+  REDFISH_ATTRIBUTES_URI=""
+  REDFISH_THIRD_PARTY_SLOTS=""
 
   local REDFISH_ANSWER
   local REDFISH_STATUS
 
-  local -r CONFORMANT_URI="/redfish/v1/Managers/iDRAC.Embedded.1/Oem/Dell/DellAttributes/System.Embedded.1"
-  local -r LEGACY_URI="/redfish/v1/Managers/System.Embedded.1/Attributes"
-
-  REDFISH_ANSWER=$(redfish_get "$CONFORMANT_URI") || return 1
+  REDFISH_ANSWER=$(redfish_get "$REDFISH_CONFORMANT_ATTRIBUTES_URI" "$TIMEOUT_IN_SECONDS") || return 1
   REDFISH_STATUS=$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)
+  REDFISH_ATTRIBUTES_URI="$REDFISH_CONFORMANT_ATTRIBUTES_URI"
 
   if [ "$REDFISH_STATUS" == "404" ]; then
-    REDFISH_ANSWER=$(redfish_get "$LEGACY_URI") || return 1
+    REDFISH_ANSWER=$(redfish_get "$REDFISH_LEGACY_ATTRIBUTES_URI" "$TIMEOUT_IN_SECONDS") || return 1
     REDFISH_STATUS=$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)
+    REDFISH_ATTRIBUTES_URI="$REDFISH_LEGACY_ATTRIBUTES_URI"
   fi
 
   if [ "$REDFISH_STATUS" != "200" ]; then
+    REDFISH_ATTRIBUTES_URI=""
     return 1
   fi
 
   REDFISH_COOLING_RESPONSE_SLOT_COUNT=$(printf '%s\n' "$REDFISH_ANSWER" | grep -o '"PCIeSlotLFM\.[0-9]\+\.LFMMode"' | wc -l)
 
+  # The slots that actually hold a third-party card are the only ones this parameter is about, and the
+  # only ones worth writing to. A slot answering "No" holds a Dell card, whose airflow Dell has real data
+  # for ; one answering "N/A" is empty. Writing to either would change a setting nobody asked about, on a
+  # slot where the cooling response was never the problem
+  # The slot number is taken with sed rather than by grepping digits out of the matched attribute name :
+  # "3rdPartyCard" begins with a digit of its own, so "PCIeSlotLFM.6.3rdPartyCard" yields 6 AND 3 to any
+  # pattern that simply collects numbers. That reads as twice the slots there are, half of them wrong,
+  # and would have written the setting to slots holding somebody else's card
+  REDFISH_THIRD_PARTY_SLOTS=$(printf '%s\n' "$REDFISH_ANSWER" | tr ',' '\n' \
+    | sed -n 's/^[^"]*"PCIeSlotLFM\.\([0-9]\+\)\.3rdPartyCard":"Yes".*$/\1/p' \
+    | sort -n -u | tr '\n' ' ')
+
   [ "$REDFISH_COOLING_RESPONSE_SLOT_COUNT" -gt 0 ]
+}
+
+# Read the LFM mode one PCIe slot is currently in.
+# Usage : read_the_lfm_mode_of_slot "$REDFISH_BODY" "$SLOT_NUMBER"
+function read_the_lfm_mode_of_slot() {
+  local -r REDFISH_BODY="$1"
+  local -r SLOT_NUMBER="$2"
+
+  printf '%s\n' "$REDFISH_BODY" | tr ',' '\n' \
+    | grep -o "\"PCIeSlotLFM\.${SLOT_NUMBER}\.LFMMode\":\"[^\"]*\"" \
+    | head -n 1 | sed 's/.*:"//; s/"$//'
+}
+
+# Put the third-party PCIe card cooling response into the wanted state over Redfish, on the slots that
+# hold such a card.
+# Usage : set_the_cooling_response_over_redfish "Disabled"|"Automatic"
+# Returns : 0 if every slot that needed changing was changed, 1 otherwise, and
+#           REDFISH_SLOTS_WRITTEN, how many were
+#
+# "Automatic" is Dell's default and is what "enabled" means here : the iDRAC decides that slot's airflow
+# for itself, which is exactly the behaviour DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE
+# exists to switch off. Restoring it is therefore applying Dell's default rather than putting back
+# whatever was there before -- the same thing enable_third_party_PCIe_card_Dell_default_cooling_response()
+# does over IPMI, so KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT keeps one meaning on both
+# transports. It also means no per-slot state has to be carried anywhere, which is what lets the
+# supervisor hand this back on a path where it remembers nothing.
+#
+# WRITTEN ONCE AND ONLY WHERE NEEDED, unlike the IPMI command that is re-sent every cycle. A Redfish
+# PATCH is not a free stateless command : each one creates a configuration job on the iDRAC, so
+# re-sending it every CHECK_INTERVAL would fill that queue for no gain. The slots already in the wanted
+# state are skipped, and a human who changes one back is not fought over it every five seconds
+function set_the_cooling_response_over_redfish() {
+  local -r WANTED_LFM_MODE="$1"
+  local -r TIMEOUT_IN_SECONDS="${2:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
+
+  REDFISH_SLOTS_WRITTEN=0
+
+  if [ -z "$REDFISH_ATTRIBUTES_URI" ] || [ -z "$REDFISH_THIRD_PARTY_SLOTS" ]; then
+    return 0
+  fi
+
+  local REDFISH_ANSWER
+  REDFISH_ANSWER=$(redfish_get "$REDFISH_ATTRIBUTES_URI" "$TIMEOUT_IN_SECONDS") || return 1
+  if [ "$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)" != "200" ]; then
+    return 1
+  fi
+
+  local ATTRIBUTES_TO_WRITE=""
+  local SLOT
+  for SLOT in $REDFISH_THIRD_PARTY_SLOTS; do
+    if [ "$(read_the_lfm_mode_of_slot "$REDFISH_ANSWER" "$SLOT")" == "$WANTED_LFM_MODE" ]; then
+      continue
+    fi
+    [ -n "$ATTRIBUTES_TO_WRITE" ] && ATTRIBUTES_TO_WRITE+=","
+    ATTRIBUTES_TO_WRITE+="\"PCIeSlotLFM.${SLOT}.LFMMode\":\"${WANTED_LFM_MODE}\""
+    REDFISH_SLOTS_WRITTEN=$((REDFISH_SLOTS_WRITTEN + 1))
+  done
+
+  if [ -z "$ATTRIBUTES_TO_WRITE" ]; then
+    return 0
+  fi
+
+  # Every slot in one PATCH rather than one request each : the iDRAC applies the whole Attributes object
+  # in a single configuration job, which is both faster and one job instead of N on a server that may
+  # have forty of them
+  local -r PATCH_STATUS=$(redfish_patch "$REDFISH_ATTRIBUTES_URI" "{\"Attributes\":{${ATTRIBUTES_TO_WRITE}}}" "$TIMEOUT_IN_SECONDS" | head -n 1)
+
+  case "$PATCH_STATUS" in
+    200|202|204) return 0 ;;
+    *) REDFISH_SLOTS_WRITTEN=0 ; return 1 ;;
+  esac
 }
 
 # Whether this server has been seen to refuse fan control outright, in which case the controller stops
@@ -1531,7 +1645,18 @@ function graceful_exit() {
   # would leave the server on the user's setting for good. One refused command on the way out costs
   # nothing; a setting left behind on a server nothing is monitoring any more does
   if ! "$KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT"; then
-    enable_third_party_PCIe_card_Dell_default_cooling_response
+    # Over whichever transport it was driven. On a 14th generation server the IPMI command below is the
+    # one the BMC answered "invalid command" to on the first cycle, so sending it again would undo
+    # nothing : what has to be put back is the per-slot Redfish attribute this container wrote. The
+    # short timeout is the point -- this runs after the fans are already safe, but still inside Docker's
+    # ten second stop grace period, and a container killed for taking too long to stop would be worse
+    # than a cooling response left as the user set it
+    if "${IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH:-false}"; then
+      set_the_cooling_response_over_redfish "Automatic" "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
+        || print_error "Could not hand the third-party PCIe card cooling response back to Dell's default over Redfish. It is left as this container set it, and can be put back in the iDRAC web interface"
+    else
+      enable_third_party_PCIe_card_Dell_default_cooling_response
+    fi
   fi
 
   # Nothing was handed back on a server that never let anything be taken, and saying otherwise would be

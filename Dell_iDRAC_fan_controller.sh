@@ -15,6 +15,12 @@ source constants.sh
 # guessing from the model name
 IS_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_SUPPORTED=true
 
+# Whether this container is driving the third-party PCIe card cooling response over Redfish rather than
+# over IPMI. Read by graceful_exit(), which has to hand it back over the transport that took it : on a
+# 14th generation server the IPMI command is the one the BMC already answered "invalid command" to, so
+# sending it on the way out would undo nothing
+IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=false
+
 # The fan control commands themselves are found out the same way, and for the same reason : Dell removed
 # them from the 14th generation on, an iDRAC 9 refusing them from firmware 3.34.34.34 onwards, and no
 # model name says which firmware a server is running. Without this the controller kept sending them and
@@ -557,12 +563,40 @@ while true; do
       #
       # Asked once, on the cycle the verdict is reached, and never again : the answer cannot change while
       # this container runs, and this is the one place that already knows the IPMI command is gone
-      if does_this_server_expose_the_cooling_response_over_redfish; then
-        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (this server has it over Redfish)"
-        print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, but it does have the setting.
- Dell moved it at the 14th generation, from one command covering the whole server to one attribute per PCIe slot, reachable over Redfish rather than IPMI. This iDRAC exposes it on $REDFISH_COOLING_RESPONSE_SLOT_COUNT slots.
- This container cannot drive it there yet, so DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE has no effect on this server. You can set it yourself in the iDRAC web interface, under Configuration > System Settings > Hardware Settings, in Cooling Configuration -- named Fans Configuration on older firmware -- in the PCIe Airflow Settings table, by setting LFM Mode to Disabled on the slot holding the card.
- Nothing else changes : temperatures keep being read and logged, and the fan control profile is unaffected."
+      if does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS"; then
+        IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=true
+
+        # "Automatic" is Dell's default and is what "enabled" means for a slot : the iDRAC decides that
+        # slot's airflow for itself, which is the behaviour this parameter exists to switch off
+        if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
+          WANTED_LFM_MODE="Disabled"
+        else
+          WANTED_LFM_MODE="Automatic"
+        fi
+
+        if [ -z "$REDFISH_THIRD_PARTY_SLOTS" ]; then
+          # The server has the setting and nothing to apply it to. Saying that is worth more than either
+          # of the alternatives : "not supported" would be false about the machine, and reporting it
+          # applied would be false about what was done
+          THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="No third-party PCIe card to apply it to"
+          print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, but it does have the setting, on $REDFISH_COOLING_RESPONSE_SLOT_COUNT PCIe slots over Redfish.
+ None of them currently holds a third-party card, so there is nothing to apply DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to. Dell's own airflow data covers the cards that are there.
+ Nothing else changes : temperatures keep being read and logged every cycle."
+        elif "$MONITORING_ONLY_MODE"; then
+          THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish (not applied: monitoring only mode)"
+        elif set_the_cooling_response_over_redfish "$WANTED_LFM_MODE"; then
+          THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE over Redfish"
+          print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, so it is being set over Redfish instead.
+ Dell moved it at the 14th generation, from one command covering the whole server to one attribute per PCIe slot. This iDRAC exposes it on $REDFISH_COOLING_RESPONSE_SLOT_COUNT slots, of which $(printf '%s' "$REDFISH_THIRD_PARTY_SLOTS" | wc -w) hold a third-party card : $REDFISH_THIRD_PARTY_SLOTS.
+ Those are the only ones written to, and $REDFISH_SLOTS_WRITTEN of them needed changing. A slot holding a Dell card or no card at all is left alone, its airflow being something Dell has real data for.
+ Written once rather than on every cycle : a Redfish write creates a configuration job on the iDRAC, so re-sending it every CHECK_INTERVAL would fill that queue for nothing."
+        else
+          # Reached the server, read its attributes, and could not write them. Naming it as a Redfish
+          # failure rather than an unsupported server is the whole point : the setting is there, and
+          # something about this request was refused
+          THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish refused this change (see the log)"
+          print_error "This server exposes the third-party PCIe card cooling response over Redfish, but refused to change it. The setting is left exactly as it was, and can be set in the iDRAC web interface under Configuration > System Settings > Hardware Settings, in Cooling Configuration -- named Fans Configuration on older firmware -- by setting LFM Mode on the slot holding the card. Fan control and temperature monitoring are unaffected."
+        fi
       else
         THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
       fi
