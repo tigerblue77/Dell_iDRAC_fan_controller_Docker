@@ -114,8 +114,9 @@ readonly REDFISH_LEGACY_ATTRIBUTES_URI="/redfish/v1/Managers/System.Embedded.1/A
 readonly REDFISH_REQUEST_TIMEOUT_IN_SECONDS=10
 readonly REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS=3
 
-# How many times a refused Redfish write is attempted before the container stops trying, counting the
-# first attempt. Deliberately not a parameter : it is an internal robustness detail rather than
+# How many times reaching the cooling response over Redfish is attempted before the container stops
+# trying, counting the first attempt. It covers the whole errand -- reading the attributes and writing
+# them -- because a reader does not care which half of it an unreachable iDRAC stopped. Deliberately not a parameter : it is an internal robustness detail rather than
 # something to tune, and a third failure-handling knob beside MAXIMUM_CONSECUTIVE_IPMI_FAILURES and
 # MAXIMUM_IPMI_UNREACHABLE_DURATION would cost every reader more than it buys the few who reach this
 # path at all (#376).
@@ -123,7 +124,7 @@ readonly REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS=3
 # The attempts are a CHECK_INTERVAL apart rather than in a loop, so that the cycle keeps reading and
 # logging temperatures -- the one thing this container still does correctly on these servers -- and so
 # that a busy iDRAC is given time to stop being busy, which a tight loop would not
-readonly MAXIMUM_REDFISH_WRITE_ATTEMPTS=3
+readonly MAXIMUM_REDFISH_ATTEMPTS=3
 
 # Said identically wherever a Redfish write could not be made, so that the reader is never given two
 # slightly different descriptions of the same three clicks

@@ -23,10 +23,16 @@ IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=false
 
 # Whether the Redfish cooling response has stopped being attempted, and how many attempts it took. A
 # refusal describing a moment the iDRAC was having -- busy, queued, unreachable -- is retried on later
-# cycles up to MAXIMUM_REDFISH_WRITE_ATTEMPTS, where a refusal about the request or the credentials
+# cycles up to MAXIMUM_REDFISH_ATTEMPTS, where a refusal about the request or the credentials
 # settles it on the first answer (#376)
 REDFISH_COOLING_RESPONSE_SETTLED=false
-REDFISH_WRITE_ATTEMPTS=0
+REDFISH_ATTEMPTS=0
+
+# Whether the IPMI command for the cooling response has been found gone, which is what makes this a
+# Redfish question at all. Set the moment that verdict is reached and BEFORE anything is asked over
+# HTTPS, because a probe that could not reach the iDRAC is not an answer about the server and has to
+# leave a later cycle able to ask again (#376)
+IS_THE_COOLING_RESPONSE_A_REDFISH_QUESTION=false
 
 # The fan control commands themselves are found out the same way, and for the same reason : Dell removed
 # them from the 14th generation on, an iDRAC 9 refusing them from firmware 3.34.34.34 onwards, and no
@@ -570,36 +576,17 @@ while true; do
       #
       # Asked once, on the cycle the verdict is reached, and never again : the answer cannot change while
       # this container runs, and this is the one place that already knows the IPMI command is gone
-      if does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS"; then
-        IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=true
+      IS_THE_COOLING_RESPONSE_A_REDFISH_QUESTION=true
 
-        # "Automatic" is Dell's default and is what "enabled" means for a slot : the iDRAC decides that
-        # slot's airflow for itself, which is the behaviour this parameter exists to switch off
-        if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
-          WANTED_LFM_MODE="Disabled"
-        else
-          WANTED_LFM_MODE="Automatic"
-        fi
-
-        if [ -z "$REDFISH_THIRD_PARTY_SLOTS" ]; then
-          REDFISH_COOLING_RESPONSE_SETTLED=true
-          # The server has the setting and nothing to apply it to. Saying that is worth more than either
-          # of the alternatives : "not supported" would be false about the machine, and reporting it
-          # applied would be false about what was done
-          THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="No third-party PCIe card to apply it to"
-          print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, but it does have the setting, on $REDFISH_COOLING_RESPONSE_SLOT_COUNT PCIe slots over Redfish.
- None of them currently holds a third-party card, so there is nothing to apply DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to. Dell's own airflow data covers the cards that are there.
- Nothing else changes : temperatures keep being read and logged every cycle."
-        elif "$MONITORING_ONLY_MODE"; then
-          REDFISH_COOLING_RESPONSE_SETTLED=true
-          THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish (not applied: monitoring only mode)"
-        else
-          apply_the_cooling_response_over_redfish "$WANTED_LFM_MODE" "$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
-        fi
+      # "Automatic" is Dell's default and is what "enabled" means for a slot : the iDRAC decides that
+      # slot's airflow for itself, which is the behaviour this parameter exists to switch off
+      if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
+        WANTED_LFM_MODE="Disabled"
       else
-        REDFISH_COOLING_RESPONSE_SETTLED=true
-        THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not supported by this server"
+        WANTED_LFM_MODE="Automatic"
       fi
+
+      attempt_the_redfish_cooling_response "$WANTED_LFM_MODE" "$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
     elif does_the_command_need_a_higher_privilege_level "$THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STDERR"; then
       # The BMC answered too, and answered that this account may not run the command. Also permanent for
       # this run -- the credentials do not change while the container does -- so it stops being sent for
@@ -617,10 +604,12 @@ while true; do
       # busy BMC, an answer this controller does not recognize. Report the cycle and try again on the next
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Could not be applied on this cycle"
     fi
-  elif "$IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH" && ! "$REDFISH_COOLING_RESPONSE_SETTLED"; then
-    # The IPMI command is settled -- gone -- but the Redfish write that replaced it was refused by
-    # something that described a moment rather than a decision. This is the retry, a CHECK_INTERVAL after
-    # the last one, which is what gives a busy iDRAC time to stop being busy (#376)
+  elif "$IS_THE_COOLING_RESPONSE_A_REDFISH_QUESTION" && ! "$REDFISH_COOLING_RESPONSE_SETTLED"; then
+    # The IPMI command is settled -- gone -- but Redfish has not answered anything that settles what
+    # replaces it : the iDRAC was busy, its job queue full, or its HTTPS stack briefly unreachable. This
+    # is the retry, a CHECK_INTERVAL after the last one, which is what gives it time to stop being so.
+    # It covers both halves of the errand : a probe that never got an answer and a write that was
+    # refused by a moment are the same kind of not-yet (#376)
     if "$DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE"; then
       REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE="Disabled"
       WANTED_LFM_MODE="Disabled"
@@ -629,7 +618,7 @@ while true; do
       WANTED_LFM_MODE="Automatic"
     fi
 
-    apply_the_cooling_response_over_redfish "$WANTED_LFM_MODE" "$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
+    attempt_the_redfish_cooling_response "$WANTED_LFM_MODE" "$REQUESTED_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE"
   fi
 
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
