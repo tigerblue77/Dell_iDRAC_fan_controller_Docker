@@ -342,3 +342,99 @@ function test_stopping_the_container_hands_the_setting_back_over_redfish_and_not
   assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
     "the dead IPMI command must not be re-sent on exit once Redfish is driving this"
 }
+
+# A refused write is not one thing. An answer about the request or the credentials will read the same
+# on every later cycle ; a busy iDRAC, a full configuration job queue or a request that never completed
+# describe a moment. #376 : the first settles it, the second is retried.
+
+function test_an_answer_about_the_request_or_the_credentials_settles_it_on_the_first_refusal() {
+  local STATUS
+  for STATUS in "400" "401" "403" "405"; do
+    assert_equals "true" "$(is_this_redfish_write_answer_a_verdict "$STATUS" && echo true || echo false)" \
+      "HTTP $STATUS will not read differently on the next cycle"
+  done
+}
+
+function test_an_answer_describing_a_moment_is_never_taken_as_a_decision() {
+  # The last one matters most : an answer nobody here has seen is retried rather than concluded from,
+  # the same choice does_the_server_lack_this_command() makes on the IPMI side
+  local STATUS
+  for STATUS in "409" "500" "502" "503" "599" "418"; do
+    assert_equals "false" "$(is_this_redfish_write_answer_a_verdict "$STATUS" && echo true || echo false)" \
+      "HTTP $STATUS describes a moment, or is unrecognised, and neither is a verdict"
+  done
+}
+
+function test_a_busy_idrac_is_retried_and_settles_after_the_bounded_number_of_attempts() {
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  export MOCK_REDFISH_PATCH_STATUS="503"
+  export CHECK_INTERVAL_IN_SECONDS=5
+  REDFISH_WRITE_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  local ATTEMPT
+  for ((ATTEMPT = 1; ATTEMPT < MAXIMUM_REDFISH_WRITE_ATTEMPTS; ATTEMPT++)); do
+    apply_the_cooling_response_over_redfish "Disabled" "Disabled"
+    assert_equals "false" "$REDFISH_COOLING_RESPONSE_SETTLED" \
+      "attempt $ATTEMPT of $MAXIMUM_REDFISH_WRITE_ATTEMPTS must leave another one to make"
+    assert_equals "Redfish refused this change, retrying" \
+      "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
+  done
+
+  # Redirected to a file rather than captured with $( ), which would run the function in a subshell and
+  # leave every global it sets behind in it
+  apply_the_cooling_response_over_redfish "Disabled" "Disabled" > "$TEST_TEMPORARY_DIRECTORY/last_attempt" 2>&1
+  local -r LAST_OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/last_attempt")
+
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "the bound is where retrying stops"
+  assert_equals "$MAXIMUM_REDFISH_WRITE_ATTEMPTS" "$REDFISH_WRITE_ATTEMPTS"
+  assert_equals "Redfish refused this change (see the log)" \
+    "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
+  # Three attempts a five second interval apart span ten seconds, not fifteen : the reader is told the
+  # span between the first and the last, not a count multiplied by an interval
+  assert_matches "$LAST_OUTPUT" "refused to change it 3 times, i.e. over about 10 seconds" \
+    "the message must say how long it went on, CHECK_INTERVAL ranging from seconds to minutes"
+  assert_matches "$LAST_OUTPUT" "HTTP 503"
+}
+
+function test_an_answer_about_the_credentials_is_not_retried_at_all() {
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  export MOCK_REDFISH_PATCH_STATUS="403"
+  REDFISH_WRITE_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  apply_the_cooling_response_over_redfish "Disabled" "Disabled" > "$TEST_TEMPORARY_DIRECTORY/refusal" 2>&1
+  local -r OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/refusal")
+
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "an account's rights do not change mid-run"
+  assert_equals "1" "$REDFISH_WRITE_ATTEMPTS" "making the same wrong request twice more helps nobody"
+  assert_matches "$OUTPUT" "about this request or these credentials"
+  assert_not_contains "$OUTPUT" "times, i.e. over about" \
+    "there is no elapsed span to report when nothing was retried"
+}
+
+function test_the_controller_retries_a_busy_idrac_across_cycles_and_then_stops() {
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  export MOCK_REDFISH_PATCH_STATUS="500"
+  simulate_server "PowerEdge R6515" --cpus 1
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 8 --third-party "4"
+
+  # Well past the third attempt, so a fourth would show up in the log
+  local -r OUTPUT=$(run_controller "" 6)
+
+  assert_equals "3" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "three attempts, one per cycle, and then no more for the life of the container"
+  assert_matches "$OUTPUT" "refused to change it 3 times"
+  assert_matches "$OUTPUT" "fan control profile.*Redfish refused this change \(see the log\)" \
+    "the table must stop implying a later cycle could clear it"
+}
