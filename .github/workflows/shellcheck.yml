@@ -3,15 +3,20 @@
 
 name: Shellcheck
 
-# Scoped to the scripts nothing else would catch a mistake in, which is two groups and not one.
+# Scoped to the scripts nothing else would catch a mistake in, which is three groups and not one.
 #
 # The 5 shipped in the Docker image, because a finding there affects runtime, on real hardware. And the 3
 # under .github/, because they decide what gets published - which version "latest" points at, whether a
 # release note is written, what the Docker Hub page says - and the first time any of them runs is on the
 # tag or the push that publishes it. Neither of the workflows carrying them fires on a pull request.
 #
-# The tests/ tree stays out for the reason those three do not have : the suite runs on every pull request,
-# so a mistake in it is found the moment it is pushed rather than at release time.
+# And the SessionStart hook under .claude/, for the same reason again : it runs when a Claude Code on the
+# web session opens, which is somewhere no workflow and no test ever looks. It earned its place here the
+# moment it was written - a comment line opening with the linter's own name parsed as a directive, which
+# only this job would have found.
+#
+# The tests/ tree stays out for the reason those do not have : the suite runs on every pull request, so a
+# mistake in it is found the moment it is pushed rather than at release time.
 #
 # -x resolves the "source functions.sh" / "source constants.sh" lines so shared declarations are understood
 # correctly instead of reported as unknown or unused when the sourcing file is linted on its own.
@@ -47,4 +52,5 @@ jobs:
             supervisor.sh \
             .github/generate_dockerhub_description.sh \
             .github/reconcile_latest_tag.sh \
-            .github/release_note_already_exists.sh
+            .github/release_note_already_exists.sh \
+            .claude/hooks/session-start.sh
