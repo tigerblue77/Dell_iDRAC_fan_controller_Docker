@@ -42,6 +42,9 @@ function setup_test_context() {
   # accepted nothing, which is what the controller starts from too
   IS_FAN_CONTROL_SUPPORTED=true
   HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
+  # Same, for the one-off explanation of a rejected fan selector : a test starts against a server that
+  # has not been told anything yet
+  HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
   # Settled once at startup by the controller, and read by build_header() and by every row it prints
   resolve_fan_control_profile_column_width
 

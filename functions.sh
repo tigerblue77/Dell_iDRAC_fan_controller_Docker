@@ -81,6 +81,10 @@ function apply_user_fan_control_profile() {
   # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
   if [ $? -ne 0 ]; then
     print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+    # A server that answered "invalid data field" ran the command and refused an argument, which is a
+    # different situation from the refusals below and gets its own explanation -- once, rather than as
+    # a raw ipmitool line on every cycle. It settles nothing and stops nothing being sent
+    note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
     IS_PROFILE_APPLIED=false
   fi
 
@@ -1377,6 +1381,25 @@ function does_the_command_need_a_higher_privilege_level() {
   [[ "$IPMITOOL_STDERR" == *"rsp=0xd4"* ]]
 }
 
+# Whether the given ipmitool stderr says the BMC itself answered, ran far enough to read the command's
+# arguments, and rejected one of them.
+# Usage : does_the_server_reject_this_data_field "$IPMITOOL_STDERR"
+#
+# 0xcc is "invalid data field in request" : the command is there and the account may run it, so the BMC
+# got as far as reading its data bytes and refused one of them. That is the opposite verdict from the
+# two predicates above, and it is deliberately kept out of both : concluding "this server has no fan
+# control" from it would stop the controller sending a command the server does have, over an argument
+# it could have been sent differently.
+#
+# What it does NOT say is which byte. That has to come from the hardware, and on the one server it has
+# been reported from -- an R510 whose iDRAC6 answers 0xcc to the broadcast fan selector 0xff and takes
+# the very same command with a single fan's ID (issue #378) -- it is the selector
+function does_the_server_reject_this_data_field() {
+  local -r IPMITOOL_STDERR="$1"
+
+  [[ "$IPMITOOL_STDERR" == *"rsp=0xcc"* ]]
+}
+
 # Read one Redfish resource from the iDRAC and print what it answered.
 # Usage : redfish_get "<resource path>"
 # Prints : the HTTP status code on its own first line, then the response body
@@ -1783,6 +1806,53 @@ function note_that_the_server_refuses_fan_control() {
  Two things answer like this, and the completion code does not say which. Dell removed these commands from the 14th generation on -- an iDRAC 9 refuses them from firmware 3.34.34.34 onwards, and an iDRAC 10 has never had them -- and an iDRAC also refuses them to an account that is not an Administrator. This iDRAC reports firmware version ${IDRAC_FIRMWARE_VERSION:-unknown}.
  If your iDRAC is one that used to accept them, check the privilege level of IDRAC_USERNAME before concluding that the firmware is the reason. The README's \"iDRAC version\" section covers both.
  Nothing else changes : temperatures keep being read and logged every cycle, as MONITORING_ONLY_MODE would"
+}
+
+# Whether the server has already been told about the broadcast fan selector it rejects, so that it is
+# explained the once rather than on every cycle for the life of the container.
+# Only ever written by note_that_the_server_rejects_the_broadcast_fan_selector() below
+HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
+
+# Read a refused fan speed command and, if the server refused it over its data bytes, explain the one
+# thing that answers like this and say it once.
+# Usage : note_that_the_server_rejects_the_broadcast_fan_selector "$IPMITOOL_STDERR"
+# Returns : 0 if this call is the one that explained it
+#
+# This deliberately reaches NO verdict and stops nothing being sent. It is the counterpart of
+# note_that_the_server_refuses_fan_control() for the other completion code, and the difference between
+# the two is the whole point : 0xc1, 0xd4 and 0xd5 are a server saying the command is not its to run,
+# while 0xcc is a server that has the command, ran it, and refused an argument. Giving up on the second
+# would stop the controller sending a command the server does have.
+#
+# What it says instead is the state the fans are actually in, which is the part a raw ipmitool line
+# repeated every 60 seconds does not. Only the second of the two commands failed here : the first one
+# has already taken the fans away from Dell's own dynamic fan control profile, and the speed that was
+# supposed to follow it never landed. The fans are therefore on neither profile -- not Dell's, and not
+# the user's -- which is exactly the shape of "too low with nobody raising them" reported in issue #378
+#
+# /!\ The per-fan fallback this points to is NOT implemented yet, and this message must not claim it is.
+# The one server that has reported this answers 0xcc to the broadcast selector 0xff and accepts the same
+# command with a single fan's ID, but one accepted ID says nothing about how many fans the server has
+# nor whether Dell numbers them from 0 or from 1, and addressing the wrong set would leave some fans
+# unset while reporting the profile applied
+function note_that_the_server_rejects_the_broadcast_fan_selector() {
+  local -r IPMITOOL_STDERR="$1"
+
+  if ! does_the_server_reject_this_data_field "$IPMITOOL_STDERR"; then
+    return 1
+  fi
+
+  if "$HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED"; then
+    return 1
+  fi
+
+  HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=true
+
+  print_warning "This server took the command that puts its fans under manual control, then refused the one that sets their speed, over one of its arguments rather than over the command itself (completion code 0xcc, \"invalid data field in request\").
+ Its fans are consequently on neither profile : they have left Dell's own dynamic fan control profile, and the speed of $DECIMAL_FAN_SPEED% that was meant to replace it never reached them. They are running at whatever this iDRAC does with manual control and no speed set, which nothing here can read back.
+ The known cause is the fan selector : the speed is addressed to every fan at once with 0xff, and an 11th generation iDRAC6 has been reported to reject that and to accept the very same command addressed to one fan's ID at a time (issue #378). Sending it per fan instead is not implemented yet -- it needs to be known how many fans a server exposes and how this iDRAC numbers them, and guessing would silently leave some of them unset.
+ Until then, set MONITORING_ONLY_MODE=true so the container never takes the fans from Dell's own dynamic fan control profile at all and only logs temperatures, or stop it : stopping hands them back to that profile on the way out.
+ If your server answers this, the output of \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type fan\" on issue #378 is what is missing to implement it"
 }
 
 # Prepare traps in case of container exit

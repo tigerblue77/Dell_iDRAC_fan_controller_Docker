@@ -468,3 +468,84 @@ function test_monitoring_only_mode_reaches_no_verdict_because_it_asks_nothing() 
   assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "monitoring only, not applied"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")"
 }
+
+# What an 11th generation iDRAC6 answers to the fan speed command addressed to every fan at once, as
+# reported on an R510 in issue #378. The very same command with a single fan's ID is accepted there,
+# so this is the BMC refusing an argument, not the command
+readonly BROADCAST_FAN_SELECTOR_REJECTED_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xcc): Invalid data field in request"
+
+function test_a_rejected_data_field_is_told_apart_from_a_command_the_server_does_not_have() {
+  # The distinction the whole change rests on. 0xcc is a server that HAS the fan control commands and
+  # refused an argument of one of them : reading it as "this server refuses fan control" would stop the
+  # controller sending commands an R510 does take, and would report fans left with Dell that are not
+  assert_command_succeeds "0xcc is the server refusing one of the command's data bytes" \
+    does_the_server_reject_this_data_field "$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  assert_command_fails "0xcc does not say the command is absent" \
+    does_the_server_lack_this_command "$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  assert_command_fails "0xcc does not say the account may not run it" \
+    does_the_command_need_a_higher_privilege_level "$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  local ANSWER
+  for ANSWER in "$REJECTED_BY_FIRMWARE_STDERR" "$FAN_CONTROL_REFUSED_FOR_PRIVILEGE_STDERR" \
+    "Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xc0): Node busy" \
+    "Error: Unable to establish IPMI v2 / RMCP+ session" \
+    ""; do
+    assert_command_fails "\"$ANSWER\" is not a rejected data field" \
+      does_the_server_reject_this_data_field "$ANSWER"
+  done
+}
+
+function test_a_rejected_fan_selector_never_makes_the_controller_give_up_on_fan_control() {
+  # The regression this guards against : 0xcc reaching note_that_the_server_refuses_fan_control() would
+  # silence every later command on a server that accepts them, and graceful_exit would then skip the
+  # hand-back on the way out, leaving the fans under manual control for good
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 0xff"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_command_fails "a rejected argument is not a server refusing fan control" \
+    has_the_server_refused_fan_control
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "1" "$(count_ipmitool_calls_matching "$MANUAL_FAN_CONTROL_COMMAND")" \
+    "the commands must keep being sent to a server that has them"
+  assert_equals "1" "$(count_ipmitool_calls_matching "$FAN_SPEED_COMMAND")" \
+    "including the one that was refused, which a different selector could still land"
+}
+
+function test_a_rejected_fan_selector_is_explained_once_and_names_the_state_the_fans_are_in() {
+  # The defect from the user's side : the log repeated one raw ipmitool line a minute, and nothing said
+  # that manual control had been taken while the speed had not, which is why the fans sat "too low"
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 0xff"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_contains "$CAPTURED_OUTPUT" "neither profile" \
+    "the fans are on neither Dell's profile nor the user's, and that is the part worth saying"
+  assert_contains "$CAPTURED_OUTPUT" "0xcc" \
+    "the completion code the verdict was read from must be quoted"
+  assert_contains "$CAPTURED_OUTPUT" "MONITORING_ONLY_MODE" \
+    "the one setting that gets this server out of it must be named"
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_not_contains "$CAPTURED_OUTPUT" "neither profile" \
+    "explained the once, not on every cycle for the life of the container"
+}
+
+function test_a_rejected_fan_selector_still_denies_the_profile() {
+  # Whatever is said about it, the table must not name a profile the fans are not running
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 0xff"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  apply_user_fan_control_profile 2>/dev/null
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
+}
