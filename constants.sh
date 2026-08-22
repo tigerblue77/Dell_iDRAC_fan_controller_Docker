@@ -36,6 +36,17 @@ readonly MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD=125
 readonly MINIMUM_FAN_SPEED_PERCENTAGE=0
 readonly MAXIMUM_FAN_SPEED_PERCENTAGE=100
 
+# How far the per-fan identifier probe goes before it stops, on a server that refuses the broadcast fan
+# selector 0xff and has to be addressed one fan at a time (issue #378).
+#
+# The probe walks upwards from 0x00 and stops at the first identifier the server refuses, so this is only
+# the backstop for a BMC that would accept every one of them and leave the walk running forever. It is
+# deliberately far above any real fan count -- the R510 this was reported from accepts 0x00 to 0x07 and
+# refuses 0x08 onwards, and no PowerEdge exposes anything close to 32 fans -- because being too low would
+# silently stop the walk on a server that has more, leaving the fans past the cut running at whatever
+# speed they had, which is the one failure this whole fallback exists to remove
+readonly MAXIMUM_FAN_IDENTIFIER_PROBES=32
+
 # Bounds the check interval is measured against, in seconds. The interval is the controller's reaction
 # time : between two checks the fans stay pinned at FAN_SPEED with Dell's own dynamic fan control
 # disabled, so it is also the longest the server can heat up before anything raises them again.
