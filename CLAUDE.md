@@ -32,7 +32,8 @@ functions.sh` and `constants.sh`. That is the entire dependency graph.
 ./tests/run_tests.sh --list          # list them without running
 
 shellcheck -x Dell_iDRAC_fan_controller.sh functions.sh constants.sh \
-              healthcheck.sh supervisor.sh .github/*.sh   # what CI lints
+              healthcheck.sh supervisor.sh .github/*.sh \
+              .claude/hooks/session-start.sh   # what CI lints
 
 docker build -t dell_idrac_fan_controller:dev .
 ```
@@ -46,9 +47,9 @@ image — and shellcheck on every pull request.
   mergeable ; see `CONTRIBUTING.md` for what it certifies in a dual-licensed project.
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
-- **A new script under the repository root or `.github/` must be added by hand to
-  `.github/workflows/shellcheck.yml`.** That workflow names its files one by one
-  instead of globbing, and `tests/cases/10_shell_scripts.sh` guards the list —
+- **A new script under the repository root, `.github/` or `.claude/` must be added
+  by hand to `.github/workflows/shellcheck.yml`.** That workflow names its files one
+  by one instead of globbing, and `tests/cases/10_shell_scripts.sh` guards the list —
   a script missing from it is analysed by nothing at all.
 - **Add a test case for what you change.** A behaviour with no test is one the next
   refactor is free to break, and this codebase's refactors span a hundred server models.

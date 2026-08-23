@@ -42,12 +42,14 @@ function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
   # to .github/ afterwards stay out of it for months without a word. The list is
   # hand-maintained, so it is worth a guard : nothing else lints these files.
   # "bash -n" above is a syntax check and the suite invokes shellcheck nowhere,
-  # so a script missing from that list is analysed by nothing at all, and the
-  # ones under .github/ run first on the tag or the push that publishes
+  # so a script missing from that list is analysed by nothing at all -- and the
+  # ones outside the Docker image are exactly the ones no test ever reaches :
+  # those under .github/ run first on the tag or the push that publishes, and the
+  # hook under .claude/ when a Claude Code on the web session opens
   local -r LINTED_SCRIPTS="$(sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p' "$SHELLCHECK_WORKFLOW")"
 
   local SCRIPT RELATIVE_PATH
-  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh; do
+  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh "$REPO_ROOT"/.claude/hooks/*.sh; do
     [ -f "$SCRIPT" ] || continue
 
     RELATIVE_PATH="${SCRIPT#$REPO_ROOT/}"
@@ -603,6 +605,243 @@ function test_the_suites_own_readme_lists_every_case_file() {
       fail "the README's coverage table lists $LISTED_FILE, which does not exist"
     fi
   done
+}
+
+# The cases below guard CLAUDE.md, the file a Claude Code session reads before it
+# touches anything here. Documentation that has fallen behind is a stale
+# paragraph everywhere else in this repository ; there it is an instruction, and
+# a session acts on it. A renamed script, or a lint command that no longer covers
+# what the pull request will be judged on, makes the session confidently wrong
+# and leaves the human to catch it in review (issue #381).
+#
+# What is pinned is what a machine can settle : the paths, the two lists that are
+# maintained in two places, the options, the one figure. The "Invariants" section
+# is prose about why a decision was taken and is deliberately left alone -- a test
+# over it would either be satisfied by a keyword or break on any rewording, and
+# neither would say anything about whether it is still true.
+
+function test_claude_md_carries_the_licence_header() {
+  # NOTICE names the SPDX headers as part of what discharges AGPL 5(a) and 7(b),
+  # and the workflows were brought under the same rule by #368. This file is
+  # prose rather than a program, so it carries them in an HTML comment : nothing
+  # shows where the document is rendered, and the two lines are still where a
+  # reader and a licence scanner look for them
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    # The suite is running inside the built image, which carries the scripts and
+    # not what documents them
+    skip_test "no CLAUDE.md next to the scripts"
+    return 0
+  fi
+
+  local -r HEADER=$(head -4 "$REPO_ROOT/CLAUDE.md")
+
+  assert_contains "$HEADER" "SPDX-FileCopyrightText: 2020-2026 Tigerblue77" \
+    "CLAUDE.md should open with the copyright line every other file here carries"
+  assert_contains "$HEADER" "SPDX-License-Identifier: AGPL-3.0-only" \
+    "CLAUDE.md should open with the licence line every other file here carries"
+}
+
+function test_the_lint_command_claude_md_documents_is_the_one_the_workflow_runs() {
+  local -r SHELLCHECK_WORKFLOW="$REPO_ROOT/.github/workflows/shellcheck.yml"
+
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ] || [ ! -f "$SHELLCHECK_WORKFLOW" ]; then
+    skip_test "no CLAUDE.md and no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # CLAUDE.md prints a shellcheck invocation under "Commands" and calls it what
+  # CI lints, so a session that runs it before pushing believes it has seen
+  # everything the pull request will be judged on. The workflow names its files
+  # one by one for the reasons the case above gives, which leaves the same list
+  # written down twice -- and the copy in CLAUDE.md is the one nothing runs.
+  #
+  # It is compared against the workflow rather than against the tree because
+  # being wrong about what CI checks is what makes a session push a file that
+  # nothing linted. The command is read the way a shell reads it : continuations
+  # joined, the trailing comment dropped, globs expanded from the repository
+  # root. What matters is the set of files it ends up handing shellcheck, not how
+  # it spells them
+  local -r DOCUMENTED_COMMAND=$(awk '
+    /^shellcheck -x/ { IS_THE_COMMAND = 1 }
+    IS_THE_COMMAND {
+      sub(/#.*$/, "")
+      CONTINUES = ($0 ~ /\\[[:space:]]*$/)
+      sub(/\\[[:space:]]*$/, "")
+      printf "%s ", $0
+      if (!CONTINUES) { exit }
+    }' "$REPO_ROOT/CLAUDE.md")
+
+  assert_not_empty "$DOCUMENTED_COMMAND" \
+    "CLAUDE.md should still print the shellcheck invocation it calls what CI lints" || return 1
+
+  # Each test case runs in its own subshell, so the working directory the globs
+  # are resolved from is this case's own
+  cd "$REPO_ROOT" || return 1
+  shopt -s nullglob
+  local -a DOCUMENTED_SCRIPTS=(${DOCUMENTED_COMMAND#shellcheck -x })
+  shopt -u nullglob
+
+  local -r LINTED_SCRIPTS=$(sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p' "$SHELLCHECK_WORKFLOW")
+
+  local DOCUMENTED_SCRIPT
+  for DOCUMENTED_SCRIPT in "${DOCUMENTED_SCRIPTS[@]}"; do
+    if printf '%s\n' "$LINTED_SCRIPTS" | grep -qxF "$DOCUMENTED_SCRIPT"; then
+      pass
+    else
+      fail "CLAUDE.md has a session lint $DOCUMENTED_SCRIPT, which the Shellcheck workflow does not" \
+        "the workflow lints : $(printf '%s' "$LINTED_SCRIPTS" | tr '\n' ' ')"
+    fi
+  done
+
+  local LINTED_SCRIPT
+  while IFS= read -r LINTED_SCRIPT; do
+    [ -n "$LINTED_SCRIPT" ] || continue
+
+    if printf '%s\n' "${DOCUMENTED_SCRIPTS[@]}" | grep -qxF "$LINTED_SCRIPT"; then
+      pass
+    else
+      fail "the Shellcheck workflow lints $LINTED_SCRIPT, which the command in CLAUDE.md leaves out" \
+        "that command covers : ${DOCUMENTED_SCRIPTS[*]}"
+    fi
+  done <<< "$LINTED_SCRIPTS"
+}
+
+function test_the_claude_md_layout_table_names_every_script_at_the_repository_root() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    skip_test "no CLAUDE.md next to the scripts"
+    return 0
+  fi
+
+  # "Layout" is a table of one row per file, and it is where a session decides
+  # which file to open. A script it does not name is one the session does not
+  # know exists, so the table reads as the whole of the program while it is not
+  # -- the failure tests/README.md's own coverage table had, three files behind
+  # and still reading as complete.
+  #
+  # Read down the first column rather than over the section, because the section
+  # also holds the sentence naming the three scripts that source the other two :
+  # matched against the prose, this case stays green with the table emptied row
+  # by row. The other direction, a row naming a file that has been renamed away,
+  # is the case below, over the whole document rather than this table alone
+  local -r TABLE_FILE_COLUMN=$(awk -F '|' '
+    /^## Layout$/ { IS_THE_LAYOUT = 1; next }
+    /^## / { IS_THE_LAYOUT = 0 }
+    IS_THE_LAYOUT && /^\|/ { print $2 }' "$REPO_ROOT/CLAUDE.md")
+
+  assert_not_empty "$TABLE_FILE_COLUMN" "CLAUDE.md should still carry a \"Layout\" table" || return 1
+
+  local SCRIPT RELATIVE_PATH
+  for SCRIPT in "$REPO_ROOT"/*.sh; do
+    [ -f "$SCRIPT" ] || continue
+
+    RELATIVE_PATH="${SCRIPT#"$REPO_ROOT"/}"
+    assert_contains "$TABLE_FILE_COLUMN" "\`$RELATIVE_PATH\`" \
+      "$RELATIVE_PATH ships in the image, the Layout table should have a row saying what it holds"
+  done
+}
+
+function test_every_repository_path_claude_md_names_exists() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    skip_test "no CLAUDE.md next to the scripts"
+    return 0
+  fi
+
+  # Every path the document quotes, against the tree. A rename that leaves it
+  # behind is the realistic failure here, and the document is almost entirely
+  # made of them : the file table, the two case files named as the guards a
+  # contributor is told to respect, the fixtures and the mock a new test is told
+  # to build on, the catalogue the server models come from, the hook that
+  # installs shellcheck. Sent to a path that no longer exists, a session either
+  # invents a replacement or reports the repository as broken.
+  #
+  # Only the quoted tokens shaped like a path are kept -- a slash, one of the
+  # extensions used here, or a leading dot -- so that the function names, the
+  # variables and the environment variables quoted the same way stay out. Fenced
+  # blocks are dropped first : they are shell rather than prose, and the words in
+  # them are commands
+  local -r NAMED_PATHS=$(awk '/^```/ { IS_FENCED = !IS_FENCED; next } !IS_FENCED' "$REPO_ROOT/CLAUDE.md" |
+    grep -oE '`[^`]+`' | tr -d '`' |
+    grep -E '^[A-Za-z0-9_.*/-]+$' | grep -E '(/|\.sh$|\.md$|\.yml$|^\.)' | sort -u)
+
+  assert_not_empty "$NAMED_PATHS" "CLAUDE.md should still name the files it sends a session to" || return 1
+
+  cd "$REPO_ROOT" || return 1
+  shopt -s nullglob
+
+  local NAMED_PATH
+  local -a MATCHES
+  while IFS= read -r NAMED_PATH; do
+    [ -n "$NAMED_PATH" ] || continue
+
+    # A pattern where the document quotes one, a name where it quotes a name.
+    # Both are checked through the same expansion, and both halves are needed :
+    # nullglob drops a pattern nothing answers, and leaves a word carrying no
+    # pattern character at all exactly as it was written, existing or not
+    MATCHES=($NAMED_PATH)
+    if [ "${#MATCHES[@]}" -gt 0 ] && [ -e "${MATCHES[0]}" ]; then
+      pass
+    else
+      fail "CLAUDE.md sends a session to $NAMED_PATH, which is not in the repository"
+    fi
+  done <<< "$NAMED_PATHS"
+
+  shopt -u nullglob
+}
+
+function test_the_runner_options_claude_md_documents_are_ones_the_runner_accepts() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    skip_test "no CLAUDE.md next to the scripts"
+    return 0
+  fi
+
+  # The runner prints its options from a single cat block, so its help is the
+  # list of what it takes. An option CLAUDE.md documents and the runner no longer
+  # accepts sends the session into a usage error on the first command it was told
+  # to run, at the moment it is trying to find out whether the tree is sound
+  local -r RUNNER_HELP=$(bash "$TESTS_DIRECTORY/run_tests.sh" --help 2>&1)
+
+  assert_not_empty "$RUNNER_HELP" "the runner should still print what it takes" || return 1
+
+  local DOCUMENTED_OPTION
+  while IFS= read -r DOCUMENTED_OPTION; do
+    [ -n "$DOCUMENTED_OPTION" ] || continue
+
+    assert_matches "$RUNNER_HELP" "(^|[[:space:],])$DOCUMENTED_OPTION([[:space:],]|$)" \
+      "CLAUDE.md runs the suite with $DOCUMENTED_OPTION, the runner should still accept it"
+  done < <(grep -oE '(\./)?tests/run_tests\.sh[^#]*' "$REPO_ROOT/CLAUDE.md" |
+    grep -oE ' -{1,2}[A-Za-z][A-Za-z-]*' | tr -d ' ' | sort -u)
+}
+
+function test_the_function_count_claude_md_states_is_the_one_functions_sh_declares() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    skip_test "no CLAUDE.md next to the scripts"
+    return 0
+  fi
+
+  # The Layout table does not only name functions.sh, it counts what is in it,
+  # and that is the one figure in the document. The README's figures are pinned
+  # against the code above for the same reason -- the fan speed range, the check
+  # interval bounds, the supervisor's deadline -- since a number nobody checks is
+  # a number that stops being true without anybody noticing, and this one moves
+  # every time a function is added.
+  #
+  # The figure is read out of the row rather than matched word for word, so that
+  # rewording the cell does not fail here. Dropping the count is a legitimate way
+  # to answer a failure of this case : a claim that is not made cannot drift
+  local -r FUNCTIONS_ROW=$(grep -m 1 -F '| `functions.sh` |' "$REPO_ROOT/CLAUDE.md")
+
+  assert_not_empty "$FUNCTIONS_ROW" "the Layout table should still have a row for functions.sh" || return 1
+
+  local -r STATED_COUNT=$(printf '%s' "$FUNCTIONS_ROW" | grep -oE '[0-9]+' | head -1)
+  if [ -z "$STATED_COUNT" ]; then
+    pass
+    return 0
+  fi
+
+  local -r DECLARED_COUNT=$(grep -c '^function ' "$REPO_ROOT/functions.sh")
+
+  assert_equals "$DECLARED_COUNT" "$STATED_COUNT" \
+    "CLAUDE.md counts the functions functions.sh holds, the count should be the number it declares"
 }
 
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
