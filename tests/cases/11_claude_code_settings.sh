@@ -18,22 +18,31 @@
 
 readonly CLAUDE_CODE_SETTINGS_FILE=".claude/settings.json"
 
-# The permission rules the settings pre-approve, one per line, exactly as written.
+# The suite also runs inside the built image, which carries the shipped scripts and
+# none of the files a contributor works with : no .github, no .claude.
 #
-# jq is not a dependency of this suite -- tests/README.md promises it runs on bash,
-# coreutils, grep and awk alone -- and this file is small, hand-written and ours, so
-# the array is isolated by its key and then read one quoted string at a time
-function pre_approved_permission_rules() {
-  local -r SETTINGS_ON_ONE_LINE=$(tr '\n' ' ' < "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE")
-  local -r ALLOW_LIST=$(printf '%s' "$SETTINGS_ON_ONE_LINE" | sed -n 's/.*"allow"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
-
-  printf '%s' "$ALLOW_LIST" | grep -oE '"[^"]*"' | tr -d '"'
+# jq is the second condition. The list is read out of a JSON file, and reading JSON
+# with sed is how the first version of this guard came to stop at the first "]" of a
+# rule and report green over everything that followed it. The suite's own
+# dependencies stop at bash, coreutils, grep and awk, so a machine without jq skips
+# these rather than turning the promise in tests/README.md into a lie -- the same
+# trade cases/14 makes, and every runner, the devcontainer and the SessionStart hook
+# provide it
+# Usage : if ! claude_code_settings_can_be_read; then skip_test "..."; return 0; fi
+function claude_code_settings_can_be_read() {
+  [ -f "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE" ] && command -v jq > /dev/null 2>&1
 }
 
-# The command a permission rule pre-approves, stripped of the "Bash(...)" wrapper
-# and of the ":*" that makes the rule match a prefix : "Bash(shellcheck:*)" reads
-# back as "shellcheck". A rule of any other shape is returned untouched, which is
-# what makes it fail the guard below rather than pass it under a wrong name
+# The permission rules the settings pre-approve, one per line, exactly as written
+function pre_approved_permission_rules() {
+  jq -r '.permissions.allow[]?' "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE" 2> /dev/null
+}
+
+# The command a permission rule pre-approves, stripped of the "Bash(...)" wrapper and
+# of the ":*" that makes a rule match a prefix rather than one exact command line :
+# "Bash(shellcheck:*)" reads back as "shellcheck". A rule of any other shape is
+# returned untouched, which is what makes it fail the guard below rather than pass it
+# under a wrong name
 # Usage : pre_approved_command "Bash(shellcheck:*)" -> "shellcheck"
 function pre_approved_command() {
   local RULE="$1"
@@ -53,19 +62,8 @@ function test_the_claude_code_settings_are_valid_json() {
   # installing shellcheck, the permission list stops pre-approving anything, and
   # the only symptom is a session that asks about everything again -- which reads
   # as "the grant was refused" rather than as "the JSON has a trailing comma"
-  if [ ! -f "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE" ]; then
-    # The suite is running inside the built image, which carries the shipped
-    # scripts and none of the files a contributor works with
-    skip_test "no .claude next to the scripts"
-    return 0
-  fi
-
-  if ! command -v jq > /dev/null 2>&1; then
-    # Same reasoning as cases/14 : the suite's own dependencies stop at bash,
-    # coreutils, grep and awk, so a machine without jq skips this rather than
-    # turning the promise in tests/README.md into a lie. Every runner, the
-    # devcontainer and the SessionStart hook provide it
-    skip_test "jq is missing"
+  if ! claude_code_settings_can_be_read; then
+    skip_test "no .claude next to the scripts, or no jq to read it with"
     return 0
   fi
 
@@ -73,16 +71,22 @@ function test_the_claude_code_settings_are_valid_json() {
     jq empty "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE"
 }
 
-function test_every_pre_approved_command_is_read_only_or_sandboxed() {
-  # The three rules #382 settled on share one property : none of them can change
-  # anything outside the tree, whoever asked for them to run.
+function test_every_pre_approved_rule_is_one_that_was_argued() {
+  # The rules #382 settled on, and the shape each of them is written in. Both halves
+  # matter, which is why this compares whole rules rather than the commands inside
+  # them : ":*" is not decoration, it pre-approves every argument list there is, and
+  # an argument list is where a harmless command stops being one.
   #
-  # - ./tests/run_tests.sh mocks ipmitool, lm-sensors and sleep, needs no iDRAC and
-  #   no network, and writes only under its own temporary directory
-  # - shellcheck reads the scripts, analyses them, and executes none of them
-  # - bash -n parses a script without running a single statement of it
-  # (the dashes are not decoration : a comment line beginning with the linter's own
-  # name is read by it as a directive, and refuses to parse)
+  # - Bash(./tests/run_tests.sh) is EXACT, deliberately. Run with no arguments the
+  #   suite mocks ipmitool, lm-sensors and sleep, needs no iDRAC and no network, and
+  #   writes only inside the throwaway directory it makes with mktemp -d. Run as
+  #   "--junit FILE" or "--summary FILE" it creates directories and truncates files
+  #   wherever the caller points it (tests/lib/reports.sh), which a prefix rule would
+  #   hand to every session without a prompt. Filtered runs are one prompt each ;
+  #   that is the price of the entry staying what it claims to be.
+  # - Bash(shellcheck:*) and Bash(bash -n:*) are prefixes, which is safe here for the
+  #   reason the first one is not : neither has an option that names a file to write.
+  #   They read, they analyse, and bash -n parses without running a statement of it.
   #
   # Two commands were argued out and are meant to stay out. "git" : "git diff" is
   # harmless, but the prefix matching that would allow it is easy to widen by
@@ -93,8 +97,8 @@ function test_every_pre_approved_command_is_read_only_or_sandboxed() {
   # Nothing in Claude Code will ever refuse a fourth entry, so this is the only
   # place that can : a rule outside the vetted set fails here, and widening the
   # grant means coming back to this comment and arguing the new one the same way
-  if [ ! -f "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE" ]; then
-    skip_test "no .claude next to the scripts"
+  if ! claude_code_settings_can_be_read; then
+    skip_test "no .claude next to the scripts, or no jq to read it with"
     return 0
   fi
 
@@ -106,16 +110,18 @@ function test_every_pre_approved_command_is_read_only_or_sandboxed() {
     "$CLAUDE_CODE_SETTINGS_FILE should pre-approve the repository's routine commands, or this guard watches nothing" ||
     return 1
 
-  local RULE COMMAND
+  local RULE
   while IFS= read -r RULE; do
-    COMMAND=$(pre_approved_command "$RULE")
-
-    case "$COMMAND" in
-      './tests/run_tests.sh' | 'shellcheck' | 'bash -n')
+    case "$RULE" in
+      'Bash(./tests/run_tests.sh)' | 'Bash(shellcheck:*)' | 'Bash(bash -n:*)')
         pass ;;
+      'Bash(./tests/run_tests.sh:*)')
+        fail "[$RULE] grants the suite by prefix, which pre-approves every argument list it takes" \
+          "--junit FILE and --summary FILE create directories and truncate files wherever the caller points them" \
+          "the rule that was argued is the exact one : Bash(./tests/run_tests.sh)" ;;
       *)
-        fail "[$RULE] is pre-approved for every session opened on this repository, and it is not one of the commands #382 argued for" \
-          "the vetted ones are : ./tests/run_tests.sh (mocked and self-contained), shellcheck and bash -n (analysers that run nothing)" \
+        fail "[$RULE] is pre-approved for every session opened on this repository, and it is not one of the rules #382 argued for" \
+          "the vetted ones are : Bash(./tests/run_tests.sh), Bash(shellcheck:*), Bash(bash -n:*)" \
           "git and docker build were deliberately left out ; a new entry has to be argued the same way, here and in the settings" ;;
     esac
   done < <(printf '%s\n' "$PERMISSION_RULES")
@@ -129,8 +135,8 @@ function test_every_pre_approved_command_is_one_the_repository_still_runs() {
   #
   # Each command is held to the thing in the tree that proves the repository still
   # runs it, rather than to a second copy of the list
-  if [ ! -f "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE" ]; then
-    skip_test "no .claude next to the scripts"
+  if ! claude_code_settings_can_be_read; then
+    skip_test "no .claude next to the scripts, or no jq to read it with"
     return 0
   fi
 
@@ -156,16 +162,19 @@ function test_every_pre_approved_command_is_one_the_repository_still_runs() {
           fail "shellcheck is pre-approved but no workflow gates a pull request on it any more"
         fi ;;
       'bash -n')
-        # The syntax check cases/10 runs over every script of the repository. This
-        # file is the one place the search leaves out : it names the command in
-        # every second comment, and would answer the question with itself
+        # The syntax check in cases/10, which is the only thing in the suite that
+        # runs it. A comment does not count : cases/10 names the command in one of
+        # its own comments, so a plain search for the string stayed green with the
+        # function that runs it deleted -- and this file names it more often still.
+        # Comments are skipped the way cases/10 skips them for the same reason, and
+        # this file is left out of the search altogether
         local THIS_CASE_FILE
         THIS_CASE_FILE=$(basename "${BASH_SOURCE[0]}")
 
-        if grep -rqF --exclude="$THIS_CASE_FILE" -- 'bash -n' "$TESTS_DIRECTORY/cases"; then
+        if grep -rqE --exclude="$THIS_CASE_FILE" -- '^[^#]*bash -n' "$TESTS_DIRECTORY/cases"; then
           pass
         else
-          fail "bash -n is pre-approved but the suite does not run it any more"
+          fail "bash -n is pre-approved but nothing in the suite runs it any more"
         fi ;;
       *)
         fail "nothing in the tree proves this repository still runs [$COMMAND]" \
