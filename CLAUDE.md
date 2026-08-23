@@ -16,13 +16,14 @@ the control logic.
 | --- | --- |
 | `supervisor.sh` | The image's entrypoint. Starts the controller and, if it dies without doing it itself, hands the fans back to Dell |
 | `Dell_iDRAC_fan_controller.sh` | Configuration validation, then the monitoring loop |
-| `functions.sh` | Every function (76, flat namespace, no modules) |
-| `constants.sh` | The raw IPMI commands and the tables they are read against |
+| `functions.sh` | Every shared function (76, flat namespace, no modules). `supervisor.sh` keeps two of its own |
+| `constants.sh` | The fixed values everything else is measured against : bounds, thresholds, intervals, column widths, Redfish URIs. The raw IPMI commands are in `functions.sh` |
 | `healthcheck.sh` | `HEALTHCHECK` for the image |
 | `tests/` | The suite. See `tests/README.md`, which is thorough — read it before touching a test |
 
-`Dell_iDRAC_fan_controller.sh`, `healthcheck.sh` and `supervisor.sh` each `source
-functions.sh` and `constants.sh`. That is the entire dependency graph.
+`Dell_iDRAC_fan_controller.sh` and `supervisor.sh` each `source functions.sh` and
+`constants.sh` ; `healthcheck.sh` sources `functions.sh` alone. That is the entire
+dependency graph.
 
 ## Commands
 
@@ -87,13 +88,14 @@ runner discovers it in declaration order and turns its name into the reported li
 nothing to register.
 
 ```bash
-function test_a_single_cpu_server_reports_one_cpu() {
+function test_a_single_socket_server_reports_one_cpu() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 1 --cpu-temperatures "44")
 
-  retrieve_temperatures "$SDR_DATA"
+  detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  retrieve_temperatures
 
-  assert_equals "1" "$NUMBER_OF_DETECTED_CPUS"
+  assert_equals "1" "${#DETECTED_CPU_ENTITY_IDS[@]}"
 }
 ```
 
@@ -112,6 +114,7 @@ controller cannot cool them, and the suite pins what it does instead.
 
 ## Environment
 
-`.claude/hooks/session-start.sh` installs `shellcheck` in Claude Code on the web, where
-it is otherwise missing while CI still gates on it. `ipmitool`, `lm-sensors` and `perl`
-are not needed to run the suite — it mocks them.
+`.claude/hooks/session-start.sh` installs `shellcheck` and `jq` in Claude Code on the
+web, where neither is there by default : CI gates every pull request on the first, and
+`tests/cases/14_latest_tag_reconciliation.sh` skips itself without the second. `ipmitool`,
+`lm-sensors` and `perl` are not needed to run the suite — it mocks them.

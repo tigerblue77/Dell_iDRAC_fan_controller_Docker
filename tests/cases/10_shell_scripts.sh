@@ -42,14 +42,19 @@ function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
   # to .github/ afterwards stay out of it for months without a word. The list is
   # hand-maintained, so it is worth a guard : nothing else lints these files.
   # "bash -n" above is a syntax check and the suite invokes shellcheck nowhere,
-  # so a script missing from that list is analysed by nothing at all -- and the
-  # ones outside the Docker image are exactly the ones no test ever reaches :
-  # those under .github/ run first on the tag or the push that publishes, and the
-  # hook under .claude/ when a Claude Code on the web session opens
+  # so a script missing from that list is analysed by nothing at all. The ones
+  # under .github/ run first on the tag or the push that publishes -- the suite
+  # does execute all three, in cases 13, 14 and 16, but never on the path a
+  # release takes. The hook under .claude/ has neither : it runs when a Claude
+  # Code on the web session opens, where no workflow and no test ever looks.
+  #
+  # Walked over all of .claude/ rather than the one directory a script lives in
+  # today, because that is the scope the convention in CLAUDE.md states
   local -r LINTED_SCRIPTS="$(sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p' "$SHELLCHECK_WORKFLOW")"
 
+  shopt -s globstar
   local SCRIPT RELATIVE_PATH
-  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh "$REPO_ROOT"/.claude/hooks/*.sh; do
+  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh "$REPO_ROOT"/.claude/**/*.sh; do
     [ -f "$SCRIPT" ] || continue
 
     RELATIVE_PATH="${SCRIPT#$REPO_ROOT/}"
@@ -60,6 +65,8 @@ function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
         "it checks : $(printf '%s' "$LINTED_SCRIPTS" | tr '\n' ' ')"
     fi
   done
+
+  shopt -u globstar
 }
 
 function test_no_statement_expands_two_command_substitutions() {
