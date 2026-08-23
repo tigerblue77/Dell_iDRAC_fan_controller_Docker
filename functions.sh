@@ -653,34 +653,71 @@ function retrieve_CPU_temperatures_from_lm_sensors() {
     # and a chip name never does. "Adapter:" is neither
     /^[^[:space:]]/ {
       if ($0 ~ /^Adapter:/) next
-      if ($0 ~ /:[[:space:]]*$/) {
-        FEATURE = $0
-        sub(/:[[:space:]]*$/, "", FEATURE)
-        next
-      }
+      if ($0 ~ /:[[:space:]]*$/) next
       CHIP = $0
       IS_CPU_CHIP = (CHIP ~ /^coretemp-/)
-      FEATURE = ""
+      if (IS_CPU_CHIP) {
+        # The socket is read from the chip name -- coretemp registers one platform device per physical
+        # package, "coretemp-isa-0000" being package 0 -- rather than from the "Package id N" feature
+        # label the readings used to be located by. A chip that exposes no package has no such label at
+        # all, so numbering the sockets from it would have left the fallback below with nothing to
+        # number by, and two schemes that can disagree instead of the one used everywhere
+        SOCKET_NAME = CHIP
+        sub(/^.*-/, "", SOCKET_NAME)
+        if (SOCKET_NAME ~ /^[0-9]+$/) {
+          SOCKET = SOCKET_NAME + 0
+        } else {
+          # A chip named in a shape this does not recognize still gets a column rather than being
+          # dropped : an unmonitored CPU is the one outcome worse than an oddly numbered one
+          SOCKET = NEXT_UNNAMED_SOCKET++
+        }
+        CHIP_OF[SOCKET] = CHIP
+      }
       next
     }
     !IS_CPU_CHIP { next }
-    FEATURE !~ /^Package id [0-9]+$/ { next }
-    # The package feature is temp1 on coretemp, but the sub-feature number is not what identifies it
-    # here : the feature label above already did, so any "_input" under it is the reading. The first one
-    # wins, a second one for the same package being a shape this driver does not produce
+
+    # The sub-feature number is what identifies the package, not the label above it. coretemp puts the
+    # package on temp1 and the cores on temp2 upwards ("core N" becoming temp(N+2)), and the label is
+    # the one part a user can rewrite : /etc/sensors.d can rename any feature, and unraid ships a
+    # configuration that renames a coretemp feature to "CPU Temp" (issue #378). Matching the label
+    # therefore lost the reading on a machine that had it, which the sub-feature number cannot.
+    # /!\ This is the driver -- consistent across every dump this repository has seen, including a
+    # package-less chip whose cores still start at temp2, leaving temp1 empty rather than reusing it --
+    # rather than the documented hwmon interface, which is the label. If a kernel ever renumbers them,
+    # a core would be read where a package is expected
     $1 ~ /^temp[0-9]+_input:$/ && $2 ~ /^-?[0-9]+(\.[0-9]+)?$/ {
-      split(FEATURE, PACKAGE, " ")
-      SOCKET = PACKAGE[3] + 0
-      if (SOCKET in READING) next
-      READING[SOCKET] = $2 + 0
-      CHIP_OF[SOCKET] = CHIP
+      SUBFEATURE = $1
+      sub(/^temp/, "", SUBFEATURE)
+      sub(/_input:$/, "", SUBFEATURE)
+
+      if (SUBFEATURE + 0 == 1) {
+        if (!(SOCKET in PACKAGE)) PACKAGE[SOCKET] = $2 + 0
+        next
+      }
+
+      # The hottest core, not their average : the threshold they are compared against is itself a
+      # per-core value ("temp<N>_max", what the CPU manufacturer set for one core), and the package
+      # sensor this stands in for tracks the hottest point of the die rather than a mean. An average
+      # would read far below both on a partly loaded CPU -- one core at 70°C among five idle ones
+      # averages to about 37°C -- and keep the fans low while a core approached throttling
+      if (!(SOCKET in HOTTEST_CORE) || $2 + 0 > HOTTEST_CORE[SOCKET]) HOTTEST_CORE[SOCKET] = $2 + 0
     }
     END {
-      for (SOCKET in READING) {
+      for (SOCKET in CHIP_OF) {
+        if (SOCKET in PACKAGE) {
+          KIND = "package"
+          READING = PACKAGE[SOCKET]
+        } else if (SOCKET in HOTTEST_CORE) {
+          KIND = "hottest-core"
+          READING = HOTTEST_CORE[SOCKET]
+        } else {
+          continue
+        }
         # Rounded rather than truncated : this is a reading, not the threshold it is compared against,
         # and reporting a 45.8°C CPU as 45°C would under-report it by nearly a degree on every cycle.
         # iDRAC hands out whole degrees too, so this keeps both sources on the same scale
-        printf "%d %s %d\n", SOCKET, CHIP_OF[SOCKET], (READING[SOCKET] >= 0 ? READING[SOCKET] + 0.5 : READING[SOCKET] - 0.5)
+        printf "%d %s %s %d\n", SOCKET, CHIP_OF[SOCKET], KIND, (READING >= 0 ? READING + 0.5 : READING - 0.5)
       }
     }' | sort -n -k1,1
 }
@@ -707,11 +744,45 @@ function is_lm_sensors_reporting_CPU_temperatures() {
 # chip each CPU column is read from, and the sensor ID column holds "--" : there is no IPMI sensor here
 # and inventing a plausible hexadecimal ID would be the one thing that could mislead
 function build_CPU_temperature_sdr_lines_from_lm_sensors() {
-  local SOCKET CHIP TEMPERATURE
-  while read -r SOCKET CHIP TEMPERATURE; do
+  HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES=false
+  local SOCKET CHIP KIND TEMPERATURE
+  while read -r SOCKET CHIP KIND TEMPERATURE; do
     [ -n "$CHIP" ] || continue
+    if [ "$KIND" == "hottest-core" ]; then
+      HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES=true
+    fi
     printf '%-16s | %s | %-3s | %4s | %s degrees C\n' "$CHIP" "--" "ok" "3.$((SOCKET + 1))" "$TEMPERATURE"
   done < <(retrieve_CPU_temperatures_from_lm_sensors)
+}
+
+# Whether the last reading had to fall back to a CPU's cores for want of a package sensor, and whether
+# that has been said. Set by build_CPU_temperature_sdr_lines_from_lm_sensors() above
+HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES=false
+HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED=false
+
+# Say once that a CPU column is being filled from its cores rather than from its package.
+# Usage : report_the_core_temperature_fallback
+# Returns : 0 if this call is the one that said it
+#
+# Worth saying because the two are not the same measurement. The package sensor tracks the hottest
+# point of the die ; the hottest core is the closest stand-in for it, and on a CPU that has no package
+# sensor at all it is the only one available. A column filled either way looks identical in the table,
+# so the difference has to be stated somewhere rather than left for someone to discover by comparing
+# two machines
+function report_the_core_temperature_fallback() {
+  if ! "$HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES"; then
+    return 1
+  fi
+
+  if "$HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED"; then
+    return 1
+  fi
+
+  HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED=true
+
+  local TIMESTAMP
+  set_log_timestamp TIMESTAMP
+  printf "%19s  At least one CPU here exposes no package temperature sensor, so its column shows its hottest core instead. That is the closest stand-in -- the package sensor tracks the hottest point of the die rather than an average -- but it is not the same reading, and it runs slightly warmer than a package one would.\n" "$TIMESTAMP"
 }
 
 # Replace the processor entities of an ipmitool sdr output with the ones lm-sensors reports
@@ -790,7 +861,7 @@ function resolve_CPU_temperature_source() {
       # would hand the fans back to Dell's profile forever, which looks exactly like a container doing
       # its job and is the hardest possible way to find out that a kernel module is missing
       if ! is_lm_sensors_reporting_CPU_temperatures; then
-        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that actually reports something : no CPU temperature could be read from lm-sensors. Check that your Docker host exposes them through /sys (the \"coretemp\" kernel module) and that \"sensors\" reports a \"Package id\" temperature. Note that only Intel CPUs are supported here: AMD's \"k10temp\" driver reports \"Tctl\", which is not the physical temperature the iDRAC reports"
+        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that actually reports something : no CPU temperature could be read from lm-sensors. Check that your Docker host exposes them through /sys (the \"coretemp\" kernel module) and that \"sensors\" reports a \"coretemp-\" chip with at least one temperature under it. Note that only Intel CPUs are supported here: AMD's \"k10temp\" driver reports \"Tctl\", which is not the physical temperature the iDRAC reports"
       fi
 
       CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"

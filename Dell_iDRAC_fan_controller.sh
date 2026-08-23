@@ -362,6 +362,10 @@ NUMBER_OF_DETECTED_CPUS=${#DETECTED_CPU_ENTITY_IDS[@]}
 
 echo "$(format_detected_CPU_temperature_sensors)."
 
+# A column filled from a CPU's cores looks exactly like one filled from its package, so the difference
+# is stated once here rather than left to be discovered by comparing two machines
+report_the_core_temperature_fallback
+
 warn_if_unexpected_number_of_CPUs
 
 retrieve_temperatures "$SDR_TEMPERATURE_DATA"

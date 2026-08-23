@@ -31,6 +31,23 @@ function coretemp_cores() {
   printf 'Core 0:\\n  temp2_input: %s\\nCore 1:\\n  temp3_input: %s\\n' "$1" "$2"
 }
 
+# A coretemp chip with NO package sensor at all : its cores still start at temp2, the temp1 slot being
+# reserved for a package this CPU does not have rather than reused. Taken from the R510 of issue #378,
+# whose two Westmere Xeons both report this shape
+# Usage : coretemp_chip_without_a_package $CHIP_INDEX $FIRST_CORE $SECOND_CORE $THIRD_CORE
+function coretemp_chip_without_a_package() {
+  printf 'coretemp-isa-000%s\\nAdapter: ISA adapter\\nCore 0:\\n  temp2_input: %s\\n  temp2_max: 69.000\\nCore 1:\\n  temp3_input: %s\\n  temp3_max: 69.000\\nCore 8:\\n  temp10_input: %s\\n  temp10_max: 69.000\\n' \
+    "$1" "$2" "$3" "$4"
+}
+
+# The same, with the first core relabelled the way unraid's Dynamix plugin does it : "label temp2 CPU
+# Temp" in /etc/sensors.d/sensors.conf renames the feature, and "sensors -u" prints the new name
+# Usage : coretemp_chip_without_a_package_relabelled $CHIP_INDEX $FIRST_CORE $SECOND_CORE $THIRD_CORE
+function coretemp_chip_without_a_package_relabelled() {
+  printf 'coretemp-isa-000%s\\nAdapter: ISA adapter\\nCPU Temp:\\n  temp2_input: %s\\n  temp2_max: 69.000\\nCore 1:\\n  temp3_input: %s\\n  temp3_max: 69.000\\nCore 8:\\n  temp10_input: %s\\n  temp10_max: 69.000\\n' \
+    "$1" "$2" "$3" "$4"
+}
+
 # A dual socket machine whose CPUs lm-sensors can read
 # Usage : simulate_readable_CPUs_in_lm_sensors [$FIRST_TEMPERATURE $SECOND_TEMPERATURE]
 function simulate_readable_CPUs_in_lm_sensors() {
@@ -85,8 +102,8 @@ function test_the_package_temperature_of_each_socket_is_read() {
 
   local -r READINGS=$(retrieve_CPU_temperatures_from_lm_sensors)
 
-  assert_equals "0 coretemp-isa-0000 45
-1 coretemp-isa-0001 47" "$READINGS"
+  assert_equals "0 coretemp-isa-0000 package 45
+1 coretemp-isa-0001 package 47" "$READINGS"
 }
 
 function test_the_per_core_sub_features_are_not_read() {
@@ -96,7 +113,7 @@ function test_the_per_core_sub_features_are_not_read() {
 
   local -r READINGS=$(retrieve_CPU_temperatures_from_lm_sensors)
 
-  assert_equals "0 coretemp-isa-0000 45" "$READINGS"
+  assert_equals "0 coretemp-isa-0000 package 45" "$READINGS"
 }
 
 function test_a_reading_is_rounded_and_not_truncated() {
@@ -104,10 +121,10 @@ function test_a_reading_is_rounded_and_not_truncated() {
   # what the manufacturer defined, this is a measurement : truncating it would
   # under-report a 45.8°C CPU by nearly a degree on every single cycle
   export MOCK_SENSORS_OUTPUT="$(coretemp_chip_reporting 0 45.800)"
-  assert_equals "0 coretemp-isa-0000 46" "$(retrieve_CPU_temperatures_from_lm_sensors)"
+  assert_equals "0 coretemp-isa-0000 package 46" "$(retrieve_CPU_temperatures_from_lm_sensors)"
 
   export MOCK_SENSORS_OUTPUT="$(coretemp_chip_reporting 0 45.200)"
-  assert_equals "0 coretemp-isa-0000 45" "$(retrieve_CPU_temperatures_from_lm_sensors)"
+  assert_equals "0 coretemp-isa-0000 package 45" "$(retrieve_CPU_temperatures_from_lm_sensors)"
 }
 
 function test_chips_that_are_not_cpus_are_not_read_as_cpus() {
@@ -115,7 +132,7 @@ function test_chips_that_are_not_cpus_are_not_read_as_cpus() {
   # CPU would put its temperature in a column labelled "CPU 2"
   export MOCK_SENSORS_OUTPUT="$(coretemp_chip_reporting 0 45.000)nvme-pci-0100\\nAdapter: PCI adapter\\nComposite:\\n  temp1_input: 38.850\\n"
 
-  assert_equals "0 coretemp-isa-0000 45" "$(retrieve_CPU_temperatures_from_lm_sensors)"
+  assert_equals "0 coretemp-isa-0000 package 45" "$(retrieve_CPU_temperatures_from_lm_sensors)"
 }
 
 function test_amd_chips_are_not_read() {
@@ -619,4 +636,73 @@ function test_the_healthcheck_keeps_asking_the_idrac_on_the_automatic_source() {
   (cd "$REPO_ROOT" && bash ./healthcheck.sh) > /dev/null 2>&1 || EXIT_CODE=$?
 
   assert_not_equals 0 "$EXIT_CODE"
+}
+
+# --- CPUs that expose no package temperature sensor (issue #378) ---------------
+
+function test_a_cpu_without_a_package_sensor_is_read_from_its_hottest_core() {
+  # The R510 of issue #378 : two Westmere Xeons, neither exposing a package sensor, so the container
+  # found nothing and refused to start. The hottest core is the closest stand-in -- the package sensor
+  # tracks the hottest point of the die rather than a mean
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_without_a_package 0 32.000 26.000 25.000)"
+
+  assert_equals "0 coretemp-isa-0000 hottest-core 32" "$(retrieve_CPU_temperatures_from_lm_sensors)" \
+    "the hottest of the three cores is what stands in for the missing package"
+}
+
+function test_the_hottest_core_is_taken_rather_than_their_average() {
+  # An average would read far below the threshold on a partly loaded CPU : one core at 70°C among five
+  # idle ones averages to about 37°C, and the fans would stay low while that core approached
+  # throttling. The threshold it is compared against is itself a per-core value
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_without_a_package 0 70.000 30.000 30.000)"
+
+  assert_equals "0 coretemp-isa-0000 hottest-core 70" "$(retrieve_CPU_temperatures_from_lm_sensors)" \
+    "the average of these three cores is about 43, which would keep the fans low on a throttling CPU"
+}
+
+function test_a_relabelled_feature_no_longer_hides_the_reading() {
+  # What actually broke on the reporter's machine : unraid's sensors.conf renames a coretemp feature,
+  # and the readings used to be located by that very name. The sub-feature number cannot be renamed
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_without_a_package_relabelled 0 22.000 32.000 28.000)"
+
+  assert_equals "0 coretemp-isa-0000 hottest-core 32" "$(retrieve_CPU_temperatures_from_lm_sensors)" \
+    "a renamed feature must not cost the reading"
+}
+
+function test_a_package_sensor_still_wins_over_the_cores_it_sits_with() {
+  # The fallback must stay invisible on hardware that has a package : reading the hottest core there
+  # would quietly raise what every existing lm-sensors user is supervised against
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_reporting 0 45.000)$(coretemp_cores 48.000 52.000)"
+
+  assert_equals "0 coretemp-isa-0000 package 45" "$(retrieve_CPU_temperatures_from_lm_sensors)" \
+    "45 is the package, and the 52°C core must not answer for it"
+}
+
+function test_a_socket_is_numbered_from_its_chip_rather_than_from_a_label() {
+  # With no "Package id N" to read the socket from, the chip name is what numbers them -- and it has to
+  # number them the same way on a machine that does have packages, or the two schemes could disagree
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_without_a_package 0 32.000 26.000 25.000)$(coretemp_chip_without_a_package 1 22.000 32.000 28.000)"
+
+  assert_equals "0 coretemp-isa-0000 hottest-core 32
+1 coretemp-isa-0001 hottest-core 32" "$(retrieve_CPU_temperatures_from_lm_sensors)" \
+    "both sockets are read, and numbered after the chip that carries them"
+}
+
+function test_the_core_fallback_is_reported_once_and_only_when_it_happens() {
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_without_a_package 0 32.000 26.000 25.000)"
+  CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
+
+  build_CPU_temperature_sdr_lines_from_lm_sensors > /dev/null
+  capture_output report_the_core_temperature_fallback
+  assert_contains "$CAPTURED_OUTPUT" "hottest core" "the difference has to be stated once"
+
+  capture_output report_the_core_temperature_fallback
+  assert_empty "$CAPTURED_OUTPUT" "and not on every cycle for the life of the container"
+
+  # A machine that does have packages must never see the line at all
+  HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED=false
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_reporting 0 45.000)"
+  build_CPU_temperature_sdr_lines_from_lm_sensors > /dev/null
+  capture_output report_the_core_temperature_fallback
+  assert_empty "$CAPTURED_OUTPUT" "nothing is standing in for anything here"
 }
