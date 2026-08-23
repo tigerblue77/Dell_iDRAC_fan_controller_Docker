@@ -23,11 +23,17 @@ readonly CLAUDE_CODE_SETTINGS_FILE=".claude/settings.json"
 #
 # jq is the second condition. The list is read out of a JSON file, and reading JSON
 # with sed is how the first version of this guard came to stop at the first "]" of a
-# rule and report green over everything that followed it. The suite's own
-# dependencies stop at bash, coreutils, grep and awk, so a machine without jq skips
-# these rather than turning the promise in tests/README.md into a lie -- the same
-# trade cases/14 makes, and every runner, the devcontainer and the SessionStart hook
-# provide it
+# rule and report green over everything that followed it. Two rewrites that kept to
+# grep and awk were tried and measured against jq : both mis-read a rule holding an
+# escaped quote, "Bash(grep -E \"[0-9]\":*)", and one of them stopped there and never
+# saw the two entries after it. A rule can contain any character JSON can carry, so
+# what reads it has to be a JSON parser.
+#
+# The suite's own dependencies stop at bash, coreutils, grep and awk, so a machine
+# without jq skips these rather than turning the promise in tests/README.md into a
+# lie -- the same trade cases/14 makes. The skip is reported rather than silent, the
+# runner counts it, and every runner, the devcontainer and the SessionStart hook
+# provide jq : what gates a pull request runs these for real
 # Usage : if ! claude_code_settings_can_be_read; then skip_test "..."; return 0; fi
 function claude_code_settings_can_be_read() {
   [ -f "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE" ] && command -v jq > /dev/null 2>&1
