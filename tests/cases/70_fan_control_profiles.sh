@@ -782,6 +782,39 @@ function test_a_walk_that_found_nothing_is_dropped_once_the_broadcast_selector_l
     "and the fans are driven rather than handed back to Dell"
 }
 
+function test_a_server_that_falls_back_into_refusing_everything_is_explained_again() {
+  # The explanation names a state : the fans were taken, the speed was refused both ways, so they were
+  # handed back to Dell. A server that accepts 0xff has left that state, so the one-off flag has to go
+  # with the walk's answer -- otherwise the explanation is spent on an episode that is over, and the
+  # check that re-enters the state reports it as a bare completion code with nothing saying what it
+  # means. Unreachable before #409, because the walk was never run a second time
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  assert_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
+    "the first episode is explained, which is what spends the flag"
+
+  # Still refusing : a settled server must not be told twice, which is what the flag is for
+  capture_output apply_user_fan_control_profile
+  assert_not_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
+    "the same answer arriving again explains nothing new"
+
+  # The server takes the broadcast selector : the episode is over
+  unset MOCK_IPMITOOL_RAW_FAIL_PATTERN
+  capture_output apply_user_fan_control_profile
+  assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE"
+
+  # And falls back into it. The state is re-entered, so it is named rather than left to a raw code
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  capture_output apply_user_fan_control_profile
+
+  assert_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
+    "a state re-entered must be explained again, not reported as a bare completion code"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "speed refused" \
+    "and the fans are back on Dell's profile, which is what the explanation says"
+}
+
 function test_a_server_that_takes_the_broadcast_selector_never_probes_a_single_fan() {
   # The fallback must be invisible on healthy hardware : one command, no walk, no message
   DECIMAL_FAN_SPEED=30
