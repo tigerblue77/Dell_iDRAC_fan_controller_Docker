@@ -11,7 +11,7 @@
 #
 #   ./tests/run_tests.sh                 # run everything
 #   ./tests/run_tests.sh --list          # list the test cases without running them
-#   ./tests/run_tests.sh -f temperature  # run the test cases whose name matches
+#   ./tests/run_tests.sh -f temperature  # run the cases whose name, or whose case file, matches
 #   ./tests/run_tests.sh --tap           # emit TAP output for a CI parser
 #   ./tests/run_tests.sh --junit FILE    # write a JUnit XML report
 #   ./tests/run_tests.sh --summary FILE  # write a Markdown report
@@ -34,7 +34,7 @@ function print_usage() {
   cat << 'EOF'
 Usage: tests/run_tests.sh [option ...]
 
-  -f, --filter PATTERN  only run the test cases whose name matches PATTERN
+  -f, --filter PATTERN  only run the test cases whose name, or whose case file, matches PATTERN
   -l, --list            list the test cases without running them
       --tap             emit TAP version 13 output
       --junit FILE      write a JUnit XML report, for a CI that publishes one
@@ -162,7 +162,12 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   while IFS= read -r TEST_CASE_NAME; do
     [ -n "$TEST_CASE_NAME" ] || continue
     DISCOVERED_TEST_CASES+=("$TEST_CASE_NAME")
-    if [ -n "$FILTER" ] && [[ ! "$TEST_CASE_NAME" =~ $FILTER ]] && [[ ! "$TEST_FILE" =~ $FILTER ]]; then
+    # Matched against the case file's NAME, never its path : TEST_FILE is absolute, so
+    # matching it let the directory the repository was cloned into decide what a filter
+    # selects. Under the name "git clone" gives this project, "-f fan" matched every case
+    # file's path and ran all of them, and the documented "-f temperature" selected four
+    # files' worth of cases beyond the ones whose name carries the word
+    if [ -n "$FILTER" ] && [[ ! "$TEST_CASE_NAME" =~ $FILTER ]] && [[ ! "${TEST_FILE##*/}" =~ $FILTER ]]; then
       continue
     fi
     SELECTED_TEST_CASES+=("$TEST_FILE"$'\t'"$TEST_CASE_NAME")

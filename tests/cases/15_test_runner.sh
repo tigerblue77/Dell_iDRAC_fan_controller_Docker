@@ -19,6 +19,7 @@ readonly PROBE_PREFIX="test"
 # controller, and never joins the suite that is currently running
 function run_the_runner_on_a_probe_case_file() {
   local -r PROBE_CONTENT="$1"
+  shift
 
   local -r PROBE_REPOSITORY="$TEST_TEMPORARY_DIRECTORY/runner_probe"
   rm -rf "$PROBE_REPOSITORY"
@@ -33,8 +34,40 @@ function run_the_runner_on_a_probe_case_file() {
   cp -r "$TESTS_DIRECTORY/lib" "$TESTS_DIRECTORY/mocks" "$PROBE_REPOSITORY/tests/"
   printf '%s\n' "$PROBE_CONTENT" > "$PROBE_REPOSITORY/tests/cases/50_probe.sh"
 
-  PROBE_OUTPUT=$(bash "$PROBE_REPOSITORY/tests/run_tests.sh" --no-color 2>&1)
+  # Anything after the probe content is handed to the runner, which is how a case
+  # exercises an option rather than only the discovery
+  PROBE_OUTPUT=$(bash "$PROBE_REPOSITORY/tests/run_tests.sh" --no-color "$@" 2>&1)
   PROBE_EXIT_CODE=$?
+}
+
+function test_a_filter_matches_a_case_file_by_name_and_never_by_the_path_it_sits_at() {
+  # The runner matches a filter against the case name or the case FILE. Which of the
+  # two the file contributes decides whether the directory somebody cloned into is
+  # part of the question : while it was the absolute path, "-f fan" selected every
+  # case in this repository, the clone being named Dell_iDRAC_fan_controller_Docker,
+  # and the documented "-f temperature" selected four files' worth of cases beyond
+  # the ones whose name carries the word. Nothing said the filter had been widened --
+  # the count was the only clue.
+  #
+  # The probe repository sits under a directory called "runner_probe", a string that
+  # appears in neither the case file's name nor the case's own name, so filtering on
+  # it selects nothing unless the path is being matched
+  run_the_runner_on_a_probe_case_file \
+    "function ${PROBE_PREFIX}_is_selected_by_its_own_name() { pass ; }" \
+    --filter runner_probe
+
+  assert_equals 1 "$PROBE_EXIT_CODE" "a filter matching only the path a repository was cloned into should select nothing"
+  assert_contains "$PROBE_OUTPUT" "No test case matched" \
+    "and the runner should say so, rather than silently run every case"
+
+  # The other half of the same decision : a filter naming the case file is the way to
+  # run one file, and that has to keep working
+  run_the_runner_on_a_probe_case_file \
+    "function ${PROBE_PREFIX}_is_selected_by_its_own_name() { pass ; }" \
+    --filter 50_probe
+
+  assert_equals 0 "$PROBE_EXIT_CODE" "a filter naming the case file should still select what is in it"
+  assert_contains "$PROBE_OUTPUT" "1 test cases passed" "and select exactly that"
 }
 
 function test_a_test_case_that_asserts_nothing_is_reported_as_a_failure() {

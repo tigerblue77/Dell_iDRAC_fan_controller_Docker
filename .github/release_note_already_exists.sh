@@ -16,8 +16,8 @@
 # it has just generated to that ("body = `${body}\n\n${releaseNotes.data.body}`",
 # in prepareReleaseMutation). First run, nothing is there, and one copy comes
 # out. Second run, the copy the first one wrote is what gets appended to. v1.71
-# was re-fired once and carries its changelog twice ; v1.75 did too and was
-# repaired by hand. The "append_body" input is not what does this, and setting it
+# and v1.75 were each re-fired once, came out carrying their changelog twice,
+# and were repaired by hand. The "append_body" input is not what does this, and setting it
 # to false changes nothing : it only ever applies to a body the step supplies
 # itself.
 #

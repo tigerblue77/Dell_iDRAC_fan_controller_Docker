@@ -39,8 +39,9 @@ readonly MAXIMUM_FAN_SPEED_PERCENTAGE=100
 # How far the per-fan identifier probe goes before it stops, on a server that refuses the broadcast fan
 # selector 0xff and has to be addressed one fan at a time (issue #378).
 #
-# The probe walks upwards from 0x00 and stops at the first identifier the server refuses, so this is only
-# the backstop for a BMC that would accept every one of them and leave the walk running forever. It is
+# The probe tries every identifier from 0x00 up to this bound, keeping the ones the server accepts and
+# carrying on past the ones it refuses, so this is the end of the address space a discovery searches --
+# and the number of commands it costs -- rather than a guard against a walk that would never stop. It is
 # deliberately far above any real fan count -- the R510 this was reported from accepts 0x00 to 0x07 and
 # refuses 0x08 onwards, and no PowerEdge exposes anything close to 32 fans -- because being too low would
 # silently stop the walk on a server that has more, leaving the fans past the cut running at whatever
