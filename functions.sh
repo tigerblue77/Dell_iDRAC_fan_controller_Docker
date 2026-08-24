@@ -144,6 +144,17 @@ function apply_user_fan_control_profile() {
       # reset, or a firmware that came back answering 0xcc the way an 11th generation one does, gets
       # its address space worked out again instead of being handed back fans it would now accept
       HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=false
+      # The explanation of that refusal goes with it, for the same reason and at the same instant. It
+      # describes a STATE -- the fans were taken, the speed was refused both ways, so they were handed
+      # back to Dell -- and this server has just left that state. Left standing, it would be spent on
+      # an episode that is over, and the check that re-enters the state would report it as a bare
+      # completion code with nothing saying what it means (issue #425).
+      #
+      # This does not loosen what it guards. The flag exists to stop the explanation being repeated on
+      # every check against a settled server, and a settled server never reaches this line : getting
+      # here means the broadcast command LANDED, which is the server's answer changing rather than the
+      # same answer arriving again. It is said once per episode instead of once per container
+      HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
     fi
   fi
 
@@ -2088,8 +2099,14 @@ function note_that_the_server_refuses_fan_control() {
 }
 
 # Whether the server has already been told about the broadcast fan selector it rejects, so that it is
-# explained the once rather than on every cycle for the life of the container.
-# Only ever written by note_that_the_server_rejects_the_broadcast_fan_selector() below
+# explained the once rather than on every cycle for a settled server.
+#
+# Set by note_that_the_server_rejects_the_broadcast_fan_selector() below, and cleared in
+# apply_user_fan_control_profile() on the one answer that ends the episode it describes : a broadcast
+# command that lands. The explanation names a state -- fans taken, speed refused both ways, fans handed
+# back to Dell -- and a server that accepts 0xff is no longer in it, so a later return to that state is
+# explained again rather than reported as a bare completion code (issues #397 and #425). Once per
+# episode, never once per check : reaching the clear means the server's answer CHANGED
 HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
 
 # Read a refused fan speed command and, if the server refused it over its data bytes, explain the one
