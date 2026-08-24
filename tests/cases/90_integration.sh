@@ -657,3 +657,31 @@ function test_a_server_that_refuses_fan_control_is_not_told_it_was_handed_anythi
     "there is nothing to hand back"
 }
 
+# The wiring behind issue #440 : the healthcheck can only tell a running monitoring
+# loop from a wedged one if the loop actually records the cycles it completes. The
+# cases in 10_shell_scripts.sh cover what the two functions decide ; these cover that
+# the loop calls one of them at all, which is what a refactor of the loop would break
+function test_the_monitoring_loop_records_the_cycles_it_completes() {
+  run_controller > /dev/null 2>&1
+
+  assert_command_succeeds "a controller that printed a table row should have recorded the cycle" \
+    test -f "$TEST_HEARTBEAT_FILE"
+}
+
+function test_a_cycle_skipped_on_a_powered_off_server_is_still_recorded() {
+  # A server legitimately switched off is a container doing its job : it observed the
+  # state correctly and applied no profile. Recording nothing there would let the
+  # healthcheck restart a container that is working, which is the failure mode that
+  # makes this whole check dangerous to get wrong.
+  #
+  # "on" first so the pre-monitoring-loop check passes and the loop is entered at all ;
+  # the last state repeats, so the loop then only ever sees a powered-off server
+  export MOCK_IPMITOOL_POWER_STATUS_SEQUENCE="on off"
+
+  local -r OUTPUT=$(run_controller "powered off" 2>&1)
+
+  assert_contains "$OUTPUT" "Target server is powered off" \
+    "the run should have reached the skipped cycle this case is about" || return 1
+  assert_command_succeeds "a skipped cycle is a completed one, and has to be recorded" \
+    test -f "$TEST_HEARTBEAT_FILE"
+}

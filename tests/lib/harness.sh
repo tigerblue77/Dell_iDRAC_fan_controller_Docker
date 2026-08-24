@@ -69,6 +69,57 @@ function setup_test_context() {
   # Short enough to keep the suite fast, long enough for run_controller to stop
   # the controller while it is idle between two cycles rather than mid-cycle
   export MOCK_SLEEP_SECONDS="0.25"
+
+  # The healthcheck's heartbeat, in this run's own temporary directory rather than
+  # at the /run path the image uses : the CI runner is not root, so a case left on
+  # the real path would exercise the "could not write it" branch there and the
+  # working one here, which is the difference a suite exists to remove.
+  # Set for the test's own shell, which has functions.sh sourced ; the controller
+  # is a process of its own and is pointed at it by the throwaway repository below
+  TEST_HEARTBEAT_FILE="$TEST_TEMPORARY_DIRECTORY/heartbeat"
+  HEARTBEAT_FILE="$TEST_HEARTBEAT_FILE"
+  HAS_THE_HEARTBEAT_FAILURE_BEEN_REPORTED=false
+  rm -f "$TEST_HEARTBEAT_FILE"
+
+  build_throwaway_controller_repository
+}
+
+# Build the repository run_controller() starts the controller from : symbolic links
+# to the real scripts, and in place of functions.sh two lines that source the real
+# one and then apply the overrides given here.
+#
+# That seam is the directory the controller runs from, because it sources
+# "functions.sh" by a relative path. It is deliberately out of reach of the
+# environment -- precisely so that "docker run -e HEARTBEAT_FILE=..." cannot
+# redirect it -- and this must not weaken that : the assignment in functions.sh
+# clobbers whatever the environment carried, on every source.
+#
+# Nothing is written outside the run's temporary directory and no root is needed, so
+# these cases run on the CI runner as well as in the Docker image.
+# Usage : build_throwaway_controller_repository ["OVERRIDE=..." ...]
+function build_throwaway_controller_repository() {
+  local -r CONTROLLER_REPOSITORY="$TEST_TEMPORARY_DIRECTORY/controller_repository"
+
+  rm -rf "$CONTROLLER_REPOSITORY"
+  mkdir -p "$CONTROLLER_REPOSITORY"
+
+  local REPOSITORY_FILE BASE_NAME
+  for REPOSITORY_FILE in "$REPO_ROOT"/*.sh; do
+    BASE_NAME=$(basename "$REPOSITORY_FILE")
+    [ "$BASE_NAME" == "functions.sh" ] && continue
+    ln -s "$REPOSITORY_FILE" "$CONTROLLER_REPOSITORY/"
+  done
+
+  {
+    printf 'source "%s/functions.sh"\n' "$REPO_ROOT"
+    printf 'HEARTBEAT_FILE="%s"\n' "$TEST_HEARTBEAT_FILE"
+    local OVERRIDE
+    for OVERRIDE in "$@"; do
+      printf '%s\n' "$OVERRIDE"
+    done
+  } > "$CONTROLLER_REPOSITORY/functions.sh"
+
+  CONTROLLER_WORKING_DIRECTORY="$CONTROLLER_REPOSITORY"
 }
 
 # The timestamp the controller stamps every printed line with. It is formatted by
@@ -126,26 +177,11 @@ function capture_output() {
 #
 # Usage : provide_local_ipmi_device; OUTPUT=$(run_controller)
 function provide_local_ipmi_device() {
-  local -r LOCAL_MODE_DIRECTORY="$TEST_TEMPORARY_DIRECTORY/local_mode_repository"
-  local -r FAKE_IPMI_DEVICE="$LOCAL_MODE_DIRECTORY/ipmi0"
+  local -r FAKE_IPMI_DEVICE="$TEST_TEMPORARY_DIRECTORY/controller_repository/ipmi0"
 
-  rm -rf "$LOCAL_MODE_DIRECTORY"
-  mkdir -p "$LOCAL_MODE_DIRECTORY"
-
-  local REPOSITORY_FILE
-  for REPOSITORY_FILE in "$REPO_ROOT"/*.sh; do
-    [ "$(basename "$REPOSITORY_FILE")" == "functions.sh" ] && continue
-    ln -s "$REPOSITORY_FILE" "$LOCAL_MODE_DIRECTORY/"
-  done
-
-  {
-    printf 'source "%s/functions.sh"\n' "$REPO_ROOT"
-    printf 'IPMI_DEVICE_PATHS=("%s")\n' "$FAKE_IPMI_DEVICE"
-  } > "$LOCAL_MODE_DIRECTORY/functions.sh"
+  build_throwaway_controller_repository "IPMI_DEVICE_PATHS=(\"$FAKE_IPMI_DEVICE\")"
 
   touch "$FAKE_IPMI_DEVICE"
-
-  CONTROLLER_WORKING_DIRECTORY="$LOCAL_MODE_DIRECTORY"
 }
 
 # A COMPLETE line of the temperature table. The controller prints a line with

@@ -18,6 +18,19 @@ source functions.sh
 # "auto" keeps checking the iDRAC even on a container that has fallen back to lm-sensors. That is
 # deliberate rather than an omission : the iDRAC is still the one being sent every fan control command,
 # so a container that has lost it has lost the only thing it can act with, whatever it reads
+# Asked before anything is read, and without touching the network : what this check is for is telling
+# Docker to restart a container that has stopped doing its job, and until now it only ever asked whether
+# the TEMPERATURE SOURCE was answering. Those are different states. An iDRAC that keeps answering while
+# the monitoring loop has wedged left the container healthy with the fans pinned at FAN_SPEED, Dell's own
+# regulation switched off and nothing evaluating the threshold any more -- the one state with no recovery,
+# since the restart policy never fires (issue #440).
+#
+# Absence is not a fault, and neither is an unreadable record : see is_the_monitoring_loop_still_reporting()
+if ! is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"; then
+  printf 'The monitoring loop has not completed a cycle for longer than its check interval allows\n' >&2
+  exit 1
+fi
+
 if [ "$(normalize_CPU_temperature_source "$CPU_TEMPERATURE_SOURCE")" == "lm-sensors" ]; then
   CPU_TEMPERATURE_DATA=$(build_CPU_temperature_sdr_lines_from_lm_sensors)
 

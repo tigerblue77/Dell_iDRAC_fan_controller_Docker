@@ -714,6 +714,25 @@ function convert_fan_speed_parameter() {
 # Not readonly, that being the whole point
 IPMI_DEVICE_PATHS=("/dev/ipmi0" "/dev/ipmi/0" "/dev/ipmidev/0")
 
+# Where the monitoring loop records that it completed a cycle, and how stale that record may get before
+# the healthcheck calls the container unhealthy.
+#
+# Declared here rather than in constants.sh for the same reason as the array above : healthcheck.sh
+# sources this file alone, and it is the one that reads them.
+#
+# Not under /app : that is WORKDIR and holds every script, so a bind mount there would shadow the
+# program itself. /run exists in the base image and is writable, and a container that cannot write it
+# leaves the file absent -- which is_the_monitoring_loop_still_reporting() reads as healthy, so a
+# filesystem this cannot use costs the supervision it would have added and nothing else.
+HEARTBEAT_FILE="/run/dell_idrac_fan_controller.heartbeat"
+
+# Three cycles rather than one, so that a slow iDRAC does not restart a container that is working, and
+# never fewer than a minute, so that a very short CHECK_INTERVAL cannot make the deadline tighter than
+# a single cycle's own IPMI round trips take. Docker's own "--retries=3" sits on top of both : three
+# consecutive failures are needed before the container is called unhealthy at all
+readonly HEARTBEAT_STALENESS_FACTOR=3
+readonly MINIMUM_HEARTBEAT_STALENESS_IN_SECONDS=60
+
 # Set the IDRAC_LOGIN_STRING variable based on connection type
 # Usage : set_iDRAC_login_string $IDRAC_HOST $IDRAC_USERNAME $IDRAC_PASSWORD
 # Returns : IDRAC_LOGIN_STRING
@@ -2751,4 +2770,64 @@ function print_warning_and_exit() {
   local -r WARNING_MESSAGE="$1"
   printf "/!\ Warning /!\ %s. Exiting.\n" "$WARNING_MESSAGE"
   exit 0
+}
+
+# Record that the monitoring loop completed a cycle.
+#
+# Called on every path that finishes one, the skipped ones included : a server legitimately powered off
+# and an iDRAC briefly unreachable are both a container doing its job, and marking those unhealthy
+# would restart a container that is working correctly (issue #440).
+#
+# A failure to write is reported once and never again. It costs the supervision this file adds, not the
+# monitoring, so it is a warning rather than a reason to stop -- and saying it every cycle would be the
+# log spam this project removes everywhere else
+# Usage : note_that_this_cycle_completed
+function note_that_this_cycle_completed() {
+  # The stderr redirection comes FIRST : bash applies them left to right, so putting it
+  # after the one that fails lets bash print its own "No such file or directory" before
+  # anything has silenced it
+  if : 2> /dev/null > "$HEARTBEAT_FILE"; then
+    return 0
+  fi
+
+  if ! "$HAS_THE_HEARTBEAT_FAILURE_BEEN_REPORTED"; then
+    HAS_THE_HEARTBEAT_FAILURE_BEEN_REPORTED=true
+    print_warning "Could not write $HEARTBEAT_FILE, so the healthcheck cannot tell a wedged controller from a running one. Fan control and temperature monitoring are unaffected"
+  fi
+
+  return 1
+}
+
+# Whether the monitoring loop is still reporting that it completes its cycles.
+#
+# Returns 0 when it is, or when there is nothing to conclude from : the file does not exist before the
+# first cycle, and the loop that waits for a powered-off server to come back can run for hours by
+# design before that first cycle happens. Treating "absent" as a fault would restart exactly the
+# container that pre-loop was written to keep alive, so absence is deliberately not a verdict.
+#
+# Returns 1 only on a record that exists and has stopped moving, which no running loop produces
+# Usage : is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"
+function is_the_monitoring_loop_still_reporting() {
+  local -r CONFIGURED_CHECK_INTERVAL="$1"
+
+  [ -f "$HEARTBEAT_FILE" ] || return 0
+
+  local LAST_COMPLETED_CYCLE
+  LAST_COMPLETED_CYCLE=$(stat -c %Y "$HEARTBEAT_FILE" 2> /dev/null)
+  # An unreadable timestamp says nothing about the loop, so it is not turned into a verdict either
+  [[ "$LAST_COMPLETED_CYCLE" =~ ^[0-9]+$ ]] || return 0
+
+  local NOW
+  printf -v NOW '%(%s)T' -1
+
+  local CHECK_INTERVAL_IN_SECONDS
+  CHECK_INTERVAL_IN_SECONDS=$(convert_duration_to_seconds "$CONFIGURED_CHECK_INTERVAL")
+  [[ "$CHECK_INTERVAL_IN_SECONDS" =~ ^[0-9]+$ ]] || CHECK_INTERVAL_IN_SECONDS=0
+
+  local DEADLINE=$((CHECK_INTERVAL_IN_SECONDS * HEARTBEAT_STALENESS_FACTOR))
+  if [ "$DEADLINE" -lt "$MINIMUM_HEARTBEAT_STALENESS_IN_SECONDS" ]; then
+    DEADLINE=$MINIMUM_HEARTBEAT_STALENESS_IN_SECONDS
+  fi
+
+  [ $((NOW - LAST_COMPLETED_CYCLE)) -le "$DEADLINE" ]
 }
