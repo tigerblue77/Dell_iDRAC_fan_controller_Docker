@@ -59,12 +59,14 @@ reach `.shellcheckrc`, so the scripts above keep the full lint (issue #432).
 
 ## Conventions
 
-- **Sign off every commit.** `git commit -s`. A commit without `Signed-off-by` is not
-  mergeable ; see `CONTRIBUTING.md` for what it certifies in a dual-licensed project.
-  The trailer names the **maintainer**, not the session : a tool certifies nothing, and
-  `.claude/hooks/session-start.sh` sets that identity at the start of every session so it
-  never has to be remembered. Record yourself as `Co-Authored-By` and leave the sign-off
-  alone.
+- **Sign off every commit** with **`git signoff`**, never `git commit -s`. A commit without
+  `Signed-off-by` is not mergeable ; see `CONTRIBUTING.md` for what it certifies in a
+  dual-licensed project. Two identities are involved and they answer different questions :
+  the commit is **authored** by the session, because that is who wrote it, and the trailer
+  names the **maintainer**, because a tool certifies nothing. `-s` derives the trailer from
+  the author and would collapse the two, so the alias carrying the right one is set by
+  `.claude/hooks/session-start.sh` at the start of every session and nothing has to be
+  remembered (#439). No `Co-Authored-By` is needed : the author field already says it.
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
 - **A new script under the repository root, `.github/` or `.claude/` must be added

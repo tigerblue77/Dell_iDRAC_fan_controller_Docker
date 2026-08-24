@@ -305,17 +305,20 @@ function test_the_session_start_hook_names_the_identity_a_commit_is_signed_with(
     return 0
   fi
 
-  # CONTRIBUTING.md requires a Signed-off-by naming a real person, and a session's
-  # default identity is the tool rather than one. The hook sets the maintainer's
-  # so the trailer never has to be typed before a merge -- drop these two lines and
-  # every commit made here goes back to certifying under a name that certifies
-  # nothing, silently, which is the state issue #388 was opened over
+  # Two identities, answering two questions. The author says who wrote the commit and
+  # is the session ; the Signed-off-by says who certifies it and is the maintainer,
+  # CONTRIBUTING.md requiring a trailer that names a real person and a tool being none.
+  # Drop the first pair and every commit here goes back to certifying under a name that
+  # certifies nothing, which is the state issue #388 was opened over ; drop the alias and
+  # "-s" derives the trailer from the author, collapsing the two the other way (#439)
   local -r HOOK=$(cat "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT")
 
   assert_contains "$HOOK" "config user.name" \
-    "the hook should still set the name a commit made here is signed off with"
+    "the hook should still set the name a commit made here is authored under"
   assert_contains "$HOOK" "config user.email" \
     "the hook should still set the address that goes with it"
+  assert_contains "$HOOK" "config alias.signoff" \
+    "the hook should still set the alias carrying the maintainer's sign-off trailer"
 }
 
 function test_the_session_start_hook_sets_that_identity_before_it_can_return_early() {
@@ -345,4 +348,59 @@ function test_the_session_start_hook_sets_that_identity_before_it_can_return_ear
     fail "the identity is set at line $IDENTITY_LINE, after the early return at line $EARLY_RETURN_LINE" \
       "every session but the first on a fresh container would stop before reaching it"
   fi
+}
+
+# What the two identities actually produce, run rather than grepped. The trap this exists
+# for is not a missing line but a working-looking one : configuring the trailer through
+# "trailer.<token>.key" makes git append its own separator and emit
+# "Signed-off-by: Tigerblue77 <...>:", which .github/check_sign_off.sh does not match and
+# nothing else reports, so the hook would look right and every commit would land uncertified.
+# The alias's quoting can break the same way and just as quietly (#439).
+#
+# git is the thing under test as much as the hook is, which is why this builds a real
+# repository like tests/cases/18_sign_off.sh does instead of asserting on the text
+function test_the_session_start_hook_authors_as_the_session_and_signs_off_as_the_maintainer() {
+  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
+    skip_test "no hook script next to the settings"
+    return 0
+  fi
+
+  if ! command -v git > /dev/null 2>&1; then
+    skip_test "git is not available, and it is what this case exercises"
+    return 0
+  fi
+
+  local SANDBOX
+  SANDBOX=$(mktemp -d)
+
+  # Only the identity block is run : everything below it in the hook installs packages,
+  # which this has no business doing. Taken from the first constant to the "fi" closing
+  # the branch that applies them, so a rewrite that moves either end fails here loudly
+  local IDENTITY_BLOCK
+  IDENTITY_BLOCK=$(sed -n '/^readonly SIGN_OFF_NAME/,/^fi$/p' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT")
+
+  if ! assert_not_empty "$IDENTITY_BLOCK" "the hook should still carry an identity block"; then
+    rm -rf "$SANDBOX"
+    return 1
+  fi
+
+  git init --quiet --initial-branch=master "$SANDBOX"
+  git -C "$SANDBOX" config commit.gpgsign false
+  CLAUDE_PROJECT_DIR="$SANDBOX" bash -c "$IDENTITY_BLOCK" > /dev/null 2>&1
+
+  printf 'x\n' > "$SANDBOX/file.txt"
+  git -C "$SANDBOX" add file.txt
+  git -C "$SANDBOX" signoff --quiet -m "A commit made the way a session here makes one" --no-verify
+
+  local COMMIT_AUTHOR
+  COMMIT_AUTHOR=$(git -C "$SANDBOX" log -1 --format='%an <%ae>')
+  local COMMIT_SIGN_OFF
+  COMMIT_SIGN_OFF=$(git -C "$SANDBOX" log -1 --format='%(trailers:key=Signed-off-by,valueonly)')
+
+  rm -rf "$SANDBOX"
+
+  assert_equals "Claude <noreply@anthropic.com>" "$COMMIT_AUTHOR" \
+    "the author names who wrote the commit, which is the session"
+  assert_equals "Tigerblue77 <37409593+tigerblue77@users.noreply.github.com>" "${COMMIT_SIGN_OFF//$'\n'/}" \
+    "the trailer names who certifies it, which is the maintainer"
 }
