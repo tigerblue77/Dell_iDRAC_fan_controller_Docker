@@ -48,6 +48,16 @@ function coretemp_chip_without_a_package_relabelled() {
     "$1" "$2" "$3" "$4"
 }
 
+# A coretemp chip whose PACKAGE feature has been renamed, which is what /etc/sensors.d does : the
+# package still sits on temp1, only the label above it changed. This is the shape that tells matching
+# on the label apart from matching on the sub-feature number -- the previous relabelled fixture renamed
+# a core on a chip that had no temp1 at all, so it passed under both
+# Usage : coretemp_chip_with_a_renamed_package $CHIP_INDEX $PACKAGE $FIRST_CORE $SECOND_CORE
+function coretemp_chip_with_a_renamed_package() {
+  printf 'coretemp-isa-000%s\\nAdapter: ISA adapter\\nCPU Temp:\\n  temp1_input: %s\\n  temp1_max: 62.000\\nCore 0:\\n  temp2_input: %s\\nCore 1:\\n  temp3_input: %s\\n' \
+    "$1" "$2" "$3" "$4"
+}
+
 # A dual socket machine whose CPUs lm-sensors can read
 # Usage : simulate_readable_CPUs_in_lm_sensors [$FIRST_TEMPERATURE $SECOND_TEMPERATURE]
 function simulate_readable_CPUs_in_lm_sensors() {
@@ -688,21 +698,50 @@ function test_a_socket_is_numbered_from_its_chip_rather_than_from_a_label() {
     "both sockets are read, and numbered after the chip that carries them"
 }
 
-function test_the_core_fallback_is_reported_once_and_only_when_it_happens() {
+
+function test_a_renamed_package_feature_is_still_read_as_the_package() {
+  # The defect this closes, and the one the previous relabelled fixture could not catch : unraid's
+  # /etc/sensors.d renames a coretemp feature, the package is still on temp1, and matching on the label
+  # lost it. Reverting to label matching must fail here
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_with_a_renamed_package 0 45.000 48.000 52.000)"
+
+  assert_equals "0 coretemp-isa-0000 package 45" "$(retrieve_CPU_temperatures_from_lm_sensors)" \
+    "the package is on temp1 whatever it is called, and its 45 must not be replaced by the 52°C core"
+}
+
+function test_an_oddly_named_chip_never_takes_a_socket_another_chip_holds() {
+  # NEXT_UNNAMED_SOCKET used to start at an unset variable, i.e. at 0, so the first chip with an
+  # unrecognized name overwrote coretemp-isa-0000's name and lost its own reading
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip_reporting 0 45.000)coretemp-isa-beef\nAdapter: ISA adapter\nPackage id 9:\n  temp1_input: 61.000\n"
+
+  local -r READINGS=$(retrieve_CPU_temperatures_from_lm_sensors)
+
+  assert_contains "$READINGS" "coretemp-isa-0000 package 45" "the normally named chip keeps its socket"
+  assert_contains "$READINGS" "coretemp-isa-beef package 61" "and the odd one gets a column of its own"
+}
+
+function test_a_core_read_column_names_itself_in_the_startup_log() {
+  # The fact has to travel in the data : every production caller reaches the builder through a command
+  # substitution, so a global set inside it would be lost with the subshell
   export MOCK_SENSORS_OUTPUT="$(coretemp_chip_without_a_package 0 32.000 26.000 25.000)"
   CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
 
-  build_CPU_temperature_sdr_lines_from_lm_sensors > /dev/null
-  capture_output report_the_core_temperature_fallback
-  assert_contains "$CAPTURED_OUTPUT" "hottest core" "the difference has to be stated once"
+  SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
+  detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
 
-  capture_output report_the_core_temperature_fallback
-  assert_empty "$CAPTURED_OUTPUT" "and not on every cycle for the life of the container"
+  assert_contains "$SDR_TEMPERATURE_DATA" "hottest core" \
+    "the reading's provenance must survive the command substitution the controller reads it through"
+  assert_contains "$(format_detected_CPU_temperature_sensors)" "hottest core" \
+    "and reach the line that already names the source of every CPU column"
+}
 
-  # A machine that does have packages must never see the line at all
-  HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED=false
+function test_a_package_read_column_says_nothing_extra() {
   export MOCK_SENSORS_OUTPUT="$(coretemp_chip_reporting 0 45.000)"
-  build_CPU_temperature_sdr_lines_from_lm_sensors > /dev/null
-  capture_output report_the_core_temperature_fallback
-  assert_empty "$CAPTURED_OUTPUT" "nothing is standing in for anything here"
+  CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
+
+  SDR_TEMPERATURE_DATA=$(retrieve_temperature_data)
+  detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
+
+  assert_not_contains "$(format_detected_CPU_temperature_sensors)" "hottest core" \
+    "nothing is standing in for anything on a chip that has its package"
 }

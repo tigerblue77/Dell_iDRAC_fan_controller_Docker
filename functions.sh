@@ -668,8 +668,14 @@ function retrieve_CPU_temperatures_from_lm_sensors() {
           SOCKET = SOCKET_NAME + 0
         } else {
           # A chip named in a shape this does not recognize still gets a column rather than being
-          # dropped : an unmonitored CPU is the one outcome worse than an oddly numbered one
-          SOCKET = NEXT_UNNAMED_SOCKET++
+          # dropped : an unmonitored CPU is the one outcome worse than an oddly numbered one. The first
+          # free number is taken rather than a counter of its own, which started at an unset variable --
+          # i.e. at 0 -- and so collided with a normally named coretemp-isa-0000, overwriting its name
+          # and losing its reading to the first-wins guard below.
+          # /!\ libsensors formats that address with %04x, so a machine with sixteen or more packages
+          # would name one "coretemp-isa-000a" and reach this branch rather than the numeric one above
+          for (FREE_SOCKET = 0; FREE_SOCKET in CHIP_OF; FREE_SOCKET++);
+          SOCKET = FREE_SOCKET
         }
         CHIP_OF[SOCKET] = CHIP
       }
@@ -737,52 +743,32 @@ function is_lm_sensors_reporting_CPU_temperatures() {
 # rather than teaching each of those steps about a second source, is what keeps a single code path
 # supervising the temperatures whichever source they came from.
 #
-# Sockets are numbered after coretemp's own "Package id N", which is the physical package : socket 0
-# becomes processor entity 3.1, exactly as the iDRAC would report it. A depopulated socket therefore
+# Sockets are numbered after the coretemp chip that carries them -- see retrieve_CPU_temperatures_from_lm_sensors()
+# above, which reads the number from the chip name -- so socket 0 becomes processor entity 3.1, exactly
+# as the iDRAC would report it. A depopulated socket therefore
 # leaves a gap, which is a shape the detection already handles (entity instances are not required to be
 # contiguous). The chip name is carried in the sensor name column so that the startup log can name the
 # chip each CPU column is read from, and the sensor ID column holds "--" : there is no IPMI sensor here
 # and inventing a plausible hexadecimal ID would be the one thing that could mislead
 function build_CPU_temperature_sdr_lines_from_lm_sensors() {
-  HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES=false
-  local SOCKET CHIP KIND TEMPERATURE
+  local SOCKET CHIP KIND TEMPERATURE SOURCE
   while read -r SOCKET CHIP KIND TEMPERATURE; do
     [ -n "$CHIP" ] || continue
+    # A column filled from a CPU's cores is indistinguishable from one filled from its package, and the
+    # two are not the same measurement : the package sensor tracks the hottest point of the die, the
+    # hottest core is the closest stand-in for it, and it runs slightly warmer. So the chip name carries
+    # which one it is, and format_detected_CPU_temperature_sensors() -- which already names the source
+    # of every CPU column at startup and on every set change -- says it without needing a line of its own.
+    #
+    # /!\ It travels in the data rather than in a variable for a reason worth keeping: every production
+    # caller reaches this function through "$(retrieve_temperature_data)", so a global set here would be
+    # assigned in a subshell and lost. The data is what crosses that boundary
+    SOURCE="$CHIP"
     if [ "$KIND" == "hottest-core" ]; then
-      HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES=true
+      SOURCE="$CHIP (hottest core)"
     fi
-    printf '%-16s | %s | %-3s | %4s | %s degrees C\n' "$CHIP" "--" "ok" "3.$((SOCKET + 1))" "$TEMPERATURE"
+    printf '%-16s | %s | %-3s | %4s | %s degrees C\n' "$SOURCE" "--" "ok" "3.$((SOCKET + 1))" "$TEMPERATURE"
   done < <(retrieve_CPU_temperatures_from_lm_sensors)
-}
-
-# Whether the last reading had to fall back to a CPU's cores for want of a package sensor, and whether
-# that has been said. Set by build_CPU_temperature_sdr_lines_from_lm_sensors() above
-HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES=false
-HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED=false
-
-# Say once that a CPU column is being filled from its cores rather than from its package.
-# Usage : report_the_core_temperature_fallback
-# Returns : 0 if this call is the one that said it
-#
-# Worth saying because the two are not the same measurement. The package sensor tracks the hottest
-# point of the die ; the hottest core is the closest stand-in for it, and on a CPU that has no package
-# sensor at all it is the only one available. A column filled either way looks identical in the table,
-# so the difference has to be stated somewhere rather than left for someone to discover by comparing
-# two machines
-function report_the_core_temperature_fallback() {
-  if ! "$HAS_ANY_CPU_BEEN_READ_FROM_ITS_CORES"; then
-    return 1
-  fi
-
-  if "$HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED"; then
-    return 1
-  fi
-
-  HAS_THE_CORE_TEMPERATURE_FALLBACK_BEEN_REPORTED=true
-
-  local TIMESTAMP
-  set_log_timestamp TIMESTAMP
-  printf "%19s  At least one CPU here exposes no package temperature sensor, so its column shows its hottest core instead. That is the closest stand-in -- the package sensor tracks the hottest point of the die rather than an average -- but it is not the same reading, and it runs slightly warmer than a package one would.\n" "$TIMESTAMP"
 }
 
 # Replace the processor entities of an ipmitool sdr output with the ones lm-sensors reports
