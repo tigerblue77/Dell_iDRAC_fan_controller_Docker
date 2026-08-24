@@ -1019,35 +1019,78 @@ function test_the_runner_help_lists_exactly_the_options_its_parser_accepts() {
   done
 }
 
-function test_the_runner_options_claude_md_documents_are_ones_the_runner_accepts() {
-  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
-    skip_test "no CLAUDE.md next to the scripts"
-    return 0
-  fi
+# Every option a document runs the suite with, read out of its fenced blocks
+# alone : that is where a document runs a command, while in prose it quotes them,
+# and a quoted option next to the runner's name is a reference rather than an
+# invocation. Sentence "`./tests/run_tests.sh` exactly, then `shellcheck` and
+# `bash -n`" cost this case a false failure over a -n the runner was never asked for
+# Usage : runner_options_documented_in FILE -> one per line
+function runner_options_documented_in() {
+  awk '/^```/ { IS_FENCED = !IS_FENCED; next } IS_FENCED' "$1" |
+    grep -oE '(\./)?tests/run_tests\.sh[^#]*' |
+    grep -oE ' -{1,2}[A-Za-z][A-Za-z-]*' | tr -d ' ' | sort -u
+}
 
-  # An option CLAUDE.md documents and the runner no longer accepts sends the
-  # session into a usage error on the first command it was told to run, at the
-  # moment it is trying to find out whether the tree is sound
-  #
-  # Read out of the fenced blocks alone, because that is where the document runs
-  # a command : in prose it quotes them, and a quoted option next to the runner's
-  # name is a reference rather than an invocation. Sentence "`./tests/run_tests.sh`
-  # exactly, then `shellcheck` and `bash -n`" cost this case a false failure over
-  # a -n the runner was never asked for
+function test_every_document_runs_the_suite_with_options_the_runner_accepts() {
   local -r ACCEPTED_OPTIONS=$(runner_options_the_parser_accepts)
 
   assert_contains "$ACCEPTED_OPTIONS" " --filter " \
     "the option parser should still be where the accepted spellings are read from" || return 1
 
-  local DOCUMENTED_OPTION
-  while IFS= read -r DOCUMENTED_OPTION; do
-    [ -n "$DOCUMENTED_OPTION" ] || continue
+  # Three documents run the suite, and until this walked all of them the checked
+  # one was the one carrying the fewest : CLAUDE.md names two options, README.md
+  # three and tests/README.md six. What an option costs when it stops being
+  # accepted only changes reader -- a session meets exit 2 on the first command it
+  # was told to run, a contributor loses the same minute with less to go on --
+  # and CONTRIBUTING.md sends that contributor to tests/README.md by name (#437)
+  local -r DOCUMENTS="CLAUDE.md README.md tests/README.md"
 
-    assert_contains "$ACCEPTED_OPTIONS" " $DOCUMENTED_OPTION " \
-      "CLAUDE.md runs the suite with $DOCUMENTED_OPTION, the runner should still accept it"
-  done < <(awk '/^```/ { IS_FENCED = !IS_FENCED; next } IS_FENCED' "$REPO_ROOT/CLAUDE.md" |
-    grep -oE '(\./)?tests/run_tests\.sh[^#]*' |
-    grep -oE ' -{1,2}[A-Za-z][A-Za-z-]*' | tr -d ' ' | sort -u)
+  local DOCUMENT DOCUMENTED_OPTION READ_ANY_DOCUMENT=false
+  for DOCUMENT in $DOCUMENTS; do
+    [ -f "$REPO_ROOT/$DOCUMENT" ] || continue
+    READ_ANY_DOCUMENT=true
+
+    while IFS= read -r DOCUMENTED_OPTION; do
+      [ -n "$DOCUMENTED_OPTION" ] || continue
+
+      assert_contains "$ACCEPTED_OPTIONS" " $DOCUMENTED_OPTION " \
+        "$DOCUMENT runs the suite with $DOCUMENTED_OPTION, the runner should still accept it"
+    done < <(runner_options_documented_in "$REPO_ROOT/$DOCUMENT")
+  done
+
+  if ! $READ_ANY_DOCUMENT; then
+    skip_test "none of the documents that run the suite is next to the scripts"
+  fi
+}
+
+function test_the_suites_own_readme_states_every_exit_code_the_runner_can_reach() {
+  if [ ! -f "$REPO_ROOT/tests/README.md" ]; then
+    skip_test "no tests/README.md next to the runner"
+    return 0
+  fi
+
+  # The sentence under the usage block is what a CI step reads before it writes
+  # "if [ $? -eq 1 ]". It said "0 when every test case passed, 1 otherwise", and
+  # the runner has a third : the option parser exits 2 on an unknown option or on
+  # one given without its value. Under "1 otherwise" that run takes the else
+  # branch and is reported as a pass -- a usage error read as a green suite
+  local -r REACHABLE_EXIT_CODES=$(grep -oE '^[[:space:]]*exit [0-9]+' "$TESTS_DIRECTORY/run_tests.sh" |
+    grep -oE '[0-9]+' | sort -u)
+
+  assert_not_empty "$REACHABLE_EXIT_CODES" "the runner should still exit with a status of its own" || return 1
+
+  # The whole document rather than the sentence, so that moving the explanation
+  # or splitting it in two is not a failure : what matters is that the number is
+  # written down somewhere a reader of this file meets it
+  local -r SUITE_README=$(< "$REPO_ROOT/tests/README.md")
+
+  local EXIT_CODE
+  while IFS= read -r EXIT_CODE; do
+    [ -n "$EXIT_CODE" ] || continue
+
+    assert_matches "$SUITE_README" "\`$EXIT_CODE\`" \
+      "tests/run_tests.sh can exit $EXIT_CODE, and its README should say when"
+  done <<< "$REACHABLE_EXIT_CODES"
 }
 
 function test_the_function_count_claude_md_states_is_the_one_functions_sh_declares() {
