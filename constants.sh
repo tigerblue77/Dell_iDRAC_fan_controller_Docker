@@ -118,6 +118,19 @@ readonly COOLING_RESPONSE_COLUMN_WIDTH=51
 # comfortably inside it or the container is SIGKILLed as a whole before the supervisor gets to act
 readonly SUPERVISOR_GRACE_PERIOD_IN_SECONDS=3
 
+# How far into that grace period the supervisor asks a SECOND time, before it gives up and kills.
+#
+# It asks twice because the first request is sometimes lost : a SIGTERM landing while bash is expanding
+# a command substitution is swallowed whole, and the process carries on as if nothing had been sent
+# (issues #188 and #249). Measured on this repository, two controllers in two hundred. The handler
+# survives it -- a second signal is honoured immediately -- so the one thing that turns that 1% into a
+# clean stop is asking again.
+#
+# One second rather than immediately, and rather than half way : immediately would signal a process that
+# is already running graceful_exit, and later would leave that handler too little of the grace period to
+# finish its own IPMI commands in. A process that heard the first request is gone well before this
+readonly SUPERVISOR_SECOND_ASK_DELAY_IN_SECONDS=1
+
 # The two URIs the System attributes answer on, and the order they are tried in. Neither reaches every
 # iDRAC : the conformant one does not exist before iDRAC 9 5.x, where it answers 404 with
 # Base.1.2.ResourceMissingAtURI -- the resource is absent, which is not a refusal, that would be 401 or

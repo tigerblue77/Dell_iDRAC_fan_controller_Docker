@@ -302,3 +302,63 @@ EOF
   assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
     "the IPMI command is the cooling response on every generation that still has it"
 }
+
+function test_a_monitoring_process_that_missed_the_first_request_is_asked_a_second_time() {
+  # The 1% of issue #443 : the first SIGTERM was swallowed whole -- a signal landing
+  # while bash expands a command substitution never reaches the handler -- and the
+  # process carried on as though nothing had been sent. The handler survives that,
+  # so asking again is what turns a kill into a clean stop.
+  #
+  # The stand-in refuses its first request and honours the second, which is exactly
+  # what the real controller does, without needing the bash race to be reproduced
+  local -r STAND_IN=$(write_stand_in_monitoring_process << 'EOF'
+#!/bin/bash
+HAS_BEEN_ASKED_ONCE=false
+function on_the_stop_request() {
+  if ! "$HAS_BEEN_ASKED_ONCE"; then
+    HAS_BEEN_ASKED_ONCE=true
+    return 0
+  fi
+  printf 'Stand-in stopped on the second request\n'
+  exit 0
+}
+trap 'on_the_stop_request' SIGTERM
+while true; do sleep 0.05; done
+EOF
+  )
+
+  local OUTPUT
+  OUTPUT=$(run_supervisor "$STAND_IN")
+  local -r EXIT_CODE=$?
+
+  assert_equals 0 "$EXIT_CODE" "the container still stops cleanly"
+  assert_contains "$OUTPUT" "Stand-in stopped on the second request" \
+    "the supervisor should ask again rather than spend the grace period waiting on a lost request"
+  assert_not_contains "$OUTPUT" "killing it" \
+    "a process that stops when asked twice must not be killed"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "it stopped on its own, so there is nothing for the supervisor to hand back for it"
+}
+
+function test_a_process_that_stops_on_the_first_request_is_never_signalled_twice() {
+  # The other side of the same decision. A second request landing WHILE graceful_exit
+  # runs re-enters it, and the guard in graceful_exit() is what makes that harmless --
+  # but the supervisor should not be provoking it in the first place, and a process
+  # that heard the first request is gone well before the second one is due
+  local -r STAND_IN=$(write_stand_in_monitoring_process << 'EOF'
+#!/bin/bash
+function on_the_stop_request() {
+  printf 'Stand-in was asked to stop\n'
+  exit 0
+}
+trap 'on_the_stop_request' SIGTERM
+while true; do sleep 0.05; done
+EOF
+  )
+
+  local OUTPUT
+  OUTPUT=$(run_supervisor "$STAND_IN")
+
+  assert_equals "1" "$(printf '%s' "$OUTPUT" | grep -c "Stand-in was asked to stop")" \
+    "a process that stops on the first request should be asked exactly once"
+}

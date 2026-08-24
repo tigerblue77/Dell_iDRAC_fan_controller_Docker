@@ -44,6 +44,12 @@ IS_THE_COOLING_RESPONSE_A_REDFISH_QUESTION=false
 IS_FAN_CONTROL_SUPPORTED=true
 HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
 
+# Whether graceful_exit() has already begun. The stop signal can arrive more than once -- a second
+# Ctrl-C, and supervisor.sh deliberately asking twice because the first request is sometimes lost
+# (#443) -- and bash runs the handler again on each one. Declared here, before the trap below, because
+# that is what reads it
+HAS_THE_GRACEFUL_EXIT_STARTED=false
+
 # Catch the stop signals Docker sends so graceful_exit runs before the process ends
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 

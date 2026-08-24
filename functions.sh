@@ -2184,6 +2184,19 @@ function note_that_the_server_rejects_the_broadcast_fan_selector() {
 
 # Prepare traps in case of container exit
 function graceful_exit() {
+  # Run once, whatever arrives afterwards. Bash runs a trap handler again on every signal it catches, so
+  # a second stop request landing WHILE this one is being honoured re-enters it : the IPMI commands go
+  # out twice and the log says the container stopped twice. The commands are idempotent and the log line
+  # is not, which is the distinction supervisor.sh already draws about applying the profile twice.
+  #
+  # Not hypothetical : a second Ctrl-C does it, and supervisor.sh asks twice on purpose, the first
+  # request being the one that is sometimes swallowed (#188, #249, #443). The handler survives that
+  # loss, which is why asking again works and why this guard is what makes it safe
+  if "${HAS_THE_GRACEFUL_EXIT_STARTED:-false}"; then
+    return 0
+  fi
+  HAS_THE_GRACEFUL_EXIT_STARTED=true
+
   if "$MONITORING_ONLY_MODE"; then
     print_warning_and_exit "Container stopped (monitoring only mode, no fan control profile was ever applied)"
   fi
