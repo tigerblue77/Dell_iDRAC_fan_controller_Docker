@@ -805,6 +805,12 @@ function test_the_runner_options_claude_md_documents_are_ones_the_runner_accepts
   # list of what it takes. An option CLAUDE.md documents and the runner no longer
   # accepts sends the session into a usage error on the first command it was told
   # to run, at the moment it is trying to find out whether the tree is sound
+  #
+  # Read out of the fenced blocks alone, because that is where the document runs
+  # a command : in prose it quotes them, and a quoted option next to the runner's
+  # name is a reference rather than an invocation. Sentence "`./tests/run_tests.sh`
+  # exactly, then `shellcheck` and `bash -n`" cost this case a false failure over
+  # a -n the runner was never asked for
   local -r RUNNER_HELP=$(bash "$TESTS_DIRECTORY/run_tests.sh" --help 2>&1)
 
   assert_not_empty "$RUNNER_HELP" "the runner should still print what it takes" || return 1
@@ -815,7 +821,8 @@ function test_the_runner_options_claude_md_documents_are_ones_the_runner_accepts
 
     assert_matches "$RUNNER_HELP" "(^|[[:space:],])$DOCUMENTED_OPTION([[:space:],]|$)" \
       "CLAUDE.md runs the suite with $DOCUMENTED_OPTION, the runner should still accept it"
-  done < <(grep -oE '(\./)?tests/run_tests\.sh[^#]*' "$REPO_ROOT/CLAUDE.md" |
+  done < <(awk '/^```/ { IS_FENCED = !IS_FENCED; next } IS_FENCED' "$REPO_ROOT/CLAUDE.md" |
+    grep -oE '(\./)?tests/run_tests\.sh[^#]*' |
     grep -oE ' -{1,2}[A-Za-z][A-Za-z-]*' | tr -d ' ' | sort -u)
 }
 
