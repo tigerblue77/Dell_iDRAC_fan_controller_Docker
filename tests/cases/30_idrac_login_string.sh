@@ -8,6 +8,15 @@
 # ("lanplus"). Everything else in the script depends on the login string built
 # here, and the password must never leak into the container's process list.
 
+# One case below re-sources functions.sh inside a command substitution to read the
+# shipped IPMI_DEVICE_PATHS back, which is a subshell assigning globals this file
+# also reads outside it. The linter walks a file top to bottom and has no way to
+# know the runner gives every case its own subshell, so from that line on it
+# reads each of those globals as one whose value was lost. SC2031 is worth having
+# on everything else -- losing a global across that boundary is the invariant
+# CLAUDE.md warns nothing enforces -- so it is silenced here rather than project wide
+# shellcheck disable=SC2031
+
 # Local mode looks the IPMI character device up through IPMI_DEVICE_PATHS, so the
 # cases below point it at a file of their own inside the run's temporary directory
 # rather than at /dev, which is machine-global. Both branches of the lookup are

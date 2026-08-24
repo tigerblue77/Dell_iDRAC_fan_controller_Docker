@@ -22,9 +22,22 @@ function test_every_shell_script_has_a_valid_syntax() {
     if SYNTAX_ERRORS=$(bash -n "$SCRIPT" 2>&1); then
       pass
     else
-      fail "${SCRIPT#$REPO_ROOT/} has a syntax error" "$SYNTAX_ERRORS"
+      fail "${SCRIPT#"$REPO_ROOT"/} has a syntax error" "$SYNTAX_ERRORS"
     fi
   done
+}
+
+# The Shellcheck workflow runs two invocations : a hand-maintained list of the
+# scripts nothing else would catch a mistake in, and a globbed pass over the
+# tests/ tree beside it. The cases below are about the first, so they read the
+# first step alone -- a glob line from the second would otherwise arrive in the
+# list as a file somebody forgot to document (issue #432)
+# Usage : scripts_the_shellcheck_workflow_names WORKFLOW -> one path per line
+function scripts_the_shellcheck_workflow_names() {
+  awk '/- name: Run shellcheck$/ { IS_THE_STEP = 1; next }
+       IS_THE_STEP && /^ *- name:/ { exit }
+       IS_THE_STEP' "$1" |
+    sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p'
 }
 
 function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
@@ -52,14 +65,14 @@ function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
   # directory each holds a script in today, because that is the scope the
   # convention in CLAUDE.md states -- and a walk narrower than the sentence it
   # backs is a safety net that stays green while the sentence stops being true
-  local -r LINTED_SCRIPTS="$(sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p' "$SHELLCHECK_WORKFLOW")"
+  local -r LINTED_SCRIPTS="$(scripts_the_shellcheck_workflow_names "$SHELLCHECK_WORKFLOW")"
 
   shopt -s globstar
   local SCRIPT RELATIVE_PATH
   for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/**/*.sh "$REPO_ROOT"/.claude/**/*.sh; do
     [ -f "$SCRIPT" ] || continue
 
-    RELATIVE_PATH="${SCRIPT#$REPO_ROOT/}"
+    RELATIVE_PATH="${SCRIPT#"$REPO_ROOT"/}"
     if printf '%s\n' "$LINTED_SCRIPTS" | grep -qxF "$RELATIVE_PATH"; then
       pass
     else
@@ -69,6 +82,105 @@ function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
   done
 
   shopt -u globstar
+}
+
+# The second of the workflow's two invocations is globbed rather than named, so
+# nothing has to remember a new case file. What a glob cannot do is say what it
+# was meant to reach : "tests/case/*.sh" for "tests/cases/*.sh" expands to
+# nothing, shellcheck is handed the files that remain, and the step stays green
+# over a directory it stopped covering. Reading the patterns back and expanding
+# them is what turns that into a failure (issue #432)
+# Usage : shellcheck_patterns_of PATH "step name or command prefix" -> one per line
+function shellcheck_patterns_of() {
+  awk -v OPENING="$2" '
+    !IS_THE_COMMAND { if (index($0, OPENING)) IS_THE_COMMAND = 1 ; next }
+    {
+      # Read the way a shell reads it : the trailing comment dropped, the
+      # continuation dropped, the indentation the YAML block adds removed
+      sub(/#.*$/, "")
+      sub(/[[:space:]]*\\[[:space:]]*$/, "")
+      sub(/^[[:space:]]+/, "")
+      sub(/[[:space:]]+$/, "")
+      if ($0 ~ /^tests\//) { IS_INSIDE = 1 ; print ; next }
+      if (IS_INSIDE) exit
+    }
+  ' "$1"
+}
+
+function test_the_shellcheck_workflow_lints_every_file_of_the_test_suite() {
+  local -r SHELLCHECK_WORKFLOW="$REPO_ROOT/.github/workflows/shellcheck.yml"
+
+  if [ ! -f "$SHELLCHECK_WORKFLOW" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  local -r WORKFLOW_PATTERNS=$(shellcheck_patterns_of "$SHELLCHECK_WORKFLOW" "Run shellcheck on the test suite")
+
+  assert_not_empty "$WORKFLOW_PATTERNS" \
+    "the workflow should still hand shellcheck the tests/ tree" || return 1
+
+  # Each test case runs in its own subshell, so the directory the globs resolve
+  # from is this case's own
+  cd "$REPO_ROOT" || return 1
+  shopt -s nullglob
+  local -a LINTED_FILES=($WORKFLOW_PATTERNS)
+  shopt -u nullglob
+
+  # A shebang is what tells a file of this tree from tests/README.md, and it is
+  # what the tree happens to be : every file under it but that one carries one
+  local -r LINTED_LIST=$(printf '%s\n' "${LINTED_FILES[@]}")
+
+  shopt -s globstar
+  local CANDIDATE
+  for CANDIDATE in tests/**/*; do
+    [ -f "$CANDIDATE" ] || continue
+    [ "$(head -c 2 "$CANDIDATE")" = "#!" ] || continue
+
+    if printf '%s\n' "$LINTED_LIST" | grep -qxF "$CANDIDATE"; then
+      pass
+    else
+      fail "$CANDIDATE is linted by nothing, the Shellcheck workflow's tests/ patterns do not reach it" \
+        "they expand to : ${LINTED_FILES[*]}"
+    fi
+  done
+  shopt -u globstar
+}
+
+function test_the_suite_lint_command_claude_md_documents_is_the_one_the_workflow_runs() {
+  local -r SHELLCHECK_WORKFLOW="$REPO_ROOT/.github/workflows/shellcheck.yml"
+
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ] || [ ! -f "$SHELLCHECK_WORKFLOW" ]; then
+    skip_test "no CLAUDE.md and no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # Same reasoning as the case that pins the first invocation : the copy a session
+  # runs before pushing is the one nothing executes, and being wrong about what CI
+  # checks is what makes it push a file nothing linted. Compared as the set of
+  # files each ends up handing shellcheck rather than as text
+  local -r WORKFLOW_PATTERNS=$(shellcheck_patterns_of "$SHELLCHECK_WORKFLOW" "Run shellcheck on the test suite")
+  local -r DOCUMENTED_PATTERNS=$(shellcheck_patterns_of "$REPO_ROOT/CLAUDE.md" "shellcheck -x -e ")
+
+  assert_not_empty "$DOCUMENTED_PATTERNS" \
+    "CLAUDE.md should still print the invocation that lints the suite" || return 1
+
+  cd "$REPO_ROOT" || return 1
+  shopt -s nullglob
+  local -a WORKFLOW_FILES=($WORKFLOW_PATTERNS)
+  local -a DOCUMENTED_FILES=($DOCUMENTED_PATTERNS)
+  shopt -u nullglob
+
+  assert_equals "${WORKFLOW_FILES[*]}" "${DOCUMENTED_FILES[*]}" \
+    "CLAUDE.md and the Shellcheck workflow should lint the same files of the suite"
+
+  # The exclusions are the argued half : a code silenced in one and not the other
+  # means a session sees findings CI does not, or the reverse
+  local -r WORKFLOW_EXCLUSIONS=$(grep -oE '^[[:space:]]*shellcheck -x -e [A-Z0-9,]+' "$SHELLCHECK_WORKFLOW" | grep -oE 'SC[0-9,SC]+')
+  local -r DOCUMENTED_EXCLUSIONS=$(grep -oE '^shellcheck -x -e [A-Z0-9,]+' "$REPO_ROOT/CLAUDE.md" | grep -oE 'SC[0-9,SC]+')
+
+  assert_equals "$WORKFLOW_EXCLUSIONS" "$DOCUMENTED_EXCLUSIONS" \
+    "CLAUDE.md and the workflow should silence the same shellcheck codes over the suite"
 }
 
 function test_no_statement_expands_two_command_substitutions() {
@@ -102,7 +214,7 @@ function test_no_statement_expands_two_command_substitutions() {
     local OFFENDING_LINES
     OFFENDING_LINES=$(grep -nE '\$\([^(].*\$\([^(]' "$SCRIPT" || true)
     assert_empty "$OFFENDING_LINES" \
-      "${SCRIPT#$REPO_ROOT/} expands two command substitutions in one statement"
+      "${SCRIPT#"$REPO_ROOT"/} expands two command substitutions in one statement"
   done
 }
 
@@ -689,7 +801,7 @@ function test_the_lint_command_claude_md_documents_is_the_one_the_workflow_runs(
   local -a DOCUMENTED_SCRIPTS=(${DOCUMENTED_COMMAND#shellcheck -x })
   shopt -u nullglob
 
-  local -r LINTED_SCRIPTS=$(sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p' "$SHELLCHECK_WORKFLOW")
+  local -r LINTED_SCRIPTS=$(scripts_the_shellcheck_workflow_names "$SHELLCHECK_WORKFLOW")
 
   local DOCUMENTED_SCRIPT
   for DOCUMENTED_SCRIPT in "${DOCUMENTED_SCRIPTS[@]}"; do
@@ -978,7 +1090,7 @@ function test_the_test_case_the_documentation_shows_passes_when_it_is_run() {
     # unusable as written whatever its body does. Matched with the runner's own
     # expression rather than a tighter one, so that the two cannot disagree
     DOCUMENTED_CASE_NAME=$(printf '%s' "$DOCUMENTED_CASE" | sed -n '1s/^function \([A-Za-z0-9_]*\).*/\1/p')
-    COLLIDING_FILES=$(grep -rlE "^[[:space:]]*(function[[:space:]]+)?$DOCUMENTED_CASE_NAME[[:space:]]*\(\)" "$TESTS_DIRECTORY/cases" || true)
+    COLLIDING_FILES=$(grep -rlE "^[[:space:]]*(function[[:space:]]+)?${DOCUMENTED_CASE_NAME}[[:space:]]*\(\)" "$TESTS_DIRECTORY/cases" || true)
 
     if [ -z "$COLLIDING_FILES" ]; then
       pass
@@ -1161,7 +1273,7 @@ function test_no_boolean_parameter_is_dispatched_unquoted() {
     if [ -z "$UNQUOTED" ]; then
       pass
     else
-      fail "${SCRIPT#$REPO_ROOT/} dispatches a boolean parameter unquoted" "$UNQUOTED"
+      fail "${SCRIPT#"$REPO_ROOT"/} dispatches a boolean parameter unquoted" "$UNQUOTED"
     fi
   done
 }
@@ -1185,7 +1297,7 @@ function test_no_call_site_terminates_a_message_line_itself() {
     OFFENDERS=""
     # The _and_exit variants are excluded by the trailing space : they close the
     # line and leave, so nothing of theirs can be terminated twice
-    for CALL_LINE_NUMBER in $(grep -nE "^[[:space:]]*print_(error|warning) " "$SCRIPT" | cut -d: -f1); do
+    while IFS= read -r CALL_LINE_NUMBER; do
       TERMINATOR_LINE=$(sed -n "$((CALL_LINE_NUMBER + 1))p" "$SCRIPT")
       # A statement doing nothing but ending a line, whitespace removed so that
       # indentation and the two spellings both reduce to the same few strings
@@ -1193,12 +1305,12 @@ function test_no_call_site_terminates_a_message_line_itself() {
         'printf"\n"' | "printf'\n'" | 'echo""' | "echo''" | 'echo')
           OFFENDERS+="$((CALL_LINE_NUMBER + 1)):$TERMINATOR_LINE"$'\n' ;;
       esac
-    done
+    done < <(grep -nE "^[[:space:]]*print_(error|warning) " "$SCRIPT" | cut -d: -f1)
 
     if [ -z "$OFFENDERS" ]; then
       pass
     else
-      fail "${SCRIPT#$REPO_ROOT/} terminates a message line a second time" "$OFFENDERS"
+      fail "${SCRIPT#"$REPO_ROOT"/} terminates a message line a second time" "$OFFENDERS"
     fi
   done
 }

@@ -70,7 +70,7 @@ function make_redfish_attributes_body() {
 
     MODE="$LFM_MODE"
     if [[ "$SLOT_MODES" == *" $SLOT="* ]]; then
-      MODE="${SLOT_MODES##* $SLOT=}"
+      MODE="${SLOT_MODES##* "$SLOT"=}"
       MODE="${MODE%% *}"
     fi
 
