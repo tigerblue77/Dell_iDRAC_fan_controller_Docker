@@ -48,13 +48,15 @@ function test_the_shellcheck_workflow_lints_every_script_it_is_scoped_to() {
   # release takes. The hook under .claude/ has neither : it runs when a Claude
   # Code on the web session opens, where no workflow and no test ever looks.
   #
-  # Walked over all of .claude/ rather than the one directory a script lives in
-  # today, because that is the scope the convention in CLAUDE.md states
+  # Walked at any depth under .github/ and .claude/ rather than over the one
+  # directory each holds a script in today, because that is the scope the
+  # convention in CLAUDE.md states -- and a walk narrower than the sentence it
+  # backs is a safety net that stays green while the sentence stops being true
   local -r LINTED_SCRIPTS="$(sed -n 's/^ *\([A-Za-z0-9_./-]*\.sh\) *\\\{0,1\}$/\1/p' "$SHELLCHECK_WORKFLOW")"
 
   shopt -s globstar
   local SCRIPT RELATIVE_PATH
-  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh "$REPO_ROOT"/.claude/**/*.sh; do
+  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/**/*.sh "$REPO_ROOT"/.claude/**/*.sh; do
     [ -f "$SCRIPT" ] || continue
 
     RELATIVE_PATH="${SCRIPT#$REPO_ROOT/}"
@@ -859,61 +861,153 @@ function test_the_function_count_claude_md_states_is_the_one_functions_sh_declar
 }
 
 
-function test_the_test_case_claude_md_documents_passes_when_it_is_run() {
-  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
-    skip_test "no CLAUDE.md next to the scripts"
-    return 0
-  fi
-
-  # The cases above settle what the document says about the repository. This one
-  # settles the single block it hands a session to copy, and copying is exactly
+function test_the_test_case_the_documentation_shows_passes_when_it_is_run() {
+  # The cases above settle what the documents say about the repository. This one
+  # settles the single block they hand a session to copy, and copying is exactly
   # how that block failed : it asserted on a variable only the controller sets,
   # read the sdr output through one a case never has, and carried a name the
   # suite had already taken. None of the cases above would have caught any of it
   # -- a code block names no path, no option and no figure -- and the only
   # reading that settles an example is to run it.
   #
-  # Both failure modes are pinned, because they land at different moments : the
-  # name stops the runner before a single case runs, the body fails once one does
-  local -r DOCUMENTED_CASE=$(awk '
-    /^function test_/ { IS_THE_CASE = 1 }
-    IS_THE_CASE { print }
-    IS_THE_CASE && /^}/ { exit }' "$REPO_ROOT/CLAUDE.md")
+  # Both documents carry that block, byte for byte, and both are read as
+  # instructions : CLAUDE.md by a session, tests/README.md by the contributor
+  # CLAUDE.md sends there before touching a test. Guarding one and not the other
+  # is what let the same three defects sit in both until they were corrected by
+  # hand, so the walk is over the pair rather than over the copy that happens to
+  # be nearer (issue #392)
+  local -a DOCUMENTS=()
+  [ -f "$REPO_ROOT/CLAUDE.md" ] && DOCUMENTS+=("$REPO_ROOT/CLAUDE.md")
+  [ -f "$TESTS_DIRECTORY/README.md" ] && DOCUMENTS+=("$TESTS_DIRECTORY/README.md")
 
-  assert_matches "$DOCUMENTED_CASE" '^function test_[A-Za-z0-9_]+[[:space:]]*\(\)' \
-    "CLAUDE.md should still show a test case under \"Writing a test case\"" || return 1
-
-  # Discovery reads the case files as text and the runner refuses to start on a
-  # name declared twice, so a name the suite already carries makes the example
-  # unusable as written whatever its body does. Matched with the runner's own
-  # expression rather than a tighter one, so that the two cannot disagree
-  local -r DOCUMENTED_CASE_NAME=$(printf '%s' "$DOCUMENTED_CASE" | sed -n '1s/^function \([A-Za-z0-9_]*\).*/\1/p')
-  local -r COLLIDING_FILES=$(grep -rlE "^[[:space:]]*(function[[:space:]]+)?$DOCUMENTED_CASE_NAME[[:space:]]*\(\)" "$TESTS_DIRECTORY/cases" || true)
-
-  if [ -z "$COLLIDING_FILES" ]; then
-    pass
-  else
-    fail "$DOCUMENTED_CASE_NAME is already declared in the suite, so pasting the example stops the runner" \
-      "declared in : $(printf '%s' "$COLLIDING_FILES" | tr '\n' ' ')"
+  if [ "${#DOCUMENTS[@]}" -eq 0 ]; then
+    skip_test "neither CLAUDE.md nor the suite's README next to the scripts"
+    return 0
   fi
 
-  # Then run it the way a session would : the real runner, on a repository of its
-  # own holding that case and nothing else. The probe machinery belongs to
-  # tests/cases/15_test_runner.sh, which is sourced into this same shell along
-  # with every other case file, so it is reachable from here whatever the filter
+  # The probe machinery belongs to tests/cases/15_test_runner.sh, which is sourced
+  # into this same shell along with every other case file, so it is reachable from
+  # here whatever the filter
   if ! declare -F run_the_runner_on_a_probe_case_file > /dev/null; then
     fail "the probe helper tests/cases/15_test_runner.sh declares is gone, so the example cannot be run"
     return 1
   fi
 
-  run_the_runner_on_a_probe_case_file "$DOCUMENTED_CASE"
+  local DOCUMENT RELATIVE_PATH DOCUMENTED_CASE DOCUMENTED_CASE_NAME COLLIDING_FILES
+  for DOCUMENT in "${DOCUMENTS[@]}"; do
+    RELATIVE_PATH="${DOCUMENT#"$REPO_ROOT"/}"
 
-  if [ "$PROBE_EXIT_CODE" -eq 0 ]; then
-    pass
-  else
-    fail "the test case CLAUDE.md documents does not pass when it is run" "$PROBE_OUTPUT"
-  fi
+    DOCUMENTED_CASE=$(awk '
+      /^function test_/ { IS_THE_CASE = 1 }
+      IS_THE_CASE { print }
+      IS_THE_CASE && /^}/ { exit }' "$DOCUMENT")
+
+    assert_matches "$DOCUMENTED_CASE" '^function test_[A-Za-z0-9_]+[[:space:]]*\(\)' \
+      "$RELATIVE_PATH should still show a test case where it explains how to write one" || continue
+
+    # Discovery reads the case files as text and the runner refuses to start on a
+    # name declared twice, so a name the suite already carries makes the example
+    # unusable as written whatever its body does. Matched with the runner's own
+    # expression rather than a tighter one, so that the two cannot disagree
+    DOCUMENTED_CASE_NAME=$(printf '%s' "$DOCUMENTED_CASE" | sed -n '1s/^function \([A-Za-z0-9_]*\).*/\1/p')
+    COLLIDING_FILES=$(grep -rlE "^[[:space:]]*(function[[:space:]]+)?$DOCUMENTED_CASE_NAME[[:space:]]*\(\)" "$TESTS_DIRECTORY/cases" || true)
+
+    if [ -z "$COLLIDING_FILES" ]; then
+      pass
+    else
+      fail "$RELATIVE_PATH shows $DOCUMENTED_CASE_NAME, a name the suite already declares, so pasting it stops the runner" \
+        "declared in : $(printf '%s' "$COLLIDING_FILES" | tr '\n' ' ')"
+    fi
+
+    # Then run it the way a session would : the real runner, on a repository of
+    # its own holding that case and nothing else
+    run_the_runner_on_a_probe_case_file "$DOCUMENTED_CASE"
+
+    if [ "$PROBE_EXIT_CODE" -eq 0 ]; then
+      pass
+    else
+      fail "the test case $RELATIVE_PATH shows does not pass when it is run" "$PROBE_OUTPUT"
+    fi
+  done
 }
+
+function test_the_suites_own_readme_names_every_mock_it_ships() {
+  # tests/README.md draws the tree a contributor navigates by, and its mocks/ line
+  # enumerates what the suite fakes. It named three of the four for as long as the
+  # fourth existed : tests/mocks/perl is the whole Redfish HTTPS transport, and
+  # without it 15 of the 26 cases in cases/46 fail -- so the one document that says
+  # what is mocked did not say the transport was, and a contributor writing a
+  # Redfish case was sent to a list that did not hold what they needed.
+  #
+  # Matched over the document rather than over that one line : a mock named
+  # anywhere in it is a mock a contributor can find, and pinning the line would
+  # break on any rewording of the tree
+  if [ ! -f "$TESTS_DIRECTORY/README.md" ]; then
+    skip_test "no README next to the test cases"
+    return 0
+  fi
+
+  local -r README_CONTENT=$(cat "$TESTS_DIRECTORY/README.md")
+
+  local MOCK MOCK_NAME
+  for MOCK in "$TESTS_DIRECTORY"/mocks/*; do
+    [ -f "$MOCK" ] || continue
+
+    MOCK_NAME=$(basename "$MOCK")
+    assert_contains "$README_CONTENT" "$MOCK_NAME" \
+      "the suite fakes $MOCK_NAME, the README should say so somewhere a contributor looks"
+  done
+}
+
+function test_the_suites_own_readme_names_every_enclosure_the_catalogue_declares() {
+  # The catalogue paragraph closes on a parenthesis listing what a model's
+  # enclosure column can hold, and a closed list is a promise of completeness. It
+  # named six of the seven the array declares, leaving out the 1955 -- the 9th
+  # generation blade enclosure, which cases/55 loops over like every other one
+  if [ ! -f "$TESTS_DIRECTORY/README.md" ]; then
+    skip_test "no README next to the test cases"
+    return 0
+  fi
+
+  local -r README_CONTENT=$(cat "$TESTS_DIRECTORY/README.md")
+
+  local ENCLOSURE
+  for ENCLOSURE in "${DELL_SERVER_ENCLOSURES[@]}"; do
+    assert_contains "$README_CONTENT" "\`$ENCLOSURE\`" \
+      "the catalogue declares the $ENCLOSURE enclosure, the README's list should name it"
+  done
+}
+
+function test_the_notice_names_every_package_the_image_installs() {
+  # NOTICE is copied into the image, and its own Attribution section says keeping
+  # it intact is part of what discharges AGPL 5(a) and 7(b). Its third-party
+  # paragraph enumerates what the published image contains that this project
+  # neither wrote nor distributes in source form -- so the enumeration is the
+  # claim, and it fell a release behind the Dockerfile when #374 added the Redfish
+  # HTTPS client : perl and libio-socket-ssl-perl shipped, unnamed, for a week.
+  #
+  # Matched on a whole word, so that libio-socket-ssl-perl cannot stand in for
+  # perl : a package named only inside a longer one is a package nobody attributed
+  if [ ! -f "$REPO_ROOT/Dockerfile" ] || [ ! -f "$REPO_ROOT/NOTICE" ]; then
+    # The suite is running inside the built image, which carries NOTICE but not
+    # the Dockerfile that installed anything
+    skip_test "no Dockerfile next to NOTICE"
+    return 0
+  fi
+
+  local -r NOTICE_CONTENT=$(cat "$REPO_ROOT/NOTICE")
+  local -r INSTALLED_PACKAGES=$(sed -n 's/.*apt-get install \(.*\) -y.*/\1/p' "$REPO_ROOT/Dockerfile")
+
+  assert_not_empty "$INSTALLED_PACKAGES" \
+    "the Dockerfile should still install its packages in one named apt-get line" || return 1
+
+  local PACKAGE
+  for PACKAGE in $INSTALLED_PACKAGES; do
+    assert_matches "$NOTICE_CONTENT" "(^|[^A-Za-z0-9_-])$PACKAGE([^A-Za-z0-9_-]|$)" \
+      "the image installs $PACKAGE, NOTICE should name it among the software shipped with the image"
+  done
+}
+
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
   local OUTPUT
   OUTPUT=$(bash "$REPO_ROOT/healthcheck.sh" 2>&1)

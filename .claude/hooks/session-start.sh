@@ -14,9 +14,9 @@
 # will decide its push. Installing it up front turns "push and find out" into a local run,
 # which is one CI round trip saved per finding.
 #
-# jq is the same story a size smaller : tests/cases/14_latest_tag_reconciliation.sh skips
-# itself where jq is missing, so a run without it is quietly a little less green than it
-# looks.
+# jq is the same story a size smaller : tests/cases/11_claude_code_settings.sh and
+# tests/cases/14_latest_tag_reconciliation.sh skip themselves where jq is missing, so a run
+# without it is quietly a little less green than it looks.
 #
 # Best-effort by design : the suite does not need either of them, so a package index that
 # cannot be reached costs the session its linter, not its start. It says so and exits 0.

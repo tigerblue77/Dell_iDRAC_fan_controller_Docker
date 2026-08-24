@@ -86,9 +86,10 @@ function test_every_pre_approved_rule_is_one_that_was_argued() {
   # - Bash(./tests/run_tests.sh) is EXACT, deliberately. Run with no arguments the
   #   suite mocks ipmitool, lm-sensors and sleep, needs no iDRAC and no network, and
   #   writes only inside the throwaway directory it makes with mktemp -d. Run as
-  #   "--junit FILE" or "--summary FILE" it creates directories and truncates files
-  #   wherever the caller points it (tests/lib/reports.sh), which a prefix rule would
-  #   hand to every session without a prompt. Filtered runs are one prompt each ;
+  #   "--junit FILE" or "--summary FILE" it creates directories and writes wherever
+  #   the caller points it -- truncating for the first, appending for the second
+  #   (tests/lib/reports.sh) -- which a prefix rule would hand to every session
+  #   without a prompt. Filtered runs are one prompt each ;
   #   that is the price of the entry staying what it claims to be.
   # - Bash(shellcheck:*) and Bash(bash -n:*) are prefixes, which is safe here for the
   #   reason the first one is not : neither has an option that names a file to write.
@@ -123,7 +124,7 @@ function test_every_pre_approved_rule_is_one_that_was_argued() {
         pass ;;
       'Bash(./tests/run_tests.sh:*)')
         fail "[$RULE] grants the suite by prefix, which pre-approves every argument list it takes" \
-          "--junit FILE and --summary FILE create directories and truncate files wherever the caller points them" \
+          "--junit FILE and --summary FILE create directories and write wherever the caller points them" \
           "the rule that was argued is the exact one : Bash(./tests/run_tests.sh)" ;;
       *)
         fail "[$RULE] is pre-approved for every session opened on this repository, and it is not one of the rules #382 argued for" \
