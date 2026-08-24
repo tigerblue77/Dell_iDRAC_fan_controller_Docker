@@ -45,6 +45,10 @@ function setup_test_context() {
   # Same, for the one-off explanation of a rejected fan selector : a test starts against a server that
   # has not been told anything yet
   HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
+  # Same, for the fan identifiers a refused broadcast selector makes the controller discover : a test
+  # starts against a server nothing has been probed on yet
+  DISCOVERED_FAN_IDENTIFIERS=()
+  WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
   # Settled once at startup by the controller, and read by build_header() and by every row it prints
   resolve_fan_control_profile_column_width
 
