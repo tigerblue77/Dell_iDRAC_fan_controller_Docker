@@ -391,6 +391,51 @@ Dell's own documents disagree on which licence this needs — [KB 000257346](htt
 2. If it's already good, adapt your `FAN_SPEED` value to increase the airflow and thus further decrease the temperature of your CPU(s)
 3. If neither increasing the fan speed nor increasing the threshold solves your problem, then it may be time to replace your thermal paste
 
+### You want the fans quiet at some hours and Dell's profile at others
+
+There is no switch to flip while the container runs, and there does not need to be: **stopping a container that drives the fans already hands them back to Dell's own dynamic profile**, which is precisely the transition you are asking for. Recreating it with the other value of `MONITORING_ONLY_MODE` is therefore the whole mechanism, and it goes through the handover [Stopping the container](#stopping-the-container) describes — the supervisor's safety net included, which is what makes it safe rather than merely convenient (see [#407](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/407)).
+
+Mind which way round the two modes are, because they read backwards from what you are after:
+
+| | What drives the fans | How loud |
+| --- | --- | --- |
+| `MONITORING_ONLY_MODE=false` | this container, holding them at your `FAN_SPEED` | as quiet as that speed |
+| `MONITORING_ONLY_MODE=true` | the iDRAC's own dynamic profile | whatever Dell's algorithm decides, which is loud under load |
+
+So "quiet at night" is `false`, and "let the server look after itself during the day" is `true`.
+
+Two containers, one configuration each, only one of them running at a time. Take whichever [Usage](#usage) recipe you already run and create it twice, with `docker create` in place of `docker run` so that neither starts before it is asked to: the same parameters both times, two `--name`s, and the one value that differs — `MONITORING_ONLY_MODE=false` on the quiet one, `MONITORING_ONLY_MODE=true` on the other. Name them `fans_quiet` and `fans_loud`, and give both `--restart=unless-stopped`.
+
+Then, from the host's cron:
+
+```cron
+0 22 * * *  docker stop fans_loud  && docker start fans_quiet
+0  8 * * *  docker stop fans_quiet && docker start fans_loud
+```
+
+That restart policy is deliberate: after a host reboot only the one that was actually running comes back, a container explicitly stopped not being started again.
+
+With `docker compose`, one service is enough. Interpolate the value in your `docker-compose.yml`:
+
+```yml
+      - MONITORING_ONLY_MODE=${MONITORING_ONLY_MODE:-false}
+```
+
+and drive it the same way:
+
+```cron
+0 22 * * *  cd /path/to/compose && MONITORING_ONLY_MODE=false docker compose up -d
+0  8 * * *  cd /path/to/compose && MONITORING_ONLY_MODE=true  docker compose up -d
+```
+
+`docker compose up -d` recreates the container when the configuration it resolves has changed, and leaves it alone when it has not.
+
+Either way there is no moment when the fans are held at a static speed with nothing watching them: the stop hands them back before the next container starts.
+
+**Each mode is also validated for what it is actually going to do**, which one container switching in place could not be. `CHECK_INTERVAL` is bounded to 15 minutes when the container drives the fans and unbounded when it only logs, so the monitoring container may poll every hour while the controlling one keeps a reaction time worth having. The monitoring one is also allowed to run with no readable CPU temperature sensor at all, where a controlling container [refuses to start](#none-of-your-cpus-appears-in-the-temperatures-table).
+
+If what you want is two *speeds* rather than "this container or Dell's algorithm" — quiet at night, less quiet by day — it is the same recipe with `MONITORING_ONLY_MODE=false` on both containers and two different `FAN_SPEED` values. Worth weighing: Dell's dynamic profile under load is considerably louder than a static 30%, so "let Dell decide by day" and "run at 30% by day" are quite different outcomes.
+
 ### You get `/!\ Your server isn't a Dell product. Exiting.` error on UnRAID OS
 
 - Run the image using usual `docker run` command instead of UnRAID Community Apps or Docker UI. [More informations here.](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/89#issuecomment-4166458799)

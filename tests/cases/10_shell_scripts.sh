@@ -686,6 +686,55 @@ function test_the_documented_consecutive_failures_minimum_is_the_one_enforced() 
     "0 is what somebody writes to disable the escalation, so the refusal has to name what really does"
 }
 
+function test_the_mode_switching_recipe_only_names_parameters_the_image_declares() {
+  # The Troubleshooting entry answering #407 is the one piece of documentation that
+  # has users write a "docker create" of their own rather than copy a Usage block,
+  # so the guard above -- which holds those four blocks to the Dockerfile's ENV list
+  # -- does not reach it. A parameter renamed or dropped would leave this recipe
+  # naming a variable the image no longer reads, and nothing would say so : the
+  # container starts, ignores it, and drives the fans on the default instead.
+  # Which is the shape of the whole entry's subject, a mode the user believes they
+  # selected and did not
+  if [ ! -f "$REPO_ROOT/Dockerfile" ] || [ ! -f "$REPO_ROOT/README.md" ]; then
+    # The suite is running inside the built image, which carries neither
+    skip_test "no Dockerfile and README next to the scripts"
+    return 0
+  fi
+
+  # The entry alone, from its heading to the next one, so that an assertion below
+  # cannot be satisfied by a passage somewhere else in the file -- the Usage blocks
+  # in particular, which set the very same parameters
+  local -r RECIPE=$(awk '/^### You want the fans quiet at some hours/ {inside = 1; next} /^## / || /^### / {inside = 0} inside' "$REPO_ROOT/README.md")
+
+  # Without this the loop below would pass by having nothing to iterate over, which
+  # is exactly what a renamed heading would produce
+  assert_not_empty "$RECIPE" \
+    "the README should carry the Troubleshooting entry on switching between the two modes" || return 1
+
+  # Both spellings : the entry exists to say which way round they are, and half of
+  # that is a reader left in the mode they wanted to leave
+  assert_contains "$RECIPE" "MONITORING_ONLY_MODE=false" \
+    "the recipe should name the value that has this container drive the fans"
+  assert_contains "$RECIPE" "MONITORING_ONLY_MODE=true" \
+    "and the value that leaves them to the iDRAC's own dynamic profile"
+
+  # The "ENV NAME=" lines the image ships and the "# ENV NAME=" ones it comments out
+  # for the two credentials, which are parameters it reads all the same
+  local -r DECLARED_PARAMETERS=$(grep -oE '^#? ?ENV [A-Z_]+=' "$REPO_ROOT/Dockerfile" | sed -E 's/^#? ?ENV //; s/=$//' | sort -u)
+
+  local PARAMETER
+  while IFS= read -r PARAMETER; do
+    [ -n "$PARAMETER" ] || continue
+
+    if printf '%s\n' "$DECLARED_PARAMETERS" | grep -qxF "$PARAMETER"; then
+      pass
+    else
+      fail "the mode switching recipe sets $PARAMETER, which the Dockerfile declares nowhere" \
+        "it declares : $(printf '%s' "$DECLARED_PARAMETERS" | tr '\n' ' ')"
+    fi
+  done < <(printf '%s\n' "$RECIPE" | grep -oE '\b[A-Z][A-Z0-9_]+=' | tr -d '=' | sort -u)
+}
+
 function test_the_suites_own_readme_lists_every_case_file() {
   # The three guards above watch the documentation the users read. This one
   # watches the documentation the contributors read : tests/README.md holds a
