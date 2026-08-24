@@ -145,3 +145,118 @@ function test_every_workflow_carries_the_licence_header() {
   assert_empty "$UNCOVERED" \
     "every workflow has to open with the two SPDX lines the scripts and the Dockerfile carry"
 }
+
+# Every step of every workflow runs shell, and none of it is shell to any tool
+# that reads this repository : shellcheck is pointed at the .sh files, bash never
+# parses a workflow, and the YAML linters read the document rather than the
+# scalar. Several hundred lines are therefore written and merged unchecked, and
+# a missing "fi" in them is found by the run that needed the workflow -- a
+# release, or the nightly rebuild -- rather than by the pull request that
+# introduced it (issue #419).
+#
+# Pulling the scalars back out is enough to hand them to "bash -n", which is
+# what the .sh files already get. It is a syntax check and nothing more : it
+# says the block parses, never that it does the right thing. The ${{ }}
+# expressions survive it -- bash reads them as a parameter expansion and asks
+# no question about the name -- so the blocks are checked as written, with no
+# substitution and nothing added to any workflow.
+#
+# Usage : extract_workflow_run_blocks WORKFLOW OUTPUT_DIRECTORY
+#         -> one "LINE<TAB>SCRIPT" per block, the scripts written in the directory
+function extract_workflow_run_blocks() {
+  awk -v OUTPUT_DIRECTORY="$2" '
+    # A block scalar ends where the indentation returns to the key that opened
+    # it, and is written out dedented : a heredoc terminator carrying the
+    # workflow indentation is one bash would never recognise
+    function flush_block(   INDEX, TEXT, SCRIPT) {
+      SCRIPT = OUTPUT_DIRECTORY "/" (++BLOCKS) ".sh"
+      printf "" > SCRIPT
+      for (INDEX = 1; INDEX <= BUFFERED; INDEX++) {
+        TEXT = BUFFER[INDEX]
+        if (TEXT !~ /^[[:space:]]*$/) TEXT = substr(TEXT, MINIMUM_INDENT + 1)
+        print TEXT > SCRIPT
+      }
+      close(SCRIPT)
+      print BLOCK_LINE "\t" SCRIPT
+      BUFFERED = 0
+      IN_BLOCK = 0
+    }
+    {
+      LINE = $0
+      if (IN_BLOCK) {
+        if (LINE ~ /^[[:space:]]*$/) { BUFFER[++BUFFERED] = ""; next }
+        match(LINE, /^[[:space:]]*/)
+        if (RLENGTH > KEY_INDENT) {
+          if (MINIMUM_INDENT < 0 || RLENGTH < MINIMUM_INDENT) MINIMUM_INDENT = RLENGTH
+          BUFFER[++BUFFERED] = LINE
+          next
+        }
+        flush_block()
+      }
+      # "run: |", the shape all but a handful of the steps are written in
+      if (LINE ~ /^[[:space:]-]*run:[[:space:]]*\|[-+]?[[:space:]]*$/) {
+        KEY_INDENT = index(LINE, "run:") - 1
+        IN_BLOCK = 1
+        MINIMUM_INDENT = -1
+        BLOCK_LINE = FNR
+        next
+      }
+      # "run: one command", the rest of them
+      if (LINE ~ /^[[:space:]-]*run:[[:space:]]*[^|>[:space:]]/) {
+        COMMAND = LINE
+        sub(/^[[:space:]-]*run:[[:space:]]*/, "", COMMAND)
+        SCRIPT = OUTPUT_DIRECTORY "/" (++BLOCKS) ".sh"
+        print COMMAND > SCRIPT
+        close(SCRIPT)
+        print FNR "\t" SCRIPT
+      }
+    }
+    END { if (IN_BLOCK) flush_block() }
+  ' "$1"
+}
+
+function test_every_shell_block_the_workflows_run_has_a_valid_syntax() {
+  local -r WORKFLOW_DIRECTORY="$REPO_ROOT/.github/workflows"
+  if [ ! -d "$WORKFLOW_DIRECTORY" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  local -r EXTRACTION_DIRECTORY="$TEST_TEMPORARY_DIRECTORY/workflow_run_blocks"
+  rm -rf "$EXTRACTION_DIRECTORY"
+  mkdir -p "$EXTRACTION_DIRECTORY"
+
+  local WORKFLOW RELATIVE_PATH DECLARED_BLOCKS EXTRACTED_BLOCKS BLOCK_LINE SCRIPT SYNTAX_ERRORS
+  local CHECKED_BLOCKS=0
+  for WORKFLOW in "$WORKFLOW_DIRECTORY"/*.yml "$WORKFLOW_DIRECTORY"/*.yaml; do
+    [ -f "$WORKFLOW" ] || continue
+    RELATIVE_PATH="${WORKFLOW#"$REPO_ROOT"/}"
+
+    EXTRACTED_BLOCKS=0
+    while IFS=$'\t' read -r BLOCK_LINE SCRIPT; do
+      [ -n "$SCRIPT" ] || continue
+      EXTRACTED_BLOCKS=$((EXTRACTED_BLOCKS + 1))
+      CHECKED_BLOCKS=$((CHECKED_BLOCKS + 1))
+
+      SYNTAX_ERRORS=$(bash -n "$SCRIPT" 2>&1)
+      if [ -n "$SYNTAX_ERRORS" ]; then
+        fail "$RELATIVE_PATH runs a shell block with a syntax error, at line $BLOCK_LINE" \
+          "$SYNTAX_ERRORS"
+      fi
+    done < <(extract_workflow_run_blocks "$WORKFLOW" "$EXTRACTION_DIRECTORY")
+
+    # A "run:" written in a shape the extraction above does not know -- a folded
+    # scalar, a quoted string -- would be dropped rather than reported, and this
+    # case would stay green over the one block nobody had ever parsed. Counting
+    # the keys is what turns that into a failure
+    DECLARED_BLOCKS=$(grep -cE '^[[:space:]-]*run:' "$WORKFLOW")
+
+    assert_equals "$DECLARED_BLOCKS" "$EXTRACTED_BLOCKS" \
+      "every run: block of $RELATIVE_PATH has to be one this case can read"
+  done
+
+  # And the whole walk finding nothing would be the same silence one level up
+  if (( CHECKED_BLOCKS == 0 )); then
+    fail "no shell block was found across the workflows, and every one of them runs shell"
+  fi
+}
