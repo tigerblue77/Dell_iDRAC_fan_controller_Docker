@@ -1649,3 +1649,19 @@ function test_every_shell_script_carries_the_licence_header() {
     fi
   done
 }
+
+function test_no_case_reaches_the_healthcheck_through_the_repository_root() {
+  # The healthcheck reads HEARTBEAT_FILE, and the only thing that points it at this run's own
+  # directory is the throwaway repository build_throwaway_controller_repository() writes. Reached
+  # from $REPO_ROOT instead, it sources the real functions.sh and reads the real
+  # /run/dell_idrac_fan_controller.heartbeat -- a file belonging to the machine rather than to the
+  # run, left behind by any container that has run here and stopped.
+  #
+  # That cannot be seen in a green run, which is the whole reason for this case : absence is
+  # deliberately not a verdict, so on a fresh runner the real path never exists and every such case
+  # passes. #442 moved two of them and left three behind, and nothing went red for it (issue #455)
+  local -r OFFENDERS=$(grep -rn 'REPO_ROOT" && bash \./healthcheck\.sh' "$TESTS_DIRECTORY/cases")
+
+  assert_empty "$OFFENDERS" \
+    "a case must reach the healthcheck through CONTROLLER_WORKING_DIRECTORY, or it reads the machine's own heartbeat"
+}

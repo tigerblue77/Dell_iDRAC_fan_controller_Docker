@@ -624,7 +624,7 @@ function test_the_healthcheck_asks_lm_sensors_when_that_is_what_the_container_re
   export MOCK_IPMITOOL_SDR_OUTPUT=""
 
   local OUTPUT
-  OUTPUT=$(cd "$REPO_ROOT" && bash ./healthcheck.sh 2>&1)
+  OUTPUT=$(cd "$CONTROLLER_WORKING_DIRECTORY" && bash ./healthcheck.sh 2>&1)
   local -r EXIT_CODE=$?
 
   assert_equals 0 "$EXIT_CODE" "the source the container reads answers, so the container is healthy"
@@ -637,7 +637,7 @@ function test_the_healthcheck_fails_when_the_source_the_container_reads_says_not
   export MOCK_SENSORS_OUTPUT=""
 
   local EXIT_CODE=0
-  (cd "$REPO_ROOT" && bash ./healthcheck.sh) > /dev/null 2>&1 || EXIT_CODE=$?
+  (cd "$CONTROLLER_WORKING_DIRECTORY" && bash ./healthcheck.sh) > /dev/null 2>&1 || EXIT_CODE=$?
 
   assert_not_equals 0 "$EXIT_CODE" "the container can no longer read the temperatures it supervises"
 }
@@ -652,7 +652,7 @@ function test_the_healthcheck_keeps_asking_the_idrac_on_the_automatic_source() {
   export MOCK_IPMITOOL_SDR_OUTPUT=""
 
   local EXIT_CODE=0
-  (cd "$REPO_ROOT" && bash ./healthcheck.sh) > /dev/null 2>&1 || EXIT_CODE=$?
+  (cd "$CONTROLLER_WORKING_DIRECTORY" && bash ./healthcheck.sh) > /dev/null 2>&1 || EXIT_CODE=$?
 
   assert_not_equals 0 "$EXIT_CODE"
 }
