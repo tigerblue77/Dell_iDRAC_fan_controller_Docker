@@ -6,9 +6,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 # Working in this repository
 
 Bash, no build step, no package manager. A container reads the CPU temperatures of a
-Dell PowerEdge server over IPMI and drives its fans. It talks to twenty years of Dell
+Dell PowerEdge server and drives its fans over IPMI. It talks to twenty years of Dell
 firmware, so most of the difficulty here is in what a given generation accepts, not in
 the control logic.
+
+The **CPU temperatures** come from two sources, though. The iDRAC over IPMI, and — when
+it reports none — the Docker host's own chips through `lm-sensors`.
+`CPU_TEMPERATURE_SOURCE` selects between them and defaults to `auto`.
+`retrieve_temperature_data` in `functions.sh` is the single place the two meet, and
+`healthcheck.sh` branches on the source before it contacts anything, so a change to CPU
+reading that only considers IPMI has missed half the program. Everything else is IPMI
+either way : the other sensors, and every fan control command.
 
 ## Layout
 
@@ -66,6 +74,16 @@ These are settled decisions with a cost behind them. Do not "clean them up".
   static speed (issue #188). Measured : two substitutions in one expansion failed 61
   to 182 times in 250 runs, one alone failed 2. Compute into a variable, then use the
   variable. `tests/cases/10_shell_scripts.sh` enforces this.
+- **The same boundary swallows `exit` and discards globals**, which is the half the rule
+  above does not cover — and "compute into a variable" steers straight into it, because
+  `VAR=$(f)` runs `f` in a subshell. Two consequences, each already paid for. An `exit`
+  inside a function reached that way only leaves the subshell : four functions in
+  `functions.sh` carry the same warning verbatim, and they are the validators meant to
+  stop the container on a bad configuration — called as `X=$(validate_...)` the container
+  starts anyway with the value it just refused. And a global assigned inside is lost,
+  which is why `retrieve_temperature_data` returns its reading in the data rather than
+  setting a variable. Nothing enforces this one : a unit test calling the function
+  directly in the test's own shell sees a global that production would lose.
 - **`IDRAC_LOGIN_STRING` is deliberately left unquoted** at every `ipmitool` call site.
   It is a single space-separated string of arguments that has to split back into
   separate argv entries ; quoting it passes `ipmitool` one argument instead of several
@@ -102,7 +120,8 @@ function test_a_single_socket_server_reports_one_cpu() {
 Describe the server with `simulate_server` / `simulate_enclosure_housed_server`, build
 `ipmitool` output with `make_fru_output` and `make_sdr_output` (options in
 `tests/lib/fixtures.sh`), set what the server answers with the `MOCK_IPMITOOL_*`
-variables (`tests/mocks/ipmitool`), read back what was sent with
+variables (`tests/mocks/ipmitool`) — or the `MOCK_SENSORS_*` ones (`tests/mocks/sensors`)
+for the lm-sensors source — read back what was sent with
 `count_ipmitool_calls_matching`, and start the whole controller the way the image does
 with `run_controller`.
 

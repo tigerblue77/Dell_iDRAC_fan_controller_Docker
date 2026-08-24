@@ -261,3 +261,29 @@ function test_the_session_start_hook_budget_outlasts_what_the_script_allows_itse
       "the platform would kill it mid-apt rather than let it report what went wrong"
   fi
 }
+
+function test_every_rule_that_was_argued_is_still_in_the_list() {
+  if ! claude_code_settings_can_be_read; then
+    skip_test "no .claude next to the scripts, or no jq to read it with"
+    return 0
+  fi
+
+  # The two rule cases above are one-way : they walk what the file contains and
+  # refuse anything outside the vetted set. Neither notices a rule that has GONE.
+  # An editor conflict, a merge, or someone tidying the file can drop one and
+  # leave the suite green while CLAUDE.md keeps promising a session that all three
+  # are pre-approved -- so the session stops to ask for a command the document
+  # said it would not have to, which reads as the grant having been refused rather
+  # than lost. Completeness is the half that was missing
+  local -r RULES=$(pre_approved_permission_rules)
+
+  local RULE
+  for RULE in 'Bash(./tests/run_tests.sh)' 'Bash(shellcheck:*)' 'Bash(bash -n:*)'; do
+    if printf '%s\n' "$RULES" | grep -qxF "$RULE"; then
+      pass
+    else
+      fail "$RULE was argued for and is no longer in the list" \
+        "the list holds : $(printf '%s' "$RULES" | tr '\n' ' ')"
+    fi
+  done
+}
