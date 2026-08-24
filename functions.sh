@@ -1926,11 +1926,12 @@ function read_the_lfm_mode_of_slot() {
 # PATCH is not a free stateless command : each one creates a configuration job on the iDRAC, so
 # re-sending it every CHECK_INTERVAL would fill that queue for no gain. The slots already in the wanted
 # state are skipped, and a human who changes one back is not fought over it every five seconds
-function set_the_cooling_response_over_redfish() {
+function plan_the_cooling_response_write() {
   local -r WANTED_LFM_MODE="$1"
   local -r TIMEOUT_IN_SECONDS="${2:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
 
   REDFISH_SLOTS_WRITTEN=0
+  REDFISH_ATTRIBUTES_TO_WRITE=""
 
   if [ -z "$REDFISH_ATTRIBUTES_URI" ] || [ -z "$REDFISH_THIRD_PARTY_SLOTS" ]; then
     return 0
@@ -1954,31 +1955,50 @@ function set_the_cooling_response_over_redfish() {
     return 1
   fi
 
-  local ATTRIBUTES_TO_WRITE=""
   local SLOT
   for SLOT in $REDFISH_THIRD_PARTY_SLOTS; do
     if [ "$(read_the_lfm_mode_of_slot "$REDFISH_ANSWER" "$SLOT")" == "$WANTED_LFM_MODE" ]; then
       continue
     fi
-    [ -n "$ATTRIBUTES_TO_WRITE" ] && ATTRIBUTES_TO_WRITE+=","
-    ATTRIBUTES_TO_WRITE+="\"PCIeSlotLFM.${SLOT}.LFMMode\":\"${WANTED_LFM_MODE}\""
+    [ -n "$REDFISH_ATTRIBUTES_TO_WRITE" ] && REDFISH_ATTRIBUTES_TO_WRITE+=","
+    REDFISH_ATTRIBUTES_TO_WRITE+="\"PCIeSlotLFM.${SLOT}.LFMMode\":\"${WANTED_LFM_MODE}\""
     REDFISH_SLOTS_WRITTEN=$((REDFISH_SLOTS_WRITTEN + 1))
   done
+}
 
-  if [ -z "$ATTRIBUTES_TO_WRITE" ]; then
+# Send the write plan_the_cooling_response_write() prepared, if it prepared one.
+# Usage : send_the_cooling_response_write ["<timeout>"]
+# Returns : 0 when the iDRAC took it, or when there was nothing to send
+#           REDFISH_LAST_WRITE_STATUS, what it answered
+#
+# Every slot in one PATCH rather than one request each : the iDRAC applies the whole Attributes object
+# in a single configuration job, which is both faster and one job instead of N on a server that may
+# have forty of them
+function send_the_cooling_response_write() {
+  local -r TIMEOUT_IN_SECONDS="${1:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
+
+  if [ -z "$REDFISH_ATTRIBUTES_TO_WRITE" ]; then
     return 0
   fi
 
-  # Every slot in one PATCH rather than one request each : the iDRAC applies the whole Attributes object
-  # in a single configuration job, which is both faster and one job instead of N on a server that may
-  # have forty of them
   REDFISH_LAST_ERRAND_STAGE="writing it"
-  REDFISH_LAST_WRITE_STATUS=$(redfish_patch "$REDFISH_ATTRIBUTES_URI" "{\"Attributes\":{${ATTRIBUTES_TO_WRITE}}}" "$TIMEOUT_IN_SECONDS" | head -n 1)
+  REDFISH_LAST_WRITE_STATUS=$(redfish_patch "$REDFISH_ATTRIBUTES_URI" "{\"Attributes\":{${REDFISH_ATTRIBUTES_TO_WRITE}}}" "$TIMEOUT_IN_SECONDS" | head -n 1)
 
   case "$REDFISH_LAST_WRITE_STATUS" in
     200|202|204) return 0 ;;
     *) REDFISH_SLOTS_WRITTEN=0 ; return 1 ;;
   esac
+}
+
+# Both halves in one go, which is what the two exit paths want : graceful_exit() and supervisor.sh have
+# one moment to put Dell's default back and no next cycle to continue in.
+# Usage : set_the_cooling_response_over_redfish "<wanted LFM mode>" ["<timeout>"]
+function set_the_cooling_response_over_redfish() {
+  local -r WANTED_LFM_MODE="$1"
+  local -r TIMEOUT_IN_SECONDS="${2:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
+
+  plan_the_cooling_response_write "$WANTED_LFM_MODE" "$TIMEOUT_IN_SECONDS" || return 1
+  send_the_cooling_response_write "$TIMEOUT_IN_SECONDS"
 }
 
 # Whether an answer to a Redfish write settles the question for the life of this container, as opposed
@@ -2018,9 +2038,26 @@ function apply_the_cooling_response_over_redfish() {
   local -r WANTED_LFM_MODE="$1"
   local -r REQUESTED_STATE="$2"
 
-  REDFISH_ATTEMPTS=$(( ${REDFISH_ATTEMPTS:-0} + 1 ))
+  # Reading the slots back and writing them are two requests, and on an iDRAC that answers slowly they
+  # are two cycles : the plan is kept and the PATCH goes out on the next one. It is one CHECK_INTERVAL
+  # stale by then, which costs nothing here -- this is a write made once to assert a configured state,
+  # not a reading acted upon (#444)
+  if ! "${IS_THE_REDFISH_WRITE_PLANNED:-false}"; then
+    if ! plan_the_cooling_response_write "$WANTED_LFM_MODE"; then
+      REDFISH_ATTEMPTS=$(( ${REDFISH_ATTEMPTS:-0} + 1 ))
+      conclude_the_refused_redfish_write
+      return 1
+    fi
 
-  if set_the_cooling_response_over_redfish "$WANTED_LFM_MODE"; then
+    IS_THE_REDFISH_WRITE_PLANNED=true
+
+    if [ -n "$REDFISH_ATTRIBUTES_TO_WRITE" ] && has_the_redfish_errand_spent_real_time; then
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REDFISH_SLOW_ANSWER_STATUS"
+      return 1
+    fi
+  fi
+
+  if send_the_cooling_response_write; then
     REDFISH_COOLING_RESPONSE_SETTLED=true
     THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REQUESTED_STATE over Redfish"
     print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, so it is being set over Redfish instead.
@@ -2030,6 +2067,16 @@ function apply_the_cooling_response_over_redfish() {
     return 0
   fi
 
+  REDFISH_ATTEMPTS=$(( ${REDFISH_ATTEMPTS:-0} + 1 ))
+  conclude_the_refused_redfish_write
+  return 1
+}
+
+# What to say, and whether to keep trying, when a half of the write came back refused. Shared by both
+# halves so that a read refused and a write refused are concluded from the same rule -- the split of #444
+# is about when each request is made, never about what its answer means.
+# Usage : conclude_the_refused_redfish_write
+function conclude_the_refused_redfish_write() {
   # An answer about the request or the credentials will not read differently on the next cycle, so
   # trying again would only make the same wrong request twice more
   if is_this_redfish_answer_a_verdict "$REDFISH_LAST_WRITE_STATUS"; then
@@ -2069,6 +2116,7 @@ function attempt_the_redfish_cooling_response() {
   # reach set_the_cooling_response_over_redfish() on their own, with the short per-request timeout #414
   # sized against the deadline that kills them, and must keep it
   REDFISH_ERRAND_DEADLINE_IN_SECONDS=$(( SECONDS + REDFISH_REQUEST_TIMEOUT_IN_SECONDS ))
+  REDFISH_ERRAND_STARTED_AT_MICROSECONDS=$(now_in_microseconds)
 
   local ERRAND_EXIT_CODE=0
   run_the_redfish_cooling_response_errand "$@" || ERRAND_EXIT_CODE=$?
@@ -2084,11 +2132,62 @@ function attempt_the_redfish_cooling_response() {
 #
 # Not called in a subshell, and never to be : every global it sets -- the column's status, whether the
 # question is settled, how many attempts have been made -- would be lost at that boundary
+# The clock in microseconds, as one integer.
+# Usage : NOW=$(now_in_microseconds)
+# Returns : nothing at all where the shell has no EPOCHREALTIME, which callers must treat as "unknown"
+#           rather than as zero
+#
+# EPOCHREALTIME is "seconds.microseconds" and its separator follows the LOCALE -- a comma under fr_FR,
+# a dot under C -- so whichever it is gets removed rather than assumed, which leaves the whole reading
+# in microseconds with no arithmetic on a decimal string
+function now_in_microseconds() {
+  local -r CLOCK="${EPOCHREALTIME:-}"
+
+  [ -n "$CLOCK" ] || return 1
+
+  printf '%s' "${CLOCK/[.,]/}"
+}
+
+# Whether this cycle's errand has already spent time a reader would notice.
+# Usage : has_the_redfish_errand_spent_real_time
+#
+# The monitoring loop starts its CHECK_INTERVAL timer before a cycle's work and waits on it after, so a
+# cycle costs max(CHECK_INTERVAL, the work) rather than the interval plus the work -- which is what makes
+# CHECK_INTERVAL the period between two temperature readings rather than a pause added to however long
+# one took. The gap between two runs of is_any_CPU_overheating() IS that cycle, and that check is the
+# only thing that takes fans off the user's static speed when a CPU climbs.
+#
+# So the errand's steps stop here rather than running the next request in the same cycle. An iDRAC
+# answering in milliseconds never trips it and the whole errand still happens at once, exactly as before ;
+# one taking a second or more gets one request per cycle, which is the shape that keeps the rhythm (#444).
+#
+# Measured in MICROSECONDS, and that is the whole point rather than precision for its own sake. Written
+# against SECONDS first, this asked whether the shell's whole-second counter had changed -- which it does
+# whenever an errand straddles a second boundary, however fast it was. A healthy iDRAC answering in
+# milliseconds was therefore split across cycles roughly whenever the boundary fell inside it : green
+# here, red on the runner, and wrong in production for no gain. The case that caught it is
+# test_a_healthy_idrac_still_does_the_whole_errand_in_one_cycle()
+function has_the_redfish_errand_spent_real_time() {
+  [ -n "${REDFISH_ERRAND_STARTED_AT_MICROSECONDS:-}" ] || return 1
+
+  local NOW_IN_MICROSECONDS
+  NOW_IN_MICROSECONDS=$(now_in_microseconds)
+
+  # A shell without EPOCHREALTIME cannot answer this, and the safe answer is "no time spent" : the errand
+  # then runs in one cycle, which is what it did before any of this
+  [ -n "$NOW_IN_MICROSECONDS" ] || return 1
+
+  [ $(( NOW_IN_MICROSECONDS - REDFISH_ERRAND_STARTED_AT_MICROSECONDS )) -ge "$REDFISH_ERRAND_STEP_PAUSE_IN_MICROSECONDS" ]
+}
+
 function run_the_redfish_cooling_response_errand() {
   local -r WANTED_LFM_MODE="$1"
   local -r REQUESTED_STATE="$2"
 
-  if does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS"; then
+  # Asked once. A server that has already said where its attributes are, and which of its slots hold a
+  # third-party card, is not asked again on the retries : that answer does not change while the container
+  # runs, and re-asking spent a request per cycle on a question that had been answered
+  if [ -n "$REDFISH_ATTRIBUTES_URI" ] || does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS"; then
     IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=true
 
     if [ -z "$REDFISH_THIRD_PARTY_SLOTS" ]; then
@@ -2107,6 +2206,13 @@ function run_the_redfish_cooling_response_errand() {
       REDFISH_COOLING_RESPONSE_SETTLED=true
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish (not applied: monitoring only mode)"
       return 0
+    fi
+
+    # The asking took long enough to be worth a cycle of its own. The writing waits for the next one
+    # rather than being added to a cycle that has already run past its interval
+    if ! "${IS_THE_REDFISH_WRITE_PLANNED:-false}" && has_the_redfish_errand_spent_real_time; then
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="$REDFISH_SLOW_ANSWER_STATUS"
+      return 1
     fi
 
     apply_the_cooling_response_over_redfish "$WANTED_LFM_MODE" "$REQUESTED_STATE"

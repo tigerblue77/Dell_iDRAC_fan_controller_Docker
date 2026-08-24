@@ -193,6 +193,17 @@ readonly REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS=1
 # that a busy iDRAC is given time to stop being busy, which a tight loop would not
 readonly MAXIMUM_REDFISH_ATTEMPTS=3
 
+# How much of a cycle the Redfish errand may spend before it stops and continues on the next one. Read
+# in microseconds because the reading it comes from is : a whole-second counter answers "a second has
+# passed" for an errand that straddles a boundary however fast it was, which split healthy iDRACs across
+# cycles for nothing (#444)
+readonly REDFISH_ERRAND_STEP_PAUSE_IN_MICROSECONDS=1000000
+
+# What the column says on a cycle the errand stopped for time rather than for an answer. It is not a
+# failure and not a refusal : the iDRAC answered, slowly, and the next request waits for the next cycle
+# so the loop keeps its rhythm (#444)
+readonly REDFISH_SLOW_ANSWER_STATUS="Redfish is slow, one request per cycle"
+
 # Said identically wherever a Redfish write could not be made, so that the reader is never given two
 # slightly different descriptions of the same three clicks
 readonly REDFISH_MANUAL_INSTRUCTIONS="The setting is left exactly as it was, and can be set in the iDRAC web interface under Configuration > System Settings > Hardware Settings, in Cooling Configuration -- named Fans Configuration on older firmware -- by setting LFM Mode on the slot holding the card. Fan control and temperature monitoring are unaffected."
