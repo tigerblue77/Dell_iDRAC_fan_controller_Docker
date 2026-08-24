@@ -851,6 +851,62 @@ function test_the_function_count_claude_md_states_is_the_one_functions_sh_declar
     "CLAUDE.md counts the functions functions.sh holds, the count should be the number it declares"
 }
 
+
+function test_the_test_case_claude_md_documents_passes_when_it_is_run() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    skip_test "no CLAUDE.md next to the scripts"
+    return 0
+  fi
+
+  # The cases above settle what the document says about the repository. This one
+  # settles the single block it hands a session to copy, and copying is exactly
+  # how that block failed : it asserted on a variable only the controller sets,
+  # read the sdr output through one a case never has, and carried a name the
+  # suite had already taken. None of the cases above would have caught any of it
+  # -- a code block names no path, no option and no figure -- and the only
+  # reading that settles an example is to run it.
+  #
+  # Both failure modes are pinned, because they land at different moments : the
+  # name stops the runner before a single case runs, the body fails once one does
+  local -r DOCUMENTED_CASE=$(awk '
+    /^function test_/ { IS_THE_CASE = 1 }
+    IS_THE_CASE { print }
+    IS_THE_CASE && /^}/ { exit }' "$REPO_ROOT/CLAUDE.md")
+
+  assert_matches "$DOCUMENTED_CASE" '^function test_[A-Za-z0-9_]+[[:space:]]*\(\)' \
+    "CLAUDE.md should still show a test case under \"Writing a test case\"" || return 1
+
+  # Discovery reads the case files as text and the runner refuses to start on a
+  # name declared twice, so a name the suite already carries makes the example
+  # unusable as written whatever its body does. Matched with the runner's own
+  # expression rather than a tighter one, so that the two cannot disagree
+  local -r DOCUMENTED_CASE_NAME=$(printf '%s' "$DOCUMENTED_CASE" | sed -n '1s/^function \([A-Za-z0-9_]*\).*/\1/p')
+  local -r COLLIDING_FILES=$(grep -rlE "^[[:space:]]*(function[[:space:]]+)?$DOCUMENTED_CASE_NAME[[:space:]]*\(\)" "$TESTS_DIRECTORY/cases" || true)
+
+  if [ -z "$COLLIDING_FILES" ]; then
+    pass
+  else
+    fail "$DOCUMENTED_CASE_NAME is already declared in the suite, so pasting the example stops the runner" \
+      "declared in : $(printf '%s' "$COLLIDING_FILES" | tr '\n' ' ')"
+  fi
+
+  # Then run it the way a session would : the real runner, on a repository of its
+  # own holding that case and nothing else. The probe machinery belongs to
+  # tests/cases/15_test_runner.sh, which is sourced into this same shell along
+  # with every other case file, so it is reachable from here whatever the filter
+  if ! declare -F run_the_runner_on_a_probe_case_file > /dev/null; then
+    fail "the probe helper tests/cases/15_test_runner.sh declares is gone, so the example cannot be run"
+    return 1
+  fi
+
+  run_the_runner_on_a_probe_case_file "$DOCUMENTED_CASE"
+
+  if [ "$PROBE_EXIT_CODE" -eq 0 ]; then
+    pass
+  else
+    fail "the test case CLAUDE.md documents does not pass when it is run" "$PROBE_OUTPUT"
+  fi
+}
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
   local OUTPUT
   OUTPUT=$(bash "$REPO_ROOT/healthcheck.sh" 2>&1)
