@@ -1003,9 +1003,50 @@ function test_the_notice_names_every_package_the_image_installs() {
 
   local PACKAGE
   for PACKAGE in $INSTALLED_PACKAGES; do
+    # apt-get's own options share the line with the package names. They are not
+    # software shipped in the image, so NOTICE has nothing to say about them
+    case "$PACKAGE" in -*) continue ;; esac
+
     assert_matches "$NOTICE_CONTENT" "(^|[^A-Za-z0-9_-])$PACKAGE([^A-Za-z0-9_-]|$)" \
       "the image installs $PACKAGE, NOTICE should name it among the software shipped with the image"
   done
+}
+
+function test_the_image_installs_the_packages_it_names_and_nothing_else() {
+  # Left to its recommends, apt puts 13 packages and 3.3 MB into the image that
+  # nothing in it ever calls : ipmitool recommends openipmi, a daemon whose job is
+  # loading the IPMI kernel modules on a host -- which a container can neither do
+  # nor need, being handed a /dev/ipmi0 the host already opened -- and openipmi
+  # brings libsnmp, kmod, libpci and libpopt with it ; libio-socket-ssl-perl
+  # recommends liburi-perl, which HTTP::Tiny does not use. Measured on
+  # ubuntu:latest : 117 packages and 61.6 MB with them, 104 and 58.3 MB without,
+  # the two images answering "ipmitool -h" with the same interface list, failing an
+  # absent /dev/ipmi0 with the same message, printing the same "sensors -u" and
+  # completing the same HTTPS round trip with Basic auth against a local TLS server
+  #
+  # The flag is also what makes the install line's four names the whole truth about
+  # what ships, which is the claim the NOTICE case above reads them as
+  if [ ! -f "$REPO_ROOT/Dockerfile" ]; then
+    # The suite is running inside the built image, which does not carry the
+    # Dockerfile that built it
+    skip_test "no Dockerfile next to the scripts"
+    return 0
+  fi
+
+  local -r DOCKERFILE_CONTENT=$(cat "$REPO_ROOT/Dockerfile")
+
+  assert_contains "$DOCKERFILE_CONTENT" "apt-get install --no-install-recommends " \
+    "the image should install what the Dockerfile names and nothing else" || return 1
+
+  # perl reached the image on its own before #374 named it, through the very chain
+  # this flag drops : ipmitool recommends openipmi, openipmi depends on libsnmp and
+  # libsnmp on libperl. It is named here, and libio-socket-ssl-perl depends on it
+  # outright, so the Redfish client does not rest on that coincidence any more --
+  # but the name is what says so, and dropping it would put the image back on it
+  local -r INSTALLED_PACKAGES=$(sed -n 's/.*apt-get install \(.*\) -y.*/\1/p' "$REPO_ROOT/Dockerfile")
+
+  assert_matches "$INSTALLED_PACKAGES" "(^| )perl( |$)" \
+    "perl is the Redfish client's interpreter, the Dockerfile should keep naming it explicitly"
 }
 
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
