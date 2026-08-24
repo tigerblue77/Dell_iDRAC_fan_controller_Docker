@@ -28,6 +28,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified |
 | `cases/16_release_note_publication.sh` | Whether a version tag still needs its GitHub release note written, against a stubbed GitHub : the decision that keeps a re-fired release from appending a second copy of its changelog to the one it already carries |
 | `cases/17_reports.sh` | The JUnit XML and Markdown reports, whose consumer is a parser rather than a reader |
+| `cases/18_sign_off.sh` | The gate that keeps an unsigned commit off `master`, on the pull request it arrives on : that a branch is refused for one missing trailer and every offender named in a single run, that the merge a contributor made to resolve their conflict is not asked to certify anything, and that a range it cannot read fails closed rather than green. Against a repository built for each case rather than a stubbed `git`, so skipped where `git` is missing |
 | `cases/20_fan_speed_conversions.sh` | `FAN_SPEED` given as a percentage or as a hexadecimal byte |
 | `cases/21_fan_speed_validation.sh` | `FAN_SPEED` values that would reach `ipmitool` as an unintended duty cycle, refused before the first command |
 | `cases/22_cpu_temperature_threshold.sh` | `CPU_TEMPERATURE_THRESHOLD`, and reading "auto" off the CPUs with `lm-sensors` |

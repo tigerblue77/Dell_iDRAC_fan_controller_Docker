@@ -53,4 +53,5 @@ jobs:
             .github/generate_dockerhub_description.sh \
             .github/reconcile_latest_tag.sh \
             .github/release_note_already_exists.sh \
+            .github/check_sign_off.sh \
             .claude/hooks/session-start.sh

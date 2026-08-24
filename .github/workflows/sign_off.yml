@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: Sign-off
+
+# CONTRIBUTING.md requires a Signed-off-by line on every commit, and CLAUDE.md repeats it to every
+# session that opens here. Nothing looked for one until this job : when issue #388 was written, 7 of
+# the last 30 commits on master carried it.
+#
+# On pull requests only, and that is not a gap. A squash merge composes its message from the pull
+# request rather than from the branch, so the branch's own commits are the last place the trailer
+# still exists to be read -- by the time master has the squash, the information is gone. Running this
+# on a push to master would also mean a permanently red default branch, since the 23 unsigned commits
+# already there cannot be signed without rewriting published history and breaking every fork and every
+# open pull request.
+#
+# So it gates what arrives from here on, and leaves the history it was written for alone.
+#
+# What it cannot decide is whether the name on the trailer belongs to a person -- see the script, and
+# the half of #388 that is the maintainer's to settle rather than a workflow's.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    name: Check the commits carry a sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # fetch-depth 0 because the script reads base..head, and a shallow checkout has neither end of
+      # that range
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The two SHAs travel as environment variables rather than being interpolated into the script
+      # line. They are hexadecimal and GitHub's own, so nothing here is waiting to be escaped, but a
+      # run: block that expands ${{ }} inline is the shape that goes wrong when the value stops being
+      # a SHA, and there is no reason for this one to have that shape
+      - name: Check the sign-offs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/check_sign_off.sh "$BASE_SHA" "$HEAD_SHA"
