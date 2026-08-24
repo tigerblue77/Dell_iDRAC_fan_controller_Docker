@@ -2,7 +2,8 @@
 
 Automated tests for the Dell iDRAC fan controller. Everything runs against a
 mocked `ipmitool`, so the suite needs **no Dell hardware, no iDRAC and no
-network** : `bash`, `coreutils`, GNU `grep` and `awk` are enough.
+network** : `bash`, `coreutils`, `findutils`, `sed` and GNU `grep` and `awk` are
+enough.
 
 ```bash
 ./tests/run_tests.sh                 # run everything
@@ -21,7 +22,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | File | What it checks |
 | --- | --- |
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, drift between the code and what documents it, healthcheck |
-| `cases/11_claude_code_settings.sh` | The settings a Claude Code session starts from, which no server ever reads : that the file still parses, and that the rules letting any session run a command without asking are the ones argued for — in the shape they were argued in, still runnable, and only those. Skipped where `jq` is missing, the list being read out of JSON |
+| `cases/11_claude_code_settings.sh` | The settings a Claude Code session starts from, which no server ever reads : that the file still parses, that the rules letting any session run a command without asking are the ones argued for — in the shape they were argued in, still runnable, and only those — and that the `SessionStart` hook is still wired to a script that exists, under a budget outlasting what that script allows itself. Skipped where `jq` is missing, the list being read out of JSON |
 | `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh. Also that every workflow carries the licence header, which is the whole directory rather than those two |
 | `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, built by a workflow no pull request fires either : that it stays a pointer at the documentation rather than a copy of it, and that no change to `README.md` can alter it |
 | `cases/14_latest_tag_reconciliation.sh` | Which version `latest` ends up on after a release, against a stubbed registry. Skipped where `jq` is missing, the one thing the script needs that the suite does not |
@@ -47,7 +48,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/60_cpu_topologies.sh` | 1, 2 and 4 socket servers, missing sensors, table layout |
 | `cases/70_fan_control_profiles.sh` | The raw commands sent to the server, what their rejections mean, and the one refusal that must never stop the controller from trying again |
 | `cases/80_temperature_thresholds.sh` | The overheating decision, including its fail-safe behavior |
-| `cases/85_power_state.sh` | Skipping the cycle when the target server is powered off |
+| `cases/85_power_state.sh` | Skipping the cycle when the target server is powered off, and half the file over what happens when it cannot be reached at all : `MAXIMUM_IPMI_UNREACHABLE_DURATION` and `MAXIMUM_CONSECUTIVE_IPMI_FAILURES`, how each resolves into cycles, which of the two wins, and the container giving up |
 | `cases/90_integration.sh` | The whole controller, started like its Docker image does |
 | `cases/95_supervisor.sh` | The supervisor, and the fan handover it guarantees when the controller cannot do it itself |
 
@@ -55,7 +56,7 @@ Server generations are covered from the catalogue in
 `lib/dell_server_catalogue.sh`, which lists more than a hundred PowerEdge models
 from the 9th generation (2006) to the 17th (2024), each with its socket count,
 whether its firmware still accepts Dell's IPMI raw fan control commands, and the
-enclosure it is housed in (`M1000e`, `VRTX`, `FX2`, `MX7000`, a `C-series`
+enclosure it is housed in (`1955`, `M1000e`, `VRTX`, `FX2`, `MX7000`, a `C-series`
 chassis, or `standalone` for the rack and tower servers carrying their own fans).
 
 ## Reports
@@ -84,7 +85,7 @@ tests/
 │   ├── fixtures.sh                 builders for the ipmitool outputs (FRU, SDR)
 │   ├── harness.sh                  the environment a test case runs in, and its helpers
 │   └── reports.sh                  the JUnit XML and Markdown reports
-└── mocks/                          fake ipmitool, sensors and sleep, put first in the PATH
+└── mocks/                          fake ipmitool, perl, sensors and sleep, first in the PATH
 ```
 
 Each test case runs in its own subshell, starting from the environment

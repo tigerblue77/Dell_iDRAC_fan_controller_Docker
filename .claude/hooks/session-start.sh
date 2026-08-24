@@ -14,12 +14,39 @@
 # will decide its push. Installing it up front turns "push and find out" into a local run,
 # which is one CI round trip saved per finding.
 #
-# jq is the same story a size smaller : tests/cases/14_latest_tag_reconciliation.sh skips
-# itself where jq is missing, so a run without it is quietly a little less green than it
-# looks.
+# jq is the same story a size smaller : tests/cases/11_claude_code_settings.sh and
+# tests/cases/14_latest_tag_reconciliation.sh skip themselves where jq is missing, so a run
+# without it is quietly a little less green than it looks.
 #
 # Best-effort by design : the suite does not need either of them, so a package index that
-# cannot be reached costs the session its linter, not its start. It says so and exits 0.
+# cannot be reached costs the session its linter, not its start.
+#
+# WHAT MAKES THAT PROMISE TRUE, rather than merely stated. This runs synchronously, so every
+# second it spends is a second the session does not start, and three things had to be fixed
+# before "costs the session its linter, not its start" was actually the case :
+#
+#   - apt is given a deadline. Unbounded, its own defaults are 120 s per connection with
+#     retries, per source line. A mirror that refuses or fails DNS returns in seconds, but one
+#     that accepts the connection and never answers - a filtering proxy, a half-open NAT, a
+#     wedged mirror - does not : measured against a listener that accepts and never replies,
+#     "apt-get update" blocked for 248 seconds. Both calls now carry acquire timeouts and sit
+#     under "timeout", and .claude/settings.json gives the hook a budget larger than the sum,
+#     so the script always gives up on its own terms before the platform kills it. A kill
+#     landing inside dpkg is what leaves a container refusing every later apt operation until
+#     someone runs "dpkg --configure -a" by hand, and the container state is cached, so that
+#     breakage would persist across sessions rather than being retried from clean.
+#
+#   - "apt-get update" is told to treat a failed index as an error. It reports one as a
+#     warning and exits 0 otherwise, which left the branch below dead in exactly the case it
+#     was written for : the network could be down, nothing would say so, and the install would
+#     go on against whatever index the image was built with.
+#
+#   - the messages that report a problem go to STDOUT. Claude Code feeds a hook's stdout into
+#     the session and keeps stderr only on the non-zero-exit path, so a notice written to
+#     stderr beside "exit 0" is the one combination the session never sees. Announcing success
+#     while swallowing "you have no linter" is backwards : the failure is the half worth
+#     delivering, since a session that does not know shellcheck is missing runs it, gets
+#     "command not found", and pushes anyway.
 
 set -uo pipefail
 
@@ -28,6 +55,17 @@ set -uo pipefail
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
+
+# Bounded so that a mirror which accepts a connection and then goes quiet cannot hold the
+# session open : two acquire timeouts because a source line may be either scheme, one retry
+# rather than apt's three, and an outer wall clock in case something below the acquire layer
+# is what hangs
+readonly APT_NETWORK_OPTIONS=(
+  -o Acquire::http::Timeout=10
+  -o Acquire::https::Timeout=10
+  -o Acquire::Retries=1
+)
+readonly APT_DEADLINE_SECONDS=45
 
 MISSING_PACKAGES=()
 for PACKAGE in shellcheck jq; do
@@ -45,20 +83,50 @@ echo "session-start : installing ${MISSING_PACKAGES[*]}"
 
 export DEBIAN_FRONTEND=noninteractive
 
-if ! apt-get update -qq > /dev/null 2>&1; then
-  echo "session-start : could not refresh the package index, carrying on without ${MISSING_PACKAGES[*]}" >&2
+# APT::Update::Error-Mode=any is what makes this test mean anything : without it a refresh
+# that fetched nothing still exits 0, and the session would be told the index is current
+# when it is whatever the image was built with
+APT_OUTPUT=""
+if ! APT_OUTPUT="$(timeout "$APT_DEADLINE_SECONDS" apt-get update -qq \
+  "${APT_NETWORK_OPTIONS[@]}" -o APT::Update::Error-Mode=any 2>&1)"; then
+  echo "session-start : could not refresh the package index, installing against the one the image was built with"
+  printf '%s\n' "$APT_OUTPUT" | tail -3
 fi
 
-if ! apt-get install -y --no-install-recommends "${MISSING_PACKAGES[@]}" > /dev/null 2>&1; then
-  echo "session-start : could not install ${MISSING_PACKAGES[*]}." >&2
-  echo "session-start : the test suite still runs (./tests/run_tests.sh) ; shellcheck findings will only surface in CI." >&2
+# Its output is kept rather than discarded : "could not install" with no reason attached
+# cannot tell a dead network from an index too old to still name the version it offers,
+# and those are repaired differently
+APT_OUTPUT=""
+if ! APT_OUTPUT="$(timeout "$APT_DEADLINE_SECONDS" apt-get install -y --no-install-recommends \
+  "${APT_NETWORK_OPTIONS[@]}" "${MISSING_PACKAGES[@]}" 2>&1)"; then
+  echo "session-start : could not install ${MISSING_PACKAGES[*]}."
+  printf '%s\n' "$APT_OUTPUT" | tail -5
+  echo "session-start : the test suite still runs (./tests/run_tests.sh) ; shellcheck findings will only surface in CI."
   exit 0
 fi
 
 for PACKAGE in "${MISSING_PACKAGES[@]}"; do
-  if command -v "$PACKAGE" > /dev/null 2>&1; then
-    echo "session-start : $PACKAGE $("$PACKAGE" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1) installed"
+  if ! command -v "$PACKAGE" > /dev/null 2>&1; then
+    echo "session-start : $PACKAGE reported installed but is not on the PATH"
+    continue
+  fi
+
+  # The status is checked and only stdout is read, because a binary that is on the PATH and
+  # cannot run is a real state : an installed shellcheck built against a newer glibc prints
+  # "version `GLIBC_2.34' not found", and folding that into the version parse announces
+  # "shellcheck 2.34 installed" to a session that in fact has nothing that runs
+  VERSION_OUTPUT=""
+  if ! VERSION_OUTPUT="$("$PACKAGE" --version 2> /dev/null)"; then
+    echo "session-start : $PACKAGE is installed but does not run"
+    continue
+  fi
+
+  VERSION=""
+  VERSION="$(printf '%s' "$VERSION_OUTPUT" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)"
+
+  if [ -n "$VERSION" ]; then
+    echo "session-start : $PACKAGE $VERSION installed"
   else
-    echo "session-start : $PACKAGE reported installed but is not on the PATH" >&2
+    echo "session-start : $PACKAGE installed"
   fi
 done
