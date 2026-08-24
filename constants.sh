@@ -88,16 +88,24 @@ readonly CPU_REMOVAL_CONFIRMING_READINGS=5
 # shortening anything, and the column has to widen with the mode instead. MONITORING_ONLY_MODE is fixed for
 # the container's lifetime, so which of the two applies is settled once at startup.
 #
-# Outside monitoring only mode the width follows " (not applied)" rather than the bare profile : a refused
-# ipmitool call keeps the table honest by saying the profile is not the one the server is running, and that
-# suffix is 14 characters the bare name does not account for. Sizing on the bare name is what #170 was
-readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=54
+# Outside monitoring only mode the width follows the widest badge the code can put after a profile name
+# rather than the bare profile : a refused ipmitool call keeps the table honest by saying the profile is
+# not the one the server is running, and those suffixes are characters the bare name does not account
+# for. Sizing on the bare name is what #170 was. The widest is now " (speed refused)", the 16 characters
+# #389 added to Dell's own 40-character name, which is where 56 comes from -- it was 54 for " (not
+# applied)" and stayed there for a week while the rows printed two characters past it (#416)
+readonly FAN_CONTROL_PROFILE_COLUMN_WIDTH=56
 readonly MONITORING_ONLY_MODE_FAN_CONTROL_PROFILE_COLUMN_WIDTH=71
 
 # The cooling response column is sized by its own heading, "Third-party PCIe card Dell default cooling
-# response", which is 51 characters and longer than anything that column ever holds : its widest value
-# is 47 characters, reached by both "Refused: this account lacks the privilege level" and "Not over IPMI
-# (this server has it over Redfish)". So, unlike the profile column, it does not move with the mode.
+# response", which is 51 characters and longer than anything that column ever holds : its widest value is
+# 47 characters, "Refused: this account lacks the privilege level". So, unlike the profile column, it does
+# not move with the mode.
+#
+# That sentence used to name "Not over IPMI (this server has it over Redfish)" beside it, which is the
+# same 47 characters and was true when #374 wrote it -- and stopped being emitted by anything when #375
+# replaced it with "$REQUESTED_STATE over Redfish". The number survived the change, so nothing went red
+# over a comment naming a status the container can no longer print (#415).
 #
 # That sentence used to name a value of 44 that a later status overtook, and nothing went red over it --
 # the suite asserted every status fits, which stayed true, but never that this number is the heading's
@@ -122,9 +130,21 @@ readonly REDFISH_LEGACY_ATTRIBUTES_URI="/redfish/v1/Managers/System.Embedded.1/A
 # How long a Redfish request is given. The startup probe can afford to wait ; the one on the way out
 # cannot, because it runs after the fans have been handed back but still inside Docker's ten second
 # stop grace period, and a container killed for taking too long to stop would be a worse outcome than a
-# cooling response left as the user set it
+# cooling response left as the user set it.
+#
+# The exit figure is per REQUEST and the hand-back makes two of them -- it reads the slots back, then
+# writes them -- so what has to fit inside a deadline is twice this number, not this number. At 3 it did
+# not fit anything : graceful_exit() runs under the supervisor's own SUPERVISOR_GRACE_PERIOD_IN_SECONDS,
+# also 3, so an iDRAC that simply did not answer made a healthy monitoring process miss that deadline and
+# be SIGKILLed as wedged -- with the fans already safe, but the log saying the container had hung. The
+# supervisor's own hand-back on that path can make four requests (two probing, two writing) and had 12
+# seconds of budget against Docker's 10. At 1 the pair costs 2 seconds against a 3 second deadline, and
+# the supervisor's four cost 4 against 10, both with room left over. An iDRAC that needs more than a
+# second to answer on the way out is one whose answer nobody is waiting for anyway : the fans are back on
+# Dell's profile before any of this runs, and the cooling response is left exactly where it already was.
+# tests/cases/46_redfish_cooling_response.sh holds the arithmetic so it cannot drift back (#414)
 readonly REDFISH_REQUEST_TIMEOUT_IN_SECONDS=10
-readonly REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS=3
+readonly REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS=1
 
 # How many times reaching the cooling response over Redfish is attempted before the container stops
 # trying, counting the first attempt. It covers the whole errand -- reading the attributes and writing

@@ -68,7 +68,7 @@ function apply_Dell_default_fan_control_profile_on_behalf_of_the_monitoring_proc
     if does_this_server_expose_the_cooling_response_over_redfish "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
       && [ -n "$REDFISH_THIRD_PARTY_SLOTS" ]; then
       set_the_cooling_response_over_redfish "Automatic" "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
-        || print_error "Could not hand the third-party PCIe card cooling response back to Dell's default over Redfish. It is left as the monitoring process set it, and can be put back in the iDRAC web interface"
+        || print_error "Could not hand the third-party PCIe card cooling response back to Dell's default over Redfish. $REDFISH_MANUAL_INSTRUCTIONS"
     else
       enable_third_party_PCIe_card_Dell_default_cooling_response
     fi

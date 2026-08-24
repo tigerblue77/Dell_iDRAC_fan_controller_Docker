@@ -248,3 +248,57 @@ function test_the_docker_image_starts_the_supervisor_and_not_the_monitoring_proc
   assert_matches "$(cat "$REPO_ROOT/Dockerfile")" 'ENTRYPOINT \["\./supervisor\.sh"\]' \
     "the image must start the supervisor rather than the monitoring process directly"
 }
+
+function test_a_killed_monitoring_process_gets_the_cooling_response_handed_back_over_redfish() {
+  # The whole point of #375's "including on the way out" for the case graceful_exit() cannot cover : the
+  # wedged shell of #249, killed with the slot still where the monitoring process put it. On a 14th
+  # generation server the IPMI command below is the one the BMC answers "invalid command" to, so the
+  # fallback would undo nothing -- the supervisor has to ask Redfish, from a process that watched no
+  # answer and therefore knows nothing about the transport. Reached by no test until #417
+  export MOCK_REDFISH_CONFORMANT_STATUS="200"
+  export MOCK_REDFISH_CONFORMANT_BODY='{"Attributes":{"PCIeSlotLFM.2.3rdPartyCard":"Yes","PCIeSlotLFM.2.LFMMode":"Disabled"}}'
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+
+  local -r STAND_IN=$(write_stand_in_monitoring_process << 'EOF'
+#!/bin/bash
+trap '' SIGTERM
+while true; do sleep 0.05; done
+EOF
+  )
+
+  local OUTPUT
+  OUTPUT=$(run_supervisor "$STAND_IN")
+
+  assert_matches "$(cat "$MOCK_REDFISH_PATCH_LOG")" '"PCIeSlotLFM\.2\.LFMMode":"Automatic"' \
+    "Dell's default is what goes back, over the transport the setting really lives on"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "the command this generation does not have must not be sent instead"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "and the fans are still handed back, which is the supervisor's first job"
+}
+
+function test_a_killed_monitoring_process_falls_back_to_ipmi_when_redfish_has_nothing_to_say() {
+  # The other half of the same branch, and the one every existing supervisor case was silently taking :
+  # an iDRAC with no attribute document is a server whose cooling response is the IPMI command, and that
+  # is what must be sent. Pinning both is what stops the branch from being reversed unnoticed
+  export MOCK_REDFISH_CONFORMANT_STATUS="404"
+  export MOCK_REDFISH_LEGACY_STATUS="404"
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+
+  local -r STAND_IN=$(write_stand_in_monitoring_process << 'EOF'
+#!/bin/bash
+trap '' SIGTERM
+while true; do sleep 0.05; done
+EOF
+  )
+
+  local OUTPUT
+  OUTPUT=$(run_supervisor "$STAND_IN")
+
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "a server that answers 404 on both URIs is written to over neither"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "the IPMI command is the cooling response on every generation that still has it"
+}

@@ -178,7 +178,10 @@ function apply_user_fan_control_profile() {
       # The hand-back was refused too, so the fans are still on neither profile. apply_Dell_default_fan_control_profile()
       # has already named that state ; saying the user's profile was applied over it would be the lie this
       # whole branch exists to avoid
-      CURRENT_FAN_CONTROL_PROFILE="Fans left on no profile (speed refused, and Dell's own could not be restored)"
+      # Shortened to fit the column it prints into : at 77 characters it ran 21 past
+      # FAN_CONTROL_PROFILE_COLUMN_WIDTH and pushed every column after it out of line (#416). The detail
+      # it dropped is in the error apply_Dell_default_fan_control_profile() has already printed
+      CURRENT_FAN_CONTROL_PROFILE="Fans left on no profile (speed and hand-back refused)"
     fi
     return 1
   fi
@@ -1814,8 +1817,21 @@ function does_this_server_expose_the_cooling_response_over_redfish() {
   # "3rdPartyCard" begins with a digit of its own, so "PCIeSlotLFM.6.3rdPartyCard" yields 6 AND 3 to any
   # pattern that simply collects numbers. That reads as twice the slots there are, half of them wrong,
   # and would have written the setting to slots holding somebody else's card
+  #
+  # The pattern reaches the attribute name from anywhere in the field rather than from the start of it :
+  # anchoring at ^ with [^"]* cannot cross the quote that opens the enclosing "Attributes" key, so the
+  # field carrying the document's FIRST attribute never matched and that slot was silently left out of
+  # every write. Dell orders these documents alphabetically, which puts PCIeSlotLFM before
+  # ThermalSettings, so the slot being dropped was the first PCIe slot of a real answer rather than an
+  # edge case. The digit-collection trap the paragraph above describes is kept away by naming the
+  # attribute in the pattern, which the anchor was never what did
+  #
+  # The colon tolerates whitespace around it because nothing in HTTP or JSON promises a minified body,
+  # and getting this wrong is invisible : the slot COUNT below matches the bare key and would still say
+  # the server has the setting, so a pretty-printed answer produced a server that has the setting and no
+  # slot to apply it to -- settled, once, for the life of the container
   REDFISH_THIRD_PARTY_SLOTS=$(printf '%s\n' "$REDFISH_ANSWER" | tr ',' '\n' \
-    | sed -n 's/^[^"]*"PCIeSlotLFM\.\([0-9]\+\)\.3rdPartyCard":"Yes".*$/\1/p' \
+    | sed -n 's/.*"PCIeSlotLFM\.\([0-9]\+\)\.3rdPartyCard"[[:space:]]*:[[:space:]]*"Yes".*/\1/p' \
     | sort -n -u | tr '\n' ' ')
 
   [ "$REDFISH_COOLING_RESPONSE_SLOT_COUNT" -gt 0 ]
@@ -1827,9 +1843,12 @@ function read_the_lfm_mode_of_slot() {
   local -r REDFISH_BODY="$1"
   local -r SLOT_NUMBER="$2"
 
+  # Whitespace around the colon is tolerated for the same reason as in the slot list above, and it
+  # matters more here : a mode read as empty never equals the wanted one, so every slot would be written
+  # on every cycle, which is the configuration job queue this function exists to spare
   printf '%s\n' "$REDFISH_BODY" | tr ',' '\n' \
-    | grep -o "\"PCIeSlotLFM\.${SLOT_NUMBER}\.LFMMode\":\"[^\"]*\"" \
-    | head -n 1 | sed 's/.*:"//; s/"$//'
+    | grep -o "\"PCIeSlotLFM\.${SLOT_NUMBER}\.LFMMode\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+    | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
 }
 
 # Put the third-party PCIe card cooling response into the wanted state over Redfish, on the slots that
@@ -1860,9 +1879,21 @@ function set_the_cooling_response_over_redfish() {
     return 0
   fi
 
+  # This errand is two requests, and until #413 only the second one ever recorded its answer. A read
+  # refused here left REDFISH_LAST_WRITE_STATUS holding nothing, so the caller's verdict test saw an
+  # empty status and retried a 401 that will read the same way for ever, and the message it printed
+  # after the last attempt ended "The last answer was HTTP ." with nothing in it. Both halves record
+  # what they got, and which half it was, so that what is concluded and what is said are the same thing
+  REDFISH_LAST_WRITE_STATUS=""
+  REDFISH_LAST_ERRAND_STAGE="reading the setting back"
+
   local REDFISH_ANSWER
   REDFISH_ANSWER=$(redfish_get "$REDFISH_ATTRIBUTES_URI" "$TIMEOUT_IN_SECONDS") || return 1
-  if [ "$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)" != "200" ]; then
+
+  local READ_STATUS
+  READ_STATUS=$(printf '%s\n' "$REDFISH_ANSWER" | head -n 1)
+  REDFISH_LAST_WRITE_STATUS="$READ_STATUS"
+  if [ "$READ_STATUS" != "200" ]; then
     return 1
   fi
 
@@ -1884,6 +1915,7 @@ function set_the_cooling_response_over_redfish() {
   # Every slot in one PATCH rather than one request each : the iDRAC applies the whole Attributes object
   # in a single configuration job, which is both faster and one job instead of N on a server that may
   # have forty of them
+  REDFISH_LAST_ERRAND_STAGE="writing it"
   REDFISH_LAST_WRITE_STATUS=$(redfish_patch "$REDFISH_ATTRIBUTES_URI" "{\"Attributes\":{${ATTRIBUTES_TO_WRITE}}}" "$TIMEOUT_IN_SECONDS" | head -n 1)
 
   case "$REDFISH_LAST_WRITE_STATUS" in
@@ -1946,7 +1978,7 @@ function apply_the_cooling_response_over_redfish() {
   if is_this_redfish_answer_a_verdict "$REDFISH_LAST_WRITE_STATUS"; then
     REDFISH_COOLING_RESPONSE_SETTLED=true
     THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish refused this change (see the log)"
-    print_error "This server exposes the third-party PCIe card cooling response over Redfish, but refused to change it with HTTP $REDFISH_LAST_WRITE_STATUS. That answer is about this request or these credentials rather than about a moment the iDRAC was having, so it will not read differently on the next cycle and is not retried. $REDFISH_MANUAL_INSTRUCTIONS"
+    print_error "This server exposes the third-party PCIe card cooling response over Redfish, but answered HTTP $REDFISH_LAST_WRITE_STATUS while $REDFISH_LAST_ERRAND_STAGE. That answer is about this request or these credentials rather than about a moment the iDRAC was having, so it will not read differently on the next cycle and is not retried. $REDFISH_MANUAL_INSTRUCTIONS"
     return 1
   fi
 
@@ -1960,7 +1992,7 @@ function apply_the_cooling_response_over_redfish() {
   REDFISH_COOLING_RESPONSE_SETTLED=true
   local -r REFUSED_OVER_SECONDS=$(( (REDFISH_ATTEMPTS - 1) * ${CHECK_INTERVAL_IN_SECONDS:-0} ))
   THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Redfish refused this change (see the log)"
-  print_error "This server exposes the third-party PCIe card cooling response over Redfish, but refused to change it $REDFISH_ATTEMPTS times, i.e. over about $REFUSED_OVER_SECONDS seconds. The last answer was HTTP $REDFISH_LAST_WRITE_STATUS. Answers like that one describe a moment rather than a decision -- a busy iDRAC, a full configuration job queue, a request that never completed -- so they were retried rather than concluded from, and $MAXIMUM_REDFISH_ATTEMPTS attempts is where that stops. $REDFISH_MANUAL_INSTRUCTIONS"
+  print_error "This server exposes the third-party PCIe card cooling response over Redfish, but the change could not be made in $REDFISH_ATTEMPTS attempts, spread over about $REFUSED_OVER_SECONDS seconds. The last of them answered HTTP $REDFISH_LAST_WRITE_STATUS while $REDFISH_LAST_ERRAND_STAGE. Answers like that one describe a moment rather than a decision -- a busy iDRAC, a full configuration job queue, a request that never completed -- so they were retried rather than concluded from, and $MAXIMUM_REDFISH_ATTEMPTS attempts is where that stops. $REDFISH_MANUAL_INSTRUCTIONS"
   return 1
 }
 
@@ -2156,7 +2188,7 @@ function graceful_exit() {
     # than a cooling response left as the user set it
     if "${IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH:-false}"; then
       set_the_cooling_response_over_redfish "Automatic" "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
-        || print_error "Could not hand the third-party PCIe card cooling response back to Dell's default over Redfish. It is left as this container set it, and can be put back in the iDRAC web interface"
+        || print_error "Could not hand the third-party PCIe card cooling response back to Dell's default over Redfish. $REDFISH_MANUAL_INSTRUCTIONS"
     else
       enable_third_party_PCIe_card_Dell_default_cooling_response
     fi
