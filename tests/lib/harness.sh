@@ -20,6 +20,7 @@ function setup_test_context() {
   export IDRAC_PASSWORD="calvin"
   export FAN_SPEED=5
   export CPU_TEMPERATURE_THRESHOLD=auto
+  export CPU_TEMPERATURE_HYSTERESIS=0
   export CPU_TEMPERATURE_SOURCE=auto
   export CHECK_INTERVAL=5
   export MAXIMUM_IPMI_UNREACHABLE_DURATION="60s"

@@ -84,6 +84,7 @@ ENV IDRAC_HOST=local
 # ENV IDRAC_PASSWORD=calvin
 ENV FAN_SPEED=5
 ENV CPU_TEMPERATURE_THRESHOLD=auto
+ENV CPU_TEMPERATURE_HYSTERESIS=0
 ENV CPU_TEMPERATURE_SOURCE=auto
 ENV CHECK_INTERVAL=5
 # Give up on an iDRAC that has been unreachable for this long, so a restart policy can retry with a

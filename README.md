@@ -107,6 +107,7 @@ docker run -d \
   -e IDRAC_HOST=local \
   -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
+  -e CPU_TEMPERATURE_HYSTERESIS=<degrees below the threshold at which your profile is restored, or 0> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
@@ -129,6 +130,7 @@ docker run -d \
   -e IDRAC_PASSWORD=<iDRAC password> \
   -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
+  -e CPU_TEMPERATURE_HYSTERESIS=<degrees below the threshold at which your profile is restored, or 0> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
@@ -155,6 +157,7 @@ services:
       - IDRAC_HOST=local
       - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
+      - CPU_TEMPERATURE_HYSTERESIS=<degrees below the threshold at which your profile is restored, or 0>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
@@ -182,6 +185,7 @@ services:
       - IDRAC_PASSWORD=<iDRAC password>
       - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
+      - CPU_TEMPERATURE_HYSTERESIS=<degrees below the threshold at which your profile is restored, or 0>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
@@ -256,6 +260,18 @@ Every parameter has a default value except `IDRAC_USERNAME` and `IDRAC_PASSWORD`
   - Whenever the threshold can't be detected, the container falls back to 50(°C) and logs why at startup.
   - :warning: **This default changed in v1.28.** Versions up to v1.27 used a fixed 50°C. On Intel servers in "local" mode, "auto" typically resolves to a **higher** value (roughly 62 to 96°C depending on the CPU model — read the exact one from the startup log), so the fans stay at `FAN_SPEED` longer than they used to before Dell's profile takes over. This matches what your CPU actually asks for, but it also means the whole chassis runs at `FAN_SPEED` for longer, and the CPU is the only component this container watches. If you were relying on the old behaviour, set `CPU_TEMPERATURE_THRESHOLD=50` explicitly.
   - :warning: **The accepted range is also new in v1.28.** Versions up to v1.27 took any integer, so a value such as `160` was accepted and simply never reached — the container ran with its overheat fallback unable to fire, while printing that threshold at startup as though something were being supervised. From v1.28 it stops the container at startup instead, and a `restart: unless-stopped` policy then restarts it straight into the same refusal, which reads as a container flapping rather than as a configuration mistake. Set the temperature your CPUs should not exceed, or `auto`.
+- `CPU_TEMPERATURE_HYSTERESIS` parameter is how many degrees Celsius below `CPU_TEMPERATURE_THRESHOLD` your fan control profile is restored, once the container has handed the fans back to Dell's profile. **Default** value is 0(°C), which restores it as soon as the temperature is back at or below the threshold — the behaviour every version up to v1.28 had.
+  - **What it is for.** One temperature governs both directions by default, so a CPU sitting near it crosses it back and forth on every `CHECK_INTERVAL`: the container hands the fans to Dell, Dell ramps them hard, the CPU drops below the threshold within a cycle or two, the container takes them back at `FAN_SPEED`, and it starts again. The audible result is a fan pulsing between quiet and loud for as long as the load lasts, and it is worse than either state on its own ([#242](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/242), [#406](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/406)). Set this to give the two directions two different temperatures: with a 70°C threshold and a 10°C hysteresis, the fans go to Dell above 70°C and come back to you at 60°C, and anything in between changes nothing.
+  - **It only ever delays the return to your profile, never the departure from it.** A CPU crossing `CPU_TEMPERATURE_THRESHOLD` is handed to Dell's profile on that very cycle whatever this parameter says. The overheat fallback is not something this parameter can slow down, widen or switch off.
+  - **The band applies whatever opened the fallback.** Dell's profile is also applied when a CPU temperature cannot be read at all, and the return from that is governed by the same rule: every CPU readable *and* at or below the resume temperature. After a spell of unreadable sensors the container does not take the fans back on a single reading that happens to land just under the threshold.
+  - **The first check is the exception**, and deliberately: it establishes a profile rather than changing one, so it uses the threshold itself. Without that, a server idling inside the band would stay on Dell's profile for the life of the container and your `FAN_SPEED` would never be applied once — the container would look like it was doing nothing at all.
+  - The maximum is whatever leaves the resume temperature at or above 20°C, so it depends on the threshold you set: 50°C against a 70°C threshold, and the container refuses to start beyond that rather than run with a fallback that could fire and never end. It is checked against the **resolved** threshold, so on `auto` the accepted maximum is whatever your CPUs reported — the startup log states both numbers:
+
+    ```
+    CPU temperature threshold: 70°C
+    CPU temperature hysteresis: 10°C (your fan control profile is restored at 60°C, not at the threshold the fallback fired on)
+    ```
+  - The comment column names the temperature that was actually compared against, so the line closing a fallback reads `All CPU temperatures are now OK (<= 60°C)` rather than repeating the threshold the fallback fired on.
 - `CPU_TEMPERATURE_SOURCE` parameter selects where the CPU temperatures the container supervises are read from. **Default** value is "auto".
   - `auto` reads them from your iDRAC, and falls back to [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) only if your iDRAC turns out to report no CPU temperature **at all**. Some older iDRACs accept Dell's raw fan control commands but answer nothing usable to a temperature query ([issue #216](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)) : on those, the container used to be able to do nothing but hand the fans back to Dell's own profile forever. The fallback is tried on the check that found no sensor, just before the container would otherwise refuse to run over it, and it is logged when it engages. One check is enough to conclude: an iDRAC that exposes no processor entity does so on every check rather than on that one, which is the same reason the container refuses instead of retrying. Once engaged it stays for the life of the container, that being a property of the firmware rather than a passing condition, and changing the meaning of the table's numbers mid-run would be worse than keeping a source that works.
   - `ipmi` never reads `lm-sensors`, whatever your iDRAC reports. Set it if you want the source to be the iDRAC and nothing else.
@@ -483,6 +499,7 @@ export IDRAC_USERNAME=<iDRAC username>
 export IDRAC_PASSWORD=<iDRAC password>
 export FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
 export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
+export CPU_TEMPERATURE_HYSTERESIS=<degrees below the threshold at which your profile is restored, or 0>
 export CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
 export CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
 export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>

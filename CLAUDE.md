@@ -24,7 +24,7 @@ either way : the other sensors, and every fan control command.
 | --- | --- |
 | `supervisor.sh` | The image's entrypoint. Starts the controller and, if it dies without doing it itself, hands the fans back to Dell |
 | `Dell_iDRAC_fan_controller.sh` | Configuration validation, then the monitoring loop |
-| `functions.sh` | Every shared function (77, flat namespace, no modules). `supervisor.sh` keeps two of its own |
+| `functions.sh` | Every shared function (78, flat namespace, no modules). `supervisor.sh` keeps two of its own |
 | `constants.sh` | The fixed values everything else is measured against : bounds, thresholds, intervals, column widths, Redfish URIs. The raw IPMI commands are in `functions.sh` |
 | `healthcheck.sh` | `HEALTHCHECK` for the image |
 | `tests/` | The suite. See `tests/README.md`, which is thorough — read it before touching a test |

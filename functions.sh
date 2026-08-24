@@ -650,6 +650,57 @@ function validate_check_interval_parameter() {
   fi
 }
 
+# Validate CPU_TEMPERATURE_HYSTERESIS, the band by which the fallback to Dell's profile ends lower than
+# it began, and normalize it into CPU_TEMPERATURE_HYSTERESIS itself
+# Usage : validate_CPU_temperature_hysteresis_parameter "CPU_TEMPERATURE_HYSTERESIS" "$CPU_TEMPERATURE_HYSTERESIS" "$CPU_TEMPERATURE_THRESHOLD"
+#
+# Zero is the default and a valid setting : it means one bound in both directions, which is what this
+# container did before the parameter existed.
+#
+# The upper bound is not a figure of its own but the threshold it is subtracted from : what has to stay
+# plausible is the temperature the user's profile is restored at, and that is the same requirement
+# MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD already states for the threshold. A band wide enough to
+# push it below that is the mirror of the "supervising nothing" configuration the threshold's own window
+# exists to refuse : the fallback would fire normally and then never end, the server staying on Dell's
+# profile for the life of the container while the startup log printed a fan speed nothing would apply.
+#
+# It is validated against the RESOLVED threshold, so it must be called after the "auto" resolution : on
+# a CPU whose "high" temperature is 62°C, a 45°C band is refused where the same value passes against an
+# explicit 90°C threshold, and the refusal can name the number the container actually resolved.
+#
+# This function must be called as a statement, never through a command substitution : the exit inside
+# print_configuration_error_and_exit would otherwise only leave the subshell and the container would
+# keep running
+function validate_CPU_temperature_hysteresis_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r RESOLVED_THRESHOLD="$3"
+
+  # The shapes an --env-file produces reach this parameter exactly as they reach the threshold above it
+  local VALUE="$2"
+  VALUE="${VALUE//[[:space:]]/}"
+  VALUE="${VALUE#[\"\']}"
+  VALUE="${VALUE%[\"\']}"
+  VALUE="${VALUE#+}"
+  VALUE="${VALUE:-0}"
+
+  # Bounded to three digits for the reason the threshold is : a longer number wraps around 64 bits into
+  # a plausible looking one. A negative value is refused rather than read as "no band", because it names
+  # the opposite intention -- restoring the user's profile ABOVE the threshold the fallback fired on --
+  # and silently doing nothing with it would leave the fans pulsing the parameter was set to stop
+  if [[ ! "$VALUE" =~ ^[0-9]{1,3}$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$2" "a positive integer number of degrees Celsius, or 0 to hand the fans back and take them again at the same temperature"
+  fi
+
+  VALUE=$((10#$VALUE))
+
+  local -r RESUME_THRESHOLD=$((RESOLVED_THRESHOLD - VALUE))
+  if [ "$RESUME_THRESHOLD" -lt "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "${VALUE}°C" "a band that leaves the user's fan control profile restorable, which means at most $((RESOLVED_THRESHOLD - MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD))°C against the ${RESOLVED_THRESHOLD}°C threshold this container resolved. Subtracted from that threshold, ${VALUE}°C would only restore your profile at ${RESUME_THRESHOLD}°C, below the ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}°C no PowerEdge CPU idles under -- so the fallback to Dell's profile would fire normally and then never end, and the fan speed printed at startup would never be applied again"
+  fi
+
+  CPU_TEMPERATURE_HYSTERESIS="$VALUE"
+}
+
 # Express an already validated fan speed parameter in both notations at once
 # Usage : convert_fan_speed_parameter "$VALUE"
 # Returns : DECIMAL_SPEED, HEXADECIMAL_SPEED
@@ -2450,7 +2501,14 @@ function is_temperature_reading_valid() {
 # and when its reading is unusable, so an unverifiable temperature still falls back to Dell's profile
 # instead of crashing (bash's "-gt" throws "unary operator expected" on empty/non-numeric input) or
 # silently running the low user fan speed on unverified data. The same goes for an unusable threshold,
-# the comparison having two operands and only one of them having been guarded until now
+# the comparison having two operands and only one of them having been guarded until now.
+#
+# The bound it compares against is not always CPU_TEMPERATURE_THRESHOLD : CPU_TEMPERATURE_HYSTERESIS
+# lowers it while Dell's profile is the one applied, so the fallback ends lower than it began. Without
+# that band a CPU sitting on the threshold crosses it in both directions every CHECK_INTERVAL, and the
+# fans pulse between the user's speed and Dell's for as long as the load lasts (issues #242 and #406).
+# The bound actually used is published in APPLIED_CPU_TEMPERATURE_BOUND, because the comment closing a
+# fallback states it and stating the other one would name a temperature nothing was compared against
 function is_any_CPU_overheating() {
   OVERHEATING_CPUS_AND_TEMPERATURES=()
 
@@ -2466,10 +2524,35 @@ function is_any_CPU_overheating() {
     NORMALIZED_CPU_TEMPERATURE_THRESHOLD=$(normalize_decimal_value "$CPU_TEMPERATURE_THRESHOLD")
   fi
 
+  # The hysteresis is guarded here for the same reason the threshold above is, and treated as absent
+  # when it is unusable : this function must not depend on a check living in another file to stay
+  # answerable. An absent band means today's behaviour, one bound in both directions, which is also
+  # what the parameter's default asks for.
+  #
+  # It is only subtracted while Dell's profile is the applied one, so the band delays the RETURN to the
+  # user's profile and never the departure from it : a CPU crossing CPU_TEMPERATURE_THRESHOLD is handed
+  # to Dell on that very cycle, hysteresis or not. And never on the first monitoring cycle, which
+  # establishes a profile rather than changing one -- the flag it reads starts at true, so honouring the
+  # band there would leave a server idling inside it on Dell's profile for the life of the container,
+  # the user's speed never once applied
+  local RAW_CPU_TEMPERATURE_HYSTERESIS="${CPU_TEMPERATURE_HYSTERESIS:-0}"
+  local NORMALIZED_CPU_TEMPERATURE_HYSTERESIS=0
+  if [[ "$RAW_CPU_TEMPERATURE_HYSTERESIS" =~ ^[0-9]+$ ]]; then
+    NORMALIZED_CPU_TEMPERATURE_HYSTERESIS=$(normalize_decimal_value "$RAW_CPU_TEMPERATURE_HYSTERESIS")
+  fi
+
+  APPLIED_CPU_TEMPERATURE_BOUND="$NORMALIZED_CPU_TEMPERATURE_THRESHOLD"
+  if [ -n "$NORMALIZED_CPU_TEMPERATURE_THRESHOLD" ] \
+    && [ "$NORMALIZED_CPU_TEMPERATURE_HYSTERESIS" -gt 0 ] \
+    && [[ "${IS_FIRST_MONITORING_CYCLE:-false}" != "true" ]] \
+    && [[ "${IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED:-false}" == "true" ]]; then
+    APPLIED_CPU_TEMPERATURE_BOUND=$((NORMALIZED_CPU_TEMPERATURE_THRESHOLD - NORMALIZED_CPU_TEMPERATURE_HYSTERESIS))
+  fi
+
   local INDEX CPU_TEMPERATURE
   for INDEX in "${!DETECTED_CPU_TEMPERATURES[@]}"; do
     CPU_TEMPERATURE="${DETECTED_CPU_TEMPERATURES[INDEX]}"
-    if [ -z "$NORMALIZED_CPU_TEMPERATURE_THRESHOLD" ] || ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$NORMALIZED_CPU_TEMPERATURE_THRESHOLD" ]; then
+    if [ -z "$APPLIED_CPU_TEMPERATURE_BOUND" ] || ! is_temperature_reading_valid "$CPU_TEMPERATURE" || [ "$(normalize_decimal_value "$CPU_TEMPERATURE")" -gt "$APPLIED_CPU_TEMPERATURE_BOUND" ]; then
       # The label is taken from the table's own labels rather than rebuilt here, so that the CPU named
       # in the comment is always the one whose column shows the reading that triggered it. It falls back
       # to the position rather than to an empty string, so that a comment naming no CPU at all can never

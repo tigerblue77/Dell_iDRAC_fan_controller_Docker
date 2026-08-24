@@ -168,6 +168,15 @@ else
 fi
 readonly CPU_TEMPERATURE_THRESHOLD
 
+# The band by which the fallback to Dell's profile ends lower than it began. Validated here rather than
+# with the other parameters at the top of this file because its bound is the threshold above, which is
+# only a number once the "auto" resolution has run
+validate_CPU_temperature_hysteresis_parameter "CPU_TEMPERATURE_HYSTERESIS" "$CPU_TEMPERATURE_HYSTERESIS" "$CPU_TEMPERATURE_THRESHOLD"
+readonly CPU_TEMPERATURE_HYSTERESIS
+# The temperature the user's fan control profile is restored at. Equal to the threshold when no band is
+# configured, which is the default and what this container did before the parameter existed
+readonly CPU_TEMPERATURE_RESUME_THRESHOLD=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_HYSTERESIS))
+
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 
 get_Dell_server_model
@@ -191,6 +200,14 @@ echo "iDRAC firmware version: $IDRAC_FIRMWARE_VERSION"
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 echo "CPU temperature threshold: ${CPU_TEMPERATURE_THRESHOLD}°C${CPU_TEMPERATURE_THRESHOLD_SOURCE}"
+# Stated as the temperature it resolves to rather than as the band alone : the band is what the user
+# sets, the temperature is what the controller will act on, and it is the one they need to recognise in
+# the comment column when the fallback ends
+if [ "$CPU_TEMPERATURE_HYSTERESIS" -gt 0 ]; then
+  echo "CPU temperature hysteresis: ${CPU_TEMPERATURE_HYSTERESIS}°C (your fan control profile is restored at ${CPU_TEMPERATURE_RESUME_THRESHOLD}°C, not at the threshold the fallback fired on)"
+else
+  echo "CPU temperature hysteresis: Disabled (your fan control profile is restored as soon as the temperature is back at or below the threshold)"
+fi
 echo "CPU temperature source: $CPU_TEMPERATURE_SOURCE_DESCRIPTION"
 # The unit is only appended when the value doesn't already carry one, "90s" and "5m" being accepted
 # forms that would otherwise be logged as "90ss" and "5ms"
@@ -524,11 +541,17 @@ while true; do
       # Kept symmetric with the clause naming the CPUs that triggered the switch, plural included.
       # It says the temperatures are OK rather than that they decreased, because the Dell default profile
       # is also applied when a reading can't be parsed : claiming a temperature dropped would contradict
-      # the "could not be read" comment printed when that happened
+      # the "could not be read" comment printed when that happened.
+      #
+      # The bound named is the one is_any_CPU_overheating() just compared against, not the threshold :
+      # with a hysteresis configured the two differ, and on the first monitoring cycle they differ again
+      # the other way, that cycle establishing a profile against the threshold itself. Printing the
+      # threshold in either case would name a temperature nothing was measured against, on the very line
+      # a user reads to understand why the fans just changed
       if [ "$NUMBER_OF_DETECTED_CPUS" -eq 1 ]; then
-        COMMENT="CPU temperature is now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), $(fan_control_comment_clause "user's fan control profile applied")."
+        COMMENT="CPU temperature is now OK (<= $APPLIED_CPU_TEMPERATURE_BOUND°C), $(fan_control_comment_clause "user's fan control profile applied")."
       else
-        COMMENT="All CPU temperatures are now OK (<= $CPU_TEMPERATURE_THRESHOLD°C), $(fan_control_comment_clause "user's fan control profile applied")."
+        COMMENT="All CPU temperatures are now OK (<= $APPLIED_CPU_TEMPERATURE_BOUND°C), $(fan_control_comment_clause "user's fan control profile applied")."
       fi
     fi
   fi

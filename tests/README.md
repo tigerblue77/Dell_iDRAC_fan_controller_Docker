@@ -34,6 +34,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | `cases/21_fan_speed_validation.sh` | `FAN_SPEED` values that would reach `ipmitool` as an unintended duty cycle, refused before the first command |
 | `cases/22_cpu_temperature_threshold.sh` | `CPU_TEMPERATURE_THRESHOLD`, and reading "auto" off the CPUs with `lm-sensors` |
 | `cases/23_cpu_temperature_source.sh` | `CPU_TEMPERATURE_SOURCE`, and reading the CPUs from `lm-sensors` when the iDRAC reports none |
+| `cases/24_cpu_temperature_hysteresis.sh` | `CPU_TEMPERATURE_HYSTERESIS`, the band that keeps the fallback to Dell's profile from ending at the temperature it began on |
 | `cases/25_check_interval_validation.sh` | `CHECK_INTERVAL` values the monitoring loop can actually be paced by, and the reaction time bounds above them |
 | `cases/26_boolean_parameter_validation.sh` | The boolean parameters, which are dispatched by running their value as a command |
 | `cases/27_configuration_error_format.sh` | The one shape every startup refusal reports in, so the reason survives a `docker logs` scroll |
