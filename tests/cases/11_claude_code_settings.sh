@@ -350,12 +350,14 @@ function test_the_session_start_hook_sets_that_identity_before_it_can_return_ear
   fi
 }
 
-# What the two identities actually produce, run rather than grepped. The trap this exists
-# for is not a missing line but a working-looking one : configuring the trailer through
-# "trailer.<token>.key" makes git append its own separator and emit
-# "Signed-off-by: Tigerblue77 <...>:", which .github/check_sign_off.sh does not match and
-# nothing else reports, so the hook would look right and every commit would land uncertified.
-# The alias's quoting can break the same way and just as quietly (#439).
+# What the two identities actually produce, run rather than grepped. The trap this exists for
+# is not a missing line but a working-looking one, and the sign-off has a failure mode with no
+# symptom at all : a trailer key spelled "Signed-off-by: ", separator included, emits a line
+# byte-for-byte identical to a valid sign-off, which "git log" shows and %(trailers) lists,
+# while a keyed read of it comes back empty and .github/check_sign_off.sh refuses the commit.
+# Reading the hook's text cannot tell that apart from a correct one, and neither can reading
+# the commit message ; only asking git for the trailer BY KEY can, which is what this does.
+# The alias's quoting can break just as quietly (#439).
 #
 # git is the thing under test as much as the hook is, which is why this builds a real
 # repository like tests/cases/18_sign_off.sh does instead of asserting on the text

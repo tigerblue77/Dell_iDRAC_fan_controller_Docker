@@ -81,9 +81,15 @@ fi
 # human to recall it every time is a rule that will be forgotten, which is why #421 put the
 # identity here in the first place.
 #
-# /!\ The alias is the mechanism and "trailer.<token>.key" is not : configuring the trailer
-# there makes git append its own separator, producing "Signed-off-by: Tigerblue77 <...>:",
-# a malformed trailer that the gate does not match and that nothing else reports either.
+# /!\ Do not fold this into "trailer.<token>.key". That config does work -- with the key
+# spelled exactly "Signed-off-by", git supplies the ": " separator and the gate accepts the
+# result -- but it fails invisibly when the key is spelled with the separator already in it.
+# "Signed-off-by: " (trailing space) emits a line that is byte-for-byte identical to a valid
+# sign-off, that "git log" displays normally and that %(trailers) lists, while a keyed read
+# of it returns empty : git stored the key WITH the separator, so the gate looks for
+# "Signed-off-by", finds nothing, and refuses a commit whose message looks perfectly right.
+# There is no symptom to notice and nothing reports it. The alias carries the whole trailer
+# as one string instead, where a mistake shows up in the line itself.
 #
 # What this does not do is make the certification true by itself : the maintainer certifies
 # by reviewing and merging. It only stops either field from saying something else meanwhile.
