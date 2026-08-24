@@ -15,6 +15,11 @@
 #
 # Recognized environment variables:
 #   MOCK_IPMITOOL_CALL_LOG         file the invocations are appended to
+#   MOCK_IPMITOOL_DELAY_IN_SECONDS how long every call takes to answer. A real iDRAC
+#                                  is not instant, and a cycle's worth of them is the
+#                                  work the monitoring loop is built to fit inside
+#                                  CHECK_INTERVAL rather than to add to it, which is
+#                                  what tests/cases/28_monitoring_cadence.sh measures
 #   MOCK_IPMITOOL_FRU_OUTPUT       stdout of "ipmitool fru"
 #   MOCK_IPMITOOL_FRU_EXIT_CODE    exit code of "ipmitool fru" (default 0). When
 #                                  non-zero, MOCK_IPMITOOL_FRU_OUTPUT is printed
@@ -82,6 +87,12 @@
 #                                  firmware >= 3.34.34.34 rejecting 0x30 0x30, or
 #                                  a Gen 14+ server rejecting 0x30 0xce) while
 #                                  the others keep succeeding
+
+if [ -n "${MOCK_IPMITOOL_DELAY_IN_SECONDS:-}" ]; then
+  # "command -p" looks the real sleep up in the system's default PATH, this directory
+  # being first in the PATH of everything the suite runs
+  command -p sleep "$MOCK_IPMITOOL_DELAY_IN_SECONDS"
+fi
 
 if [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$MOCK_IPMITOOL_CALL_LOG"
