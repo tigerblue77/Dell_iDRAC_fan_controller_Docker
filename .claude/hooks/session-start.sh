@@ -133,7 +133,31 @@ fi
 # exists, and the work simply lands on a stranger's list
 readonly MAINTAINER_GITHUB_LOGIN="tigerblue77"
 
-echo "session-start : an issue or pull request opened here is assigned to $MAINTAINER_GITHUB_LOGIN and is never a draft -- see CLAUDE.md, \"Conventions\""
+# Said to the maintainer's own sessions, and to nobody else's. This file is repository
+# content : it is cloned with the tree, so a contributor working on their FORK runs it too,
+# and neither half of the sentence is true there. GitHub silently drops "assignees" from a
+# caller without write access -- the call succeeds, the field stays empty, and nothing says
+# so -- and a contributor's draft is exactly what the branch updater's filter was written to
+# leave alone. Telling somebody else's agent otherwise is the one way this rule can do harm
+# rather than none (#457).
+#
+# The fork is visible in one command, in either URL form : "https://github.com/<owner>/..."
+# and "git@github.com:<owner>/...". Lower-cased because a clone URL keeps whatever case was
+# typed, while a GitHub login compares case-insensitively.
+#
+# Silence is the default on every other answer, deliberately. A checkout with no origin, or
+# with the remote under another name, loses the reminder rather than handing it to a
+# stranger : CLAUDE.md still carries the rule for the sessions it is addressed to, so what
+# is lost there is the belt and not the braces, where the opposite mistake instructs
+# somebody else's agent
+ORIGIN_URL=""
+ORIGIN_URL="$(git -C "${CLAUDE_PROJECT_DIR:-.}" remote get-url origin 2> /dev/null)"
+ORIGIN_URL="${ORIGIN_URL,,}"
+
+if [[ "$ORIGIN_URL" == *"/${MAINTAINER_GITHUB_LOGIN,,}/"* ]] ||
+  [[ "$ORIGIN_URL" == *":${MAINTAINER_GITHUB_LOGIN,,}/"* ]]; then
+  echo "session-start : an issue or pull request opened here is assigned to $MAINTAINER_GITHUB_LOGIN and is never a draft -- see CLAUDE.md, \"Conventions\""
+fi
 
 # Bounded so that a mirror which accepts a connection and then goes quiet cannot hold the
 # session open : two acquire timeouts because a source line may be either scheme, one retry

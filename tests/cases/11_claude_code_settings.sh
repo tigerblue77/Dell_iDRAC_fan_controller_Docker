@@ -419,32 +419,137 @@ function test_the_session_start_hook_authors_as_the_session_and_signs_off_as_the
 #
 # A sentence is all it is, which is exactly why it is guarded : nothing downstream refuses a
 # pull request for being a draft, and nothing refuses an assignee for being the wrong
-# person, so a line quietly lost here has no symptom at all
+# person, so a line quietly lost here has no symptom at all.
+#
+# And it is said to the maintainer's sessions only. This file travels with the tree, so a
+# contributor's session on their fork runs the same hook, where neither half holds : GitHub
+# drops "assignees" from a caller without write access, silently, and their draft is what
+# the branch updater's filter exists to leave alone (#457). The cases below run the block
+# against a repository whose origin they choose, which is the only way to see what a fork
+# is told without owning one.
+
+# The announcement, taken from the constant to the "fi" that closes its guard, so a rewrite
+# moving either end fails these loudly rather than quietly running more of the hook than was
+# meant -- everything below it installs packages.
+# Usage : announcement_block
+function announcement_block() {
+  awk '/^readonly MAINTAINER_GITHUB_LOGIN=/ { IS_BLOCK = 1 }
+       IS_BLOCK
+       IS_BLOCK && /^fi$/ { exit }' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT"
+}
+
+# What the hook prints in a repository whose origin is the URL given, or nothing at all when
+# it is called with none. Run rather than read : the login reaches the message through a
+# variable and the fork check through git itself, and reading the text would prove that both
+# are mentioned while saying nothing about what either one answers.
+# Usage : announcement_for_origin "https://github.com/owner/repository" -> what it says
+function announcement_for_origin() {
+  local -r ORIGIN="$1"
+
+  local SANDBOX
+  SANDBOX=$(mktemp -d)
+
+  # Every git configuration the machine can supply is taken out of the way, here and around
+  # the block below. Not tidiness : "url.<base>.insteadOf" rewrites a remote AT READ TIME,
+  # so a machine carrying one hands the SSH case the HTTPS form -- the case then passes
+  # without ever reaching the branch written for it, and goes on passing once that branch is
+  # deleted. Measured on the first version of these cases, where deleting it changed nothing.
+  #
+  # THREE sources, and the third is the one that surprised this file. Two are files, silenced
+  # by pointing them at /dev/null. The third is the environment : GIT_CONFIG_COUNT with its
+  # GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n pairs is configuration git reads before either
+  # file, unaffected by silencing them, and it is what carries the rewrite in Claude Code on
+  # the web -- three pairs, two of them "url.https://github.com/.insteadOf". Dropping the
+  # count is what disables them : git reads exactly that many pairs and no more.
+  #
+  # A sandbox that reads the machine it runs on is not a sandbox, which is the reason
+  # cases/18 gives for building a repository of its own rather than trusting the developer's
+  local -r HERMETIC_GIT=(env -u GIT_CONFIG_COUNT GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
+
+  "${HERMETIC_GIT[@]}" git init --quiet --initial-branch=master "$SANDBOX"
+
+  if [ -n "$ORIGIN" ]; then
+    "${HERMETIC_GIT[@]}" git -C "$SANDBOX" remote add origin "$ORIGIN"
+  fi
+
+  local -r BLOCK=$(announcement_block)
+  local OUTPUT
+  OUTPUT=$("${HERMETIC_GIT[@]}" CLAUDE_PROJECT_DIR="$SANDBOX" bash -c "$BLOCK" 2>&1)
+
+  rm -rf "$SANDBOX"
+
+  printf '%s' "$OUTPUT"
+}
+
+# Usage : if ! the_announcement_can_be_run; then skip_test "..."; return 0; fi
+function the_announcement_can_be_run() {
+  [ -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ] && command -v git > /dev/null 2>&1
+}
+
 function test_the_session_start_hook_states_how_an_issue_or_pull_request_is_opened() {
-  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
-    skip_test "no hook script next to the settings"
+  if ! the_announcement_can_be_run; then
+    skip_test "no hook script next to the settings, or no git to read a remote with"
     return 0
   fi
 
-  # Run rather than grepped, for the reason the sign-off case above is run : the login
-  # reaches the message through a variable, and reading the line's text would prove that
-  # the variable is mentioned while saying nothing about which name comes out of it.
-  # Taken from the constant to the echo that uses it, so a rewrite moving either end
-  # fails here rather than silently narrowing what is checked
-  local -r ANNOUNCEMENT_BLOCK=$(awk '/^readonly MAINTAINER_GITHUB_LOGIN=/ { IS_BLOCK = 1 }
-       IS_BLOCK
-       IS_BLOCK && /^echo / { exit }' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT")
-
-  assert_not_empty "$ANNOUNCEMENT_BLOCK" \
+  assert_not_empty "$(announcement_block)" \
     "the hook should still name the login a session opens an issue and a pull request under" || return 1
 
-  local ANNOUNCEMENT
-  ANNOUNCEMENT=$(bash -c "$ANNOUNCEMENT_BLOCK")
+  local -r ANNOUNCEMENT=$(announcement_for_origin "https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker.git")
 
   assert_contains "$ANNOUNCEMENT" "assigned to tigerblue77" \
     "the session should be told who an issue and a pull request opened here belong to"
   assert_contains "$ANNOUNCEMENT" "never a draft" \
     "the session should be told that a pull request opened here is not a draft, its harness having told it otherwise"
+}
+
+function test_the_ssh_form_of_this_repositorys_origin_is_recognised_too() {
+  if ! the_announcement_can_be_run; then
+    skip_test "no hook script next to the settings, or no git to read a remote with"
+    return 0
+  fi
+
+  # "git@github.com:owner/repository" carries the owner behind a colon rather than a slash,
+  # and a clone URL keeps whatever case was typed while a GitHub login compares
+  # case-insensitively. A check that reads only the HTTPS form, or only lower case, would
+  # leave the maintainer's own session silently unaddressed -- the failure this whole rule
+  # exists to prevent, arrived at from the other side
+  local -r ANNOUNCEMENT=$(announcement_for_origin "git@github.com:Tigerblue77/Dell_iDRAC_fan_controller_Docker.git")
+
+  assert_contains "$ANNOUNCEMENT" "assigned to tigerblue77" \
+    "an SSH remote, in any case, is still this repository"
+}
+
+function test_a_session_on_a_contributors_fork_is_told_none_of_it() {
+  if ! the_announcement_can_be_run; then
+    skip_test "no hook script next to the settings, or no git to read a remote with"
+    return 0
+  fi
+
+  # The case #457 was opened over. A contributor forks, opens a session, and this hook runs
+  # for them exactly as it does here : telling them to assign the maintainer is an
+  # instruction GitHub will drop without a word, and telling them not to open a draft
+  # contradicts the one carve-out the branch updater makes for their benefit
+  local -r ANNOUNCEMENT=$(announcement_for_origin "https://github.com/a-contributor/Dell_iDRAC_fan_controller_Docker.git")
+
+  assert_empty "$ANNOUNCEMENT" \
+    "a fork is somebody else's repository, and this rule is not addressed to their session"
+}
+
+function test_a_checkout_with_no_origin_is_told_nothing_either() {
+  if ! the_announcement_can_be_run; then
+    skip_test "no hook script next to the settings, or no git to read a remote with"
+    return 0
+  fi
+
+  # Silence on every answer that is not this repository, including no answer at all. The
+  # trade is deliberate and it is not symmetrical : a checkout with no origin loses a
+  # reminder CLAUDE.md still carries, while the opposite default would hand the rule to
+  # whoever happens to have cloned the tree
+  local -r ANNOUNCEMENT=$(announcement_for_origin "")
+
+  assert_empty "$ANNOUNCEMENT" \
+    "a checkout with no remote is not evidence that this is the maintainer's own"
 }
 
 function test_the_session_start_hook_says_that_before_it_can_return_early() {
