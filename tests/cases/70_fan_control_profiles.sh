@@ -276,19 +276,20 @@ function test_a_refused_profile_is_not_reported_as_applied() {
 }
 
 function test_a_refused_fan_speed_alone_is_enough_to_deny_the_profile() {
-  # Taking control away from Dell's profile and then failing to set a speed leaves
-  # the fans on the controller's watch at an unknown duty : the profile named in
-  # the table is not the one running either way
+  # Taking control away from Dell's profile and then failing to set a speed leaves the fans at an
+  # unknown duty, so the user's profile is not the one running. Since #389 the fans are handed back
+  # rather than left there, and the table names what they are actually on
   DECIMAL_FAN_SPEED=30
   HEXADECIMAL_FAN_SPEED="0x1e"
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
   export MOCK_IPMITOOL_RAW_FAIL_STDERR="$REJECTED_BY_FIRMWARE_STDERR"
 
   apply_user_fan_control_profile 2>/dev/null
+  local -r EXIT_CODE=$?
 
-  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
-  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "30%" \
-    "the speed that was asked for is still worth showing, it is what was refused"
+  assert_equals "1" "$EXIT_CODE" "the profile the user asked for is not the one running"
+  assert_not_contains "$CURRENT_FAN_CONTROL_PROFILE" "User static"     "and the table must not name it, however qualified"
+  assert_equals "Dell default dynamic fan control profile (speed refused)" "$CURRENT_FAN_CONTROL_PROFILE"
 }
 
 function test_a_refused_dell_default_profile_is_not_reported_as_applied() {
@@ -518,31 +519,31 @@ function test_a_rejected_fan_selector_never_makes_the_controller_give_up_on_fan_
 
 function test_a_rejected_fan_selector_is_explained_once_and_names_the_state_the_fans_are_in() {
   # The defect from the user's side : the log repeated one raw ipmitool line a minute, and nothing said
-  # that manual control had been taken while the speed had not, which is why the fans sat "too low".
-  # Only a server that refuses the speed BOTH ways reaches this now -- one that merely refuses the
-  # broadcast selector is handled rather than reported, which the fallback tests below cover
+  # what had become of the fans. It now says they were handed back (#389), names the completion code the
+  # verdict was read from, and says it once rather than on every cycle
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
   export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
 
   capture_output apply_user_fan_control_profile
 
-  assert_contains "$CAPTURED_OUTPUT" "neither profile" \
-    "the fans are on neither Dell's profile nor the user's, and that is the part worth saying"
+  assert_contains "$CAPTURED_OUTPUT" "handed back" \
+    "what became of the fans is the part worth saying"
   assert_contains "$CAPTURED_OUTPUT" "0xcc" \
     "the completion code the verdict was read from must be quoted"
   assert_contains "$CAPTURED_OUTPUT" "MONITORING_ONLY_MODE" \
-    "the one setting that gets this server out of it must be named"
+    "the one setting that stops the container trying must be named"
 
   forget_recorded_ipmitool_calls
   capture_output apply_user_fan_control_profile
 
-  assert_not_contains "$CAPTURED_OUTPUT" "neither profile" \
+  assert_not_contains "$CAPTURED_OUTPUT" "handed back" \
     "explained the once, not on every cycle for the life of the container"
 }
 
 function test_a_rejected_fan_selector_still_denies_the_profile() {
   # Whatever is said about it, the table must not name a profile the fans are not running. A server that
-  # refuses the speed however it is addressed is running neither
+  # refuses the speed however it is addressed gets its fans back from the controller (#389), and that is
+  # what the table names
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
   export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
 
@@ -550,7 +551,8 @@ function test_a_rejected_fan_selector_still_denies_the_profile() {
   local -r EXIT_CODE=$?
 
   assert_equals "1" "$EXIT_CODE"
-  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
+  assert_not_contains "$CURRENT_FAN_CONTROL_PROFILE" "User static"
+  assert_equals "Dell default dynamic fan control profile (speed refused)" "$CURRENT_FAN_CONTROL_PROFILE"
 }
 
 # The identifiers an 11G iDRAC6 accepts, as swept on the R510 of issue #378 : 0x00 to 0x07 answer, 0x08
@@ -621,8 +623,9 @@ function test_the_fan_identifier_set_is_never_counted_from_the_sensor_list() {
 }
 
 function test_a_server_refusing_the_speed_every_way_is_reported_rather_than_probed_forever() {
-  # Nothing is accepted here, so the selector was never what stood in the way. The walk must stop at
-  # 0x00, the profile must not claim to be applied, and the user must be told
+  # Nothing is accepted here, so the selector was never what stood in the way. Nothing is remembered,
+  # the user is told once, and the refusal must still not be read as a server refusing fan control --
+  # which would stop the hand-back below from ever being sent
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
   export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
 
@@ -630,7 +633,6 @@ function test_a_server_refusing_the_speed_every_way_is_reported_rather_than_prob
   local -r EXIT_CODE=$?
 
   assert_equals "1" "$EXIT_CODE"
-  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
   assert_equals "0" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "nothing was accepted, so nothing is remembered"
   assert_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
     "the message must describe the server that refused both, not send the user probing again"
@@ -792,4 +794,103 @@ function test_an_interrupted_walk_never_claims_the_server_refused_the_speed_both
 
   assert_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
     "the one-off explanation must not have been spent by the interruption"
+}
+
+function test_fans_that_were_taken_are_handed_back_when_the_speed_is_refused_every_way() {
+  # The fans left Dell's profile and the speed never replaced it, so they run at a duty nothing here
+  # can read back. Handing them back is the only state this container can both reach and describe
+  # (issue #389)
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  DECIMAL_FAN_SPEED=30
+  HEXADECIMAL_FAN_SPEED="0x1e"
+
+  capture_output apply_user_fan_control_profile
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE" "the profile the user asked for is not the one running"
+  assert_equals "1" "$(count_ipmitool_calls_matching "$DELL_DEFAULT_FAN_CONTROL_COMMAND")" \
+    "the fans must be handed back to Dell's own dynamic fan control profile"
+  assert_equals "Dell default dynamic fan control profile (speed refused)" "$CURRENT_FAN_CONTROL_PROFILE" \
+    "and the table must name the profile the fans are actually running, and why it is that one"
+}
+
+function test_fans_that_were_never_taken_are_not_handed_back() {
+  # The command that takes the fans failed, so they never left Dell : there is nothing to give back,
+  # and sending the hand-back would be one more doomed command on a server that already refused this one
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x01 0x00|0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "$DELL_DEFAULT_FAN_CONTROL_COMMAND")" \
+    "nothing was taken, so nothing is handed back"
+}
+
+function test_an_interrupted_walk_does_not_hand_the_fans_back() {
+  # A walk cut short by a busy BMC is a moment, not a decision. Handing back on it would flip the fans
+  # to Dell's profile over a blip and take them again on the very next check
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  export MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN="0x30 0x30 0x02 0x03"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "$DELL_DEFAULT_FAN_CONTROL_COMMAND")" \
+    "an interrupted walk settles nothing, so nothing is handed back over it"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
+}
+
+function test_a_server_that_takes_the_speed_is_never_handed_anything_back() {
+  # The hand-back must be invisible on healthy hardware
+  DECIMAL_FAN_SPEED=30
+  HEXADECIMAL_FAN_SPEED="0x1e"
+
+  apply_user_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "$DELL_DEFAULT_FAN_CONTROL_COMMAND")"
+  assert_equals "User static fan control profile (30%)" "$CURRENT_FAN_CONTROL_PROFILE"
+}
+
+function test_a_refused_hand_back_is_not_reported_as_a_profile_that_is_running() {
+  # Both the speed and the hand-back refused : the fans are on neither profile, and the table must say
+  # so rather than name one of them
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02|0x30 0x30 0x01 0x01"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "no profile" \
+    "neither Dell's profile nor the user's is running, and the table must not claim either"
+}
+
+function test_the_row_comment_never_names_a_profile_the_fans_are_not_running() {
+  # The profile column names Dell's profile on a cycle where the fans were handed back, so the comment
+  # on that same row cannot name the user's : one row would say the fans are on both (#389)
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  apply_user_fan_control_profile 2>/dev/null
+  local -r CLAUSE=$(fan_control_comment_clause "user's fan control profile applied")
+
+  assert_not_contains "$CLAUSE" "user's fan control profile applied" \
+    "the fans are on Dell's profile, so the comment must not say the user's was applied"
+  assert_contains "$CLAUSE" "handed back" "it says what actually happened to them instead"
+}
+
+function test_a_cycle_that_applied_the_user_profile_says_so_plainly() {
+  # The clause must stay untouched on the healthy path : a hand-back on one cycle must not colour the
+  # comment of a later one that worked
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  apply_user_fan_control_profile 2>/dev/null
+
+  unset MOCK_IPMITOOL_RAW_FAIL_PATTERN
+  apply_user_fan_control_profile
+
+  assert_equals "user's fan control profile applied" \
+    "$(fan_control_comment_clause "user's fan control profile applied")" \
+    "the cycle that worked says so, whatever the previous one did"
 }
