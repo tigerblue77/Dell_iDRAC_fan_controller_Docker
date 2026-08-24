@@ -796,31 +796,93 @@ function test_every_repository_path_claude_md_names_exists() {
   shopt -u nullglob
 }
 
+# What the runner takes is decided in one place : the "case" arms of its option
+# parser, each naming the spellings it accepts, under a "*)" arm that turns
+# everything else into a usage error and exit 2. The help text is a "cat" block
+# written beside it, and reading the answer out of the help is reading a copy :
+# an arm deleted while its help line stayed would leave the drift guard below
+# green over an option the runner now refuses (issue #419). The arms are the
+# source, and the case in between holds the help to them so the copy cannot
+# drift either.
+#
+# Returned space separated and padded on both sides, so that " --list " tells
+# an accepted option from a longer one it is the beginning of
+# Usage : runner_options_the_parser_accepts -> " --filter --help ... -l "
+function runner_options_the_parser_accepts() {
+  local -r ACCEPTED=$(awk '/^[[:space:]]*case "\$1" in$/ { IN_PARSER = 1; next }
+       IN_PARSER && /^[[:space:]]*esac$/ { exit }
+       IN_PARSER' "$TESTS_DIRECTORY/run_tests.sh" |
+    sed -nE 's/^[[:space:]]*((-{1,2}[A-Za-z][A-Za-z-]*[[:space:]]*\|[[:space:]]*)*-{1,2}[A-Za-z][A-Za-z-]*)\).*/\1/p' |
+    grep -oE '\-{1,2}[A-Za-z][A-Za-z-]*' | sort -u | tr '\n' ' ')
+
+  printf ' %s' "$ACCEPTED"
+}
+
+# The option column of the help, up to the two spaces that open its description :
+# "-f, --filter PATTERN" yields "-f" and "--filter", and no word of the prose
+# behind it can be mistaken for a spelling the runner takes
+# Usage : runner_options_the_help_lists -> " --filter --help ... -l "
+function runner_options_the_help_lists() {
+  local -r LISTED=$(bash "$TESTS_DIRECTORY/run_tests.sh" --help 2>&1 |
+    sed -E 's/^[[:space:]]+//' | grep '^-' | sed -E 's/[[:space:]]{2,}.*//' |
+    grep -oE '\-{1,2}[A-Za-z][A-Za-z-]*' | sort -u | tr '\n' ' ')
+
+  printf ' %s' "$LISTED"
+}
+
+function test_the_runner_help_lists_exactly_the_options_its_parser_accepts() {
+  local -r ACCEPTED_OPTIONS=$(runner_options_the_parser_accepts)
+
+  # A parser this case reads nothing out of would make every check below vacuous,
+  # and the drift guard after it green over anything at all
+  assert_contains "$ACCEPTED_OPTIONS" " --filter " \
+    "the option parser should still be where the accepted spellings are read from" || return 1
+
+  local -r LISTED_OPTIONS=$(runner_options_the_help_lists)
+
+  assert_contains "$LISTED_OPTIONS" " --filter " \
+    "the runner should still print what it takes" || return 1
+
+  # Both directions, because the two ways they fall out of step cost different
+  # things : an option accepted and no longer listed is one nobody finds, an
+  # option listed and no longer accepted is a usage error on a documented command
+  local OPTION
+  for OPTION in $ACCEPTED_OPTIONS; do
+    assert_contains "$LISTED_OPTIONS" " $OPTION " \
+      "the runner accepts $OPTION, its help should still list it"
+  done
+
+  for OPTION in $LISTED_OPTIONS; do
+    assert_contains "$ACCEPTED_OPTIONS" " $OPTION " \
+      "the runner's help lists $OPTION, its option parser should still accept it"
+  done
+}
+
 function test_the_runner_options_claude_md_documents_are_ones_the_runner_accepts() {
   if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
     skip_test "no CLAUDE.md next to the scripts"
     return 0
   fi
 
-  # The runner prints its options from a single cat block, so its help is the
-  # list of what it takes. An option CLAUDE.md documents and the runner no longer
-  # accepts sends the session into a usage error on the first command it was told
-  # to run, at the moment it is trying to find out whether the tree is sound
+  # An option CLAUDE.md documents and the runner no longer accepts sends the
+  # session into a usage error on the first command it was told to run, at the
+  # moment it is trying to find out whether the tree is sound
   #
   # Read out of the fenced blocks alone, because that is where the document runs
   # a command : in prose it quotes them, and a quoted option next to the runner's
   # name is a reference rather than an invocation. Sentence "`./tests/run_tests.sh`
   # exactly, then `shellcheck` and `bash -n`" cost this case a false failure over
   # a -n the runner was never asked for
-  local -r RUNNER_HELP=$(bash "$TESTS_DIRECTORY/run_tests.sh" --help 2>&1)
+  local -r ACCEPTED_OPTIONS=$(runner_options_the_parser_accepts)
 
-  assert_not_empty "$RUNNER_HELP" "the runner should still print what it takes" || return 1
+  assert_contains "$ACCEPTED_OPTIONS" " --filter " \
+    "the option parser should still be where the accepted spellings are read from" || return 1
 
   local DOCUMENTED_OPTION
   while IFS= read -r DOCUMENTED_OPTION; do
     [ -n "$DOCUMENTED_OPTION" ] || continue
 
-    assert_matches "$RUNNER_HELP" "(^|[[:space:],])$DOCUMENTED_OPTION([[:space:],]|$)" \
+    assert_contains "$ACCEPTED_OPTIONS" " $DOCUMENTED_OPTION " \
       "CLAUDE.md runs the suite with $DOCUMENTED_OPTION, the runner should still accept it"
   done < <(awk '/^```/ { IS_FENCED = !IS_FENCED; next } IS_FENCED' "$REPO_ROOT/CLAUDE.md" |
     grep -oE '(\./)?tests/run_tests\.sh[^#]*' |
