@@ -54,6 +54,10 @@ image — and shellcheck on every pull request.
 
 - **Sign off every commit.** `git commit -s`. A commit without `Signed-off-by` is not
   mergeable ; see `CONTRIBUTING.md` for what it certifies in a dual-licensed project.
+  The trailer names the **maintainer**, not the session : a tool certifies nothing, and
+  `.claude/hooks/session-start.sh` sets that identity at the start of every session so it
+  never has to be remembered. Record yourself as `Co-Authored-By` and leave the sign-off
+  alone.
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
 - **A new script under the repository root, `.github/` or `.claude/` must be added
