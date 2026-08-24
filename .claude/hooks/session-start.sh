@@ -56,6 +56,37 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
+# The identity a commit made here is signed off with, set before anything below can exit
+# early : the container is cached once this has run, so a second session reaches the
+# "already installed" return and nothing after it.
+#
+# CONTRIBUTING.md requires a Signed-off-by on every commit and asks for "a real name and a
+# reachable address" ; the DCO's own text is first-person -- "I certify that". A session's
+# default identity is neither. Left alone it writes "Signed-off-by: Claude
+# <noreply@anthropic.com>", which satisfies the gate in .github/check_sign_off.sh while
+# naming nobody who could make the attestation -- the third state issue #388 set out and
+# would not leave standing, where the document asks for one thing and the log shows another.
+#
+# So the trailer carries the maintainer's identity, set here rather than typed before every
+# merge : it comes out of git config, and a rule that needs a human to remember it every
+# time is a rule that will be forgotten. The address is the GitHub noreply one already
+# throughout this history, not a personal mailbox. Authorship of the work stays recorded by
+# the Co-Authored-By trailer, which is what a tool can honestly claim.
+#
+# What this does not do is make the certification true by itself : the maintainer certifies
+# by reviewing and merging. It only stops the trailer from saying something else meanwhile.
+# See CONTRIBUTING.md, "Contributions written by an agent".
+#
+# Repository-local on purpose -- this is this project's rule, and nothing here should reach
+# into a configuration the session may share with other work
+readonly SIGN_OFF_NAME="Tigerblue77"
+readonly SIGN_OFF_EMAIL="37409593+tigerblue77@users.noreply.github.com"
+
+if ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.name "$SIGN_OFF_NAME" 2> /dev/null ||
+  ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.email "$SIGN_OFF_EMAIL" 2> /dev/null; then
+  echo "session-start : could not set the git identity, so a commit made here would be signed off by the session's default rather than by the maintainer"
+fi
+
 # Bounded so that a mirror which accepts a connection and then goes quiet cannot hold the
 # session open : two acquire timeouts because a source line may be either scheme, one retry
 # rather than apt's three, and an outer wall clock in case something below the acquire layer

@@ -298,3 +298,51 @@ function test_every_rule_that_was_argued_is_still_in_the_list() {
     fi
   done
 }
+
+function test_the_session_start_hook_names_the_identity_a_commit_is_signed_with() {
+  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
+    skip_test "no hook script next to the settings"
+    return 0
+  fi
+
+  # CONTRIBUTING.md requires a Signed-off-by naming a real person, and a session's
+  # default identity is the tool rather than one. The hook sets the maintainer's
+  # so the trailer never has to be typed before a merge -- drop these two lines and
+  # every commit made here goes back to certifying under a name that certifies
+  # nothing, silently, which is the state issue #388 was opened over
+  local -r HOOK=$(cat "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT")
+
+  assert_contains "$HOOK" "config user.name" \
+    "the hook should still set the name a commit made here is signed off with"
+  assert_contains "$HOOK" "config user.email" \
+    "the hook should still set the address that goes with it"
+}
+
+function test_the_session_start_hook_sets_that_identity_before_it_can_return_early() {
+  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
+    skip_test "no hook script next to the settings"
+    return 0
+  fi
+
+  # The trap this pins. The container state is cached once the hook has installed
+  # its packages, so from the second session onwards the run reaches the "already
+  # installed" return and stops there. An identity set after that point would be
+  # set exactly once, in the first session on a fresh container, and never again --
+  # and nothing about the sessions that followed would look wrong until a commit
+  # came out signed by the tool.
+  #
+  # Read as line numbers rather than by running the hook, because reproducing the
+  # cached-container path here would mean installing and removing packages
+  local -r IDENTITY_LINE=$(grep -n 'config user\.name' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" | head -1 | cut -d: -f1)
+  local -r EARLY_RETURN_LINE=$(grep -n 'MISSING_PACKAGES\[@\]} -eq 0' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" | head -1 | cut -d: -f1)
+
+  assert_not_empty "$IDENTITY_LINE" "the hook should still set the identity" || return 1
+  assert_not_empty "$EARLY_RETURN_LINE" "the hook should still return early once nothing is missing" || return 1
+
+  if [ "$IDENTITY_LINE" -lt "$EARLY_RETURN_LINE" ]; then
+    pass
+  else
+    fail "the identity is set at line $IDENTITY_LINE, after the early return at line $EARLY_RETURN_LINE" \
+      "every session but the first on a fresh container would stop before reaching it"
+  fi
+}
