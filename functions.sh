@@ -71,6 +71,10 @@ function apply_user_fan_control_profile() {
   # Whether the server DECIDED not to run the speed command, as opposed to being unable to answer it
   # this once. Only a decision is worth acting on : see the hand-back below
   local WAS_THE_SPEED_DEFINITIVELY_REFUSED=false
+  # Whether a check before this one already walked the whole identifier range and was refused at every
+  # one of them. Read here rather than where it is used : the walk that sets it runs further down this
+  # very function, so reading it afterwards would say "already" about something that just happened
+  local -r WAS_THE_SPEED_ALREADY_REFUSED_EVERY_WAY="${HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING:-false}"
 
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
   # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
@@ -106,7 +110,13 @@ function apply_user_fan_control_profile() {
         # and it would spend the one-off explanation that the real answer needs on the next check.
         # The walk has already said what happened, so there is nothing to add here either
         if ! "${WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED:-false}"; then
-          print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+          # Printed on the check that discovers it, not on every check after. A server already found to
+          # refuse the speed at every identifier it has answers the same thing every 60 seconds for the
+          # life of the container, and this line has nothing to add the second time. It is not replaced
+          # by silence : the profile column names the state the fans are in on every row (issue #397)
+          if ! "$WAS_THE_SPEED_ALREADY_REFUSED_EVERY_WAY"; then
+            print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+          fi
           # Explained once, rather than as a raw ipmitool line on every cycle. It settles nothing and
           # stops nothing being sent
           note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
@@ -178,6 +188,23 @@ DISCOVERED_FAN_IDENTIFIERS=()
 # the one thing that must not be read as a verdict about this server
 WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
 
+# Whether a walk has already run the whole range and been refused at every single identifier in it.
+# That is the only walk result besides a set of fans that is worth remembering : the server stated it
+# MAXIMUM_FAN_IDENTIFIER_PROBES times over, unanimously, in the completion code that means the data
+# field was invalid -- a decision rather than a moment. An interrupted walk can never set it, because
+# one answer that is not a refusal abandons the whole discovery without concluding anything.
+#
+# Without it the walk ran again on every check for the life of the container. DISCOVERED_FAN_IDENTIFIERS
+# only ever holds identifiers the server ACCEPTED, so on the one server that accepts none it stayed
+# empty and the guard meant to stop a re-walk never fired : 32 commands per cycle, all 32 known in
+# advance to fail, each opening its own lanplus session (issue #397).
+#
+# What it deliberately does NOT remember is that the server refuses the speed. The single broadcast
+# command still goes out on every check, so a server that starts accepting it is noticed on the very
+# next one -- the controller never stops trying, which is what
+# test_a_refused_fan_speed_never_stops_the_controller_from_trying() holds it to
+HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=false
+
 # Set the fan speed one fan at a time, on a server that refuses to have them all addressed at once.
 # Usage : set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"
 # Returns : 0 if every fan this server has was set, 1 if none was or the set is incomplete
@@ -220,6 +247,14 @@ function set_the_fan_speed_on_each_fan_individually() {
     return
   fi
 
+  # Asked once, in the other direction. A walk refused at every identifier in the range answered this
+  # server as completely as it can be answered, and running it again would put MAXIMUM_FAN_IDENTIFIER_PROBES
+  # doomed commands on the wire every cycle for the life of the container (issue #397). Only the walk is
+  # skipped : the caller still sends the broadcast command on every check
+  if "${HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING:-false}"; then
+    return 1
+  fi
+
   WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
   local -a ACCEPTED_IDENTIFIERS=()
   local PROBE
@@ -255,8 +290,10 @@ function set_the_fan_speed_on_each_fan_individually() {
   done
 
   # Nothing was accepted, so this server refuses the command whichever way it is addressed and the
-  # selector was never what stood in the way. Saying so is the caller's job ; there is no set to keep
+  # selector was never what stood in the way. Saying so is the caller's job ; there is no set to keep,
+  # only the fact that the whole range was walked and answered
   if [ ${#ACCEPTED_IDENTIFIERS[@]} -eq 0 ]; then
+    HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=true
     return 1
   fi
 
