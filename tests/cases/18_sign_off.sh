@@ -216,7 +216,7 @@ Signed-off-by: Random J Developer"
   teardown_sign_off_sandbox
 }
 
-function test_a_branch_that_adds_no_commit_is_not_failed() {
+function test_a_range_holding_no_commit_is_refused_rather_than_reported_clean() {
   if ! sign_off_check_can_run; then
     skip_test "no .github next to the scripts, or no git"
     return 0
@@ -224,11 +224,56 @@ function test_a_branch_that_adds_no_commit_is_not_failed() {
 
   setup_sign_off_sandbox || return 1
 
+  # A pull request that genuinely adds nothing is a state nobody needs this
+  # job's opinion on. A range that resolves to nothing because the base or the
+  # head was computed wrong is the shape of a false green -- a shallow checkout,
+  # a branch compared against itself -- and from inside the script the two are
+  # indistinguishable. So both land on the refusal : this exists to keep an
+  # unsigned commit off master, which makes the red the cheap mistake
   local OUTPUT STATUS
   OUTPUT="$(run_sign_off_check "$BASE" HEAD)" && STATUS=0 || STATUS=$?
 
-  assert_equals "0" "$STATUS" "a range holding no commit has nothing to certify"
-  assert_contains "$OUTPUT" "No commit" "and it should say so rather than report a silent green"
+  assert_equals "1" "$STATUS" "an empty range is what a miscomputed base looks like, and must not read as clean"
+  assert_contains "$OUTPUT" "No commit" "and it should say which range it found empty"
+
+  teardown_sign_off_sandbox
+}
+
+function test_a_message_that_merely_quotes_the_rule_certifies_nothing() {
+  if ! sign_off_check_can_run; then
+    skip_test "no .github next to the scripts, or no git"
+    return 0
+  fi
+
+  setup_sign_off_sandbox || return 1
+
+  # Commit messages here quote the rule while explaining it -- the commit adding
+  # this case does -- so the string travels through the history in bodies that
+  # certify nothing. What keeps this refused is the anchoring : the pattern wants
+  # the trailer at the start of its own line, carrying a name and an address,
+  # rather than the words anywhere in the body.
+  #
+  # Reading it through "git ... %(trailers:)" instead would not be stronger. Git
+  # takes the last paragraph as the trailer block and finds a key:value line
+  # inside it wherever it sits, so a quotation placed at the end satisfies the
+  # trailer parser too -- measured, not assumed
+  printf 'quoting\n' >> file.txt
+  git add file.txt
+  git commit --quiet --no-verify -m "A change that talks about the rule
+
+CONTRIBUTING.md says a commit without Signed-off-by is not mergeable, which this quotes and does not do."
+
+  local OUTPUT STATUS
+  OUTPUT="$(run_sign_off_check "$BASE" HEAD)" && STATUS=0 || STATUS=$?
+
+  assert_equals "1" "$STATUS" "a body quoting the trailer is not a trailer" || return 1
+
+  # The premise, asserted rather than assumed : a plain search really would have
+  # been satisfied here, which is what makes the refusal worth pinning
+  local MESSAGE
+  MESSAGE="$(git log -1 --format='%B' HEAD)"
+  assert_contains "$MESSAGE" "Signed-off-by" \
+    "the message does carry the string, so a bare grep would have passed this commit"
 
   teardown_sign_off_sandbox
 }

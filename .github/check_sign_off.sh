@@ -44,7 +44,7 @@
 # authored.
 #
 # Exit 0 : every commit in the range carries a well-formed sign-off.
-# Exit 1 : at least one does not, or the range could not be read.
+# Exit 1 : at least one does not, or the range could not be read, or it is empty.
 # Exit 2 : called wrong.
 #
 # Which answer sits on which code is deliberate. Under "set -e" a script that
@@ -88,12 +88,16 @@ if ! COMMITS="$(git log --no-merges --format='%H' "$BASE..$HEAD" 2> /dev/null)";
   exit 1
 fi
 
-# A pull request that adds no commit of its own has nothing to certify. It is
-# not a state worth failing over -- reopening a merged branch reaches it -- and
-# saying so is worth more than a silent green
+# An empty range is refused rather than passed. A pull request that genuinely
+# adds no commit is a state nobody needs this job's opinion on ; a range that
+# resolves to nothing because the base or the head was computed wrong is the
+# shape of a false green, and it is indistinguishable from here. Both land on
+# the refusal, for the reason the exit codes are chosen on above : this exists
+# to keep an unsigned commit off master, so the cheap mistake is the red one
 if [ -z "$COMMITS" ]; then
-  printf 'No commit between %s and %s to check\n' "$BASE" "$HEAD"
-  exit 0
+  printf '::error::No commit between %s and %s. A range that resolves to nothing is refused rather than reported clean, since a base or head computed wrong looks exactly like this\n' \
+    "$BASE" "$HEAD" >&2
+  exit 1
 fi
 
 UNSIGNED_COUNT=0
