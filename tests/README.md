@@ -45,6 +45,7 @@ without the value it takes.
 | `cases/35_message_output.sh` | How error and warning messages reach the log, read at their junction with the line that follows |
 | `cases/40_temperature_parsing.sh` | Reading the sensors out of `ipmitool sdr type temperature` |
 | `cases/45_idrac_firmware_version.sh` | Reading the iDRAC's own firmware version out of `ipmitool mc info`, and never turning it into a verdict about fan control |
+| `cases/28_monitoring_cadence.sh` | The rhythm the monitoring loop keeps : the four lines that make a cycle cost `max(CHECK_INTERVAL, its work)` rather than the interval plus the work — the timer started before the work and waited on after it |
 | `cases/46_redfish_cooling_response.sh` | The three halves of the Redfish cooling response : asking a server that lost the IPMI command whether it still exposes the setting and never inventing a capability out of an answer that never came, applying it per PCIe slot and handing Dell's default back on the way out over the same transport, and retrying only what describes a moment rather than a decision. Also what the parser makes of an answer that is ordered or spaced differently than the one it was written against |
 | `cases/50_server_model_detection.sh` | Reading the manufacturer and model out of the FRU inventory, and refusing to run on an unreachable iDRAC |
 | `cases/55_enclosure_housed_servers.sh` | Blades and modular servers, whose fans belong to their enclosure |

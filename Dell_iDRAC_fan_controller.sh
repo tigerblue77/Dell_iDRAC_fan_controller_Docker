@@ -27,6 +27,11 @@ IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=false
 # settles it on the first answer (#376)
 REDFISH_COOLING_RESPONSE_SETTLED=false
 REDFISH_ATTEMPTS=0
+# Which slots still need changing, and whether that has been worked out yet. Carried between cycles
+# because the errand may read the slots back on one and send the PATCH on the next, on an iDRAC slow
+# enough that doing both would run the cycle past its CHECK_INTERVAL (#444)
+REDFISH_ATTRIBUTES_TO_WRITE=""
+IS_THE_REDFISH_WRITE_PLANNED=false
 
 # Whether the IPMI command for the cooling response has been found gone, which is what makes this a
 # Redfish question at all. Set the moment that verdict is reached and BEFORE anything is asked over
