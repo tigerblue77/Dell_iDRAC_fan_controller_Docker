@@ -517,7 +517,7 @@ function test_a_rejected_fan_selector_never_makes_the_controller_give_up_on_fan_
 }
 
 function test_a_rejected_fan_selector_is_explained_once_and_names_the_state_the_fans_are_in() {
-  # The defect from the user\'s side : the log repeated one raw ipmitool line a minute, and nothing said
+  # The defect from the user's side : the log repeated one raw ipmitool line a minute, and nothing said
   # that manual control had been taken while the speed had not, which is why the fans sat "too low".
   # Only a server that refuses the speed BOTH ways reaches this now -- one that merely refuses the
   # broadcast selector is handled rather than reported, which the fallback tests below cover
@@ -527,7 +527,7 @@ function test_a_rejected_fan_selector_is_explained_once_and_names_the_state_the_
   capture_output apply_user_fan_control_profile
 
   assert_contains "$CAPTURED_OUTPUT" "neither profile" \
-    "the fans are on neither Dell\'s profile nor the user\'s, and that is the part worth saying"
+    "the fans are on neither Dell's profile nor the user's, and that is the part worth saying"
   assert_contains "$CAPTURED_OUTPUT" "0xcc" \
     "the completion code the verdict was read from must be quoted"
   assert_contains "$CAPTURED_OUTPUT" "MONITORING_ONLY_MODE" \
@@ -577,9 +577,11 @@ function test_a_refused_broadcast_selector_falls_back_to_addressing_each_fan() {
       "fan $IDENTIFIER must be set to the speed that was asked for"
   done
   assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x08")" \
-    "the walk stops at the first identifier the server refuses, having sent it exactly once"
-  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x09")" \
-    "and never goes past it"
+    "an identifier this server does not have is asked once, and refused"
+  assert_not_contains "${DISCOVERED_FAN_IDENTIFIERS[*]}" "0x08" \
+    "a refused identifier is not kept"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x1f")" \
+    "the walk covers the whole range rather than stopping at the first refusal, since nothing says the accepted identifiers are contiguous"
 }
 
 function test_the_discovered_fan_identifiers_are_not_probed_again() {
@@ -613,7 +615,7 @@ function test_the_fan_identifier_set_is_never_counted_from_the_sensor_list() {
   assert_equals "8" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" \
     "the set is what the server accepted, not what its sensor list suggests"
   assert_equals "0x00" "${DISCOVERED_FAN_IDENTIFIERS[0]}"
-  assert_equals "0x07" "${DISCOVERED_FAN_IDENTIFIERS[-1]}"
+  assert_equals "0x07" "${DISCOVERED_FAN_IDENTIFIERS[${#DISCOVERED_FAN_IDENTIFIERS[@]}-1]}"
   assert_contains "$CAPTURED_OUTPUT" "one at a time" \
     "the change of addressing is worth saying once"
 }
@@ -663,4 +665,102 @@ function test_the_fan_identifier_walk_is_bounded_on_a_server_that_accepts_everyt
     "the walk must stop at the cap rather than run on"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x20")" \
     "and never send the identifier just past it"
+}
+
+function test_a_momentary_answer_during_the_walk_settles_nothing_and_is_retried() {
+  # The defect this closes : the walk used to break on any non-zero ipmitool exit, and ipmitool exits
+  # non-zero both for an identifier the server does not have and for a BMC that was momentarily busy.
+  # One blip therefore froze a set missing every fan above it, for the life of the container, while the
+  # profile was reported applied -- the very failure this fallback exists to remove
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  export MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN="0x30 0x30 0x02 0x03"
+
+  capture_output apply_user_fan_control_profile 2>/dev/null
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE" "a discovery that could not be completed is not a profile applied"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied" \
+    "and the table must not name a profile some fans are not running"
+  assert_equals "0" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" \
+    "nothing is remembered from a walk that was interrupted, or the gap would be permanent"
+
+  # The blip is over. The next cycle must start the discovery again rather than live with the gap
+  unset MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "8" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" \
+    "the walk is done again, and this time it finds every fan"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x03")" \
+    "including the one that was momentarily busy"
+}
+
+function test_a_gap_in_the_accepted_identifiers_does_not_cut_the_set_short() {
+  # Nothing says the identifiers a BMC accepts form an unbroken run from 0x00. Stopping at the first
+  # refusal would leave every fan above the gap unset while the profile claimed to be applied
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|0x03|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  local -r EXIT_CODE=$?
+
+  assert_equals "0" "$EXIT_CODE"
+  assert_equals "7" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" \
+    "the seven fans either side of the gap are all found"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x07")" \
+    "the fans above the gap must still be set"
+}
+
+function test_a_server_numbering_its_fans_from_one_is_not_told_it_refused_everything() {
+  # A walk that stopped at the first refusal found nothing here, and the message then asserted that the
+  # server had refused the speed both ways -- a conclusion drawn from a single identifier, which also
+  # steered the user away from the addressing that would have worked
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|0x00|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  local -r EXIT_CODE=$?
+
+  assert_equals "0" "$EXIT_CODE" "a server whose fans start at 0x01 is still a server whose fans can be set"
+  assert_equals "7" "${#DISCOVERED_FAN_IDENTIFIERS[@]}"
+  assert_equals "0x01" "${DISCOVERED_FAN_IDENTIFIERS[0]}"
+  assert_not_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
+    "nothing was refused both ways here"
+}
+
+function test_the_broadcast_selector_is_never_sent_again_once_the_fans_are_known() {
+  # Guards the guard : without it the doomed 0xff command went back on the wire every single cycle for
+  # the life of the container, which is what issues #267 and #347 exist about
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0xff")" \
+    "not one broadcast command may be sent on the cycles that follow discovery"
+}
+
+function test_a_remembered_fan_that_stops_answering_denies_the_profile() {
+  # The reuse path has its own verdict to reach : a fan that was set yesterday and refuses today means
+  # the speed the table names is not the one every fan is running
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  assert_equals "8" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "the set is known before anything is broken"
+
+  # One of the remembered fans now refuses
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|0x05|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+
+  capture_output apply_user_fan_control_profile 2>/dev/null
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied" \
+    "one fan left behind is enough to deny the profile"
 }

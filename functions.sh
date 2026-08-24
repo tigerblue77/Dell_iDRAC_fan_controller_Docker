@@ -132,13 +132,17 @@ DISCOVERED_FAN_IDENTIFIERS=()
 # Only ever called after "raw 0x30 0x30 0x02 0xff <speed>" came back 0xcc, which is a BMC that has the
 # command and refused the selector byte. An 11th generation iDRAC6 answers exactly that (issue #378).
 #
-# The identifiers are discovered by walking upwards from 0x00 and stopping at the first one the server
-# refuses, rather than counted from "ipmitool sdr type fan". That distinction is the whole reason this
-# waited for hardware to answer : the R510 in #378 exposes ten fan RPM sensors (five modules, each with
-# an A and a B rotor) and accepts identifiers 0x00 to 0x07, refusing 0x08 onwards. Ten sensors, eight
-# identifiers -- so the sensor list is not the address space, and deriving one from the other would have
-# left two fans unset on the very server this was written for. The server itself is the only thing that
-# knows, and the probe is the question put to it.
+# The identifiers are discovered by asking the server, rather than counted from "ipmitool sdr type fan".
+# That distinction is the whole reason this waited for hardware to answer : the R510 in #378 exposes ten
+# fan RPM sensors (five modules, each with an A and a B rotor) plus a "Fan Redundancy" row that is not a
+# fan, and accepts eight identifiers, 0x00 to 0x07. Ten sensors, eight identifiers -- so the sensor list
+# is not the address space, and a count taken from it would have addressed identifiers this server
+# refuses. The server itself is the only thing that knows, and the probe is the question put to it.
+#
+# Every identifier in the range is tried, rather than stopping at the first refusal. Nothing says the
+# ones a BMC accepts form an unbroken run from 0x00 : a set with a gap, or one numbered from 0x01, would
+# otherwise be cut short, leaving the fans past the cut running at whatever speed they had while the
+# profile was reported applied.
 #
 # Each probe is the real speed command rather than a test, so discovery costs no extra round trip and
 # leaves every accepted fan already set to FAN_SPEED
@@ -165,11 +169,32 @@ function set_the_fan_speed_on_each_fan_individually() {
 
   local -a ACCEPTED_IDENTIFIERS=()
   local PROBE
+  local IDENTIFIER
+  local PROBE_STDERR
   for ((PROBE = 0; PROBE < MAXIMUM_FAN_IDENTIFIER_PROBES; PROBE++)); do
-    local IDENTIFIER
     IDENTIFIER=$(convert_decimal_value_to_hexadecimal "$PROBE")
-    if ! ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 "$IDENTIFIER" "$HEXADECIMAL_SPEED" > /dev/null 2>&1; then
-      break
+    PROBE_STDERR=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 "$IDENTIFIER" "$HEXADECIMAL_SPEED" 2>&1 >/dev/null)
+    # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
+    if [ $? -ne 0 ]; then
+      # Only "invalid data field" says this identifier is not one of the server's fans. Every other
+      # answer describes a moment rather than a decision -- a busy BMC, a dropped session, an iDRAC
+      # being reset -- and ipmitool exits non-zero for all of them alike, which is why the completion
+      # code has to be read rather than the exit status.
+      #
+      # Concluding from one would end the discovery early and freeze a set missing the fans past it,
+      # for the life of the container, while the profile was reported applied : precisely the failure
+      # this fallback exists to remove. So nothing is remembered and nothing is concluded -- the whole
+      # discovery is abandoned, and the next cycle starts it again against a server that may by then
+      # be answering normally
+      if ! does_the_server_reject_this_data_field "$PROBE_STDERR"; then
+        print_error "Gave up working out which fans this server accepts : identifier $IDENTIFIER answered something that is not a refusal, so the set would have been incomplete. It will be worked out again on the next check. ipmitool said: $PROBE_STDERR"
+        return 1
+      fi
+      # Not a fan of this server. The walk carries on rather than stopping here : nothing says the
+      # identifiers a BMC accepts form an unbroken run from 0x00, and stopping at the first gap would
+      # leave every fan above it unset while the profile claimed to be applied. The reporter's R510
+      # happens to accept 0x00 to 0x07, but one machine is not the rule
+      continue
     fi
     ACCEPTED_IDENTIFIERS+=("$IDENTIFIER")
   done
@@ -182,13 +207,10 @@ function set_the_fan_speed_on_each_fan_individually() {
 
   DISCOVERED_FAN_IDENTIFIERS=("${ACCEPTED_IDENTIFIERS[@]}")
 
-  # The last index is spelled out rather than reached with a negative one : "${ARRAY[-1]}" needs bash
-  # 4.3, nothing else in this repository relies on it, and BASE_IMAGE is overridable
-  local -r LAST_IDENTIFIER_INDEX=$((${#DISCOVERED_FAN_IDENTIFIERS[@]} - 1))
   local TIMESTAMP
   set_log_timestamp TIMESTAMP
-  printf "%19s  This server refuses to have every fan addressed at once, so its fans are set one at a time. It accepts %d of them, %s to %s, and they are now running at %d%%.\n" \
-    "$TIMESTAMP" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "${DISCOVERED_FAN_IDENTIFIERS[0]}" "${DISCOVERED_FAN_IDENTIFIERS[LAST_IDENTIFIER_INDEX]}" "$DECIMAL_FAN_SPEED"
+  printf "%19s  This server refuses to have every fan addressed at once, so its fans are set one at a time. It accepts %d of them (%s), and they are now running at %d%%.\n" \
+    "$TIMESTAMP" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "${DISCOVERED_FAN_IDENTIFIERS[*]}" "$DECIMAL_FAN_SPEED"
   return 0
 }
 

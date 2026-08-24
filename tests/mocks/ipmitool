@@ -64,6 +64,15 @@
 #                                  following ones succeed, reproducing a transient
 #                                  failure (an iDRAC being reset, a network glitch)
 #                                  rather than a command the BMC does not implement
+#   MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN  a second, independent extended regex. The
+#                                  commands it matches fail with
+#                                  MOCK_IPMITOOL_RAW_TRANSIENT_STDERR (default a
+#                                  "rsp=0xc0: Node busy") for their first
+#                                  MOCK_IPMITOOL_RAW_TRANSIENT_FAILURES matches
+#                                  (default 1), then succeed. This is a BMC that is
+#                                  momentarily busy in the middle of a sequence, which
+#                                  is a different event from the command it does not
+#                                  implement, and the two have to be told apart
 #   MOCK_IPMITOOL_RAW_FAIL_PATTERN extended regex matched against the raw
 #                                  command's arguments. When it matches, that
 #                                  single command fails with
@@ -184,6 +193,22 @@ case "$SUB_COMMAND" in
 
   raw)
     RAW_ARGUMENTS="${ARGUMENTS[*]:1}"
+
+    # A second, independent failure, so that one command can answer something different from the rest
+    # while the main pattern keeps refusing its own. It is what a BMC that is momentarily busy answers
+    # in the middle of a sequence the rest of which succeeds, and it fails only on its first match
+    if [ -n "${MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN:-}" ] &&
+      [[ "$RAW_ARGUMENTS" =~ $MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN ]]; then
+      TRANSIENT_MATCHES=1
+      if [ -n "${MOCK_IPMITOOL_CALL_LOG:-}" ]; then
+        TRANSIENT_MATCHES=$(grep -cE -- "$MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN" "$MOCK_IPMITOOL_CALL_LOG")
+      fi
+      if [ "$TRANSIENT_MATCHES" -le "${MOCK_IPMITOOL_RAW_TRANSIENT_FAILURES:-1}" ]; then
+        printf '%s\n' "${MOCK_IPMITOOL_RAW_TRANSIENT_STDERR:-Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0x30 rsp=0xc0): Node busy}" >&2
+        exit 1
+      fi
+    fi
+
     if [ -n "${MOCK_IPMITOOL_RAW_FAIL_PATTERN:-}" ] &&
       [[ "$RAW_ARGUMENTS" =~ $MOCK_IPMITOOL_RAW_FAIL_PATTERN ]]; then
       SHOULD_FAIL=true
