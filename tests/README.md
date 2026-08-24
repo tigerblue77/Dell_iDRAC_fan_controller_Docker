@@ -8,7 +8,7 @@ enough.
 ```bash
 ./tests/run_tests.sh                 # run everything
 ./tests/run_tests.sh --list          # list the test cases without running them
-./tests/run_tests.sh -f temperature  # only run the test cases whose name matches
+./tests/run_tests.sh -f temperature  # only run the cases whose name, or whose case file, matches
 ./tests/run_tests.sh --tap           # emit TAP version 13 output for a CI parser
 ./tests/run_tests.sh --junit FILE    # write a JUnit XML report
 ./tests/run_tests.sh --summary FILE  # append a Markdown report
@@ -21,12 +21,12 @@ It exits `0` when every test case passed, `1` otherwise.
 
 | File | What it checks |
 | --- | --- |
-| `cases/10_shell_scripts.sh` | Syntax of every script and the licence header each one carries, files shipped in the Docker image, drift between the code and what documents it — the lint list, `CLAUDE.md`'s layout table, paths, figures, dependency graph and worked example, and the packages its Environment section promises — healthcheck |
+| `cases/10_shell_scripts.sh` | Syntax of every script, the licence header each one and the `Dockerfile` carry, files shipped in the Docker image, drift between the code and what documents it — the lint list, `CLAUDE.md`'s layout table, paths, figures, dependency graph and worked example, and the packages its Environment section promises — healthcheck |
 | `cases/11_claude_code_settings.sh` | The settings a Claude Code session starts from, which no server ever reads : that the file still parses, that the rules letting any session run a command without asking are the ones argued for — in the shape they were argued in, still runnable, only those, and all of them still there — and that the `SessionStart` hook is still wired to a script that exists, under a budget outlasting what that script allows itself. Skipped where `jq` is missing, the list being read out of JSON |
 | `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh. Also that every workflow carries the licence header, which is the whole directory rather than those two |
 | `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, built by a workflow no pull request fires either : that it stays a pointer at the documentation rather than a copy of it, and that no change to `README.md` can alter it |
 | `cases/14_latest_tag_reconciliation.sh` | Which version `latest` ends up on after a release, against a stubbed registry. Skipped where `jq` is missing, the one thing the script needs that the suite does not |
-| `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified |
+| `cases/15_test_runner.sh` | The runner itself : the ways it used to stay green while nothing had been verified, and what `--filter` is allowed to match |
 | `cases/16_release_note_publication.sh` | Whether a version tag still needs its GitHub release note written, against a stubbed GitHub : the decision that keeps a re-fired release from appending a second copy of its changelog to the one it already carries |
 | `cases/17_reports.sh` | The JUnit XML and Markdown reports, whose consumer is a parser rather than a reader |
 | `cases/18_sign_off.sh` | The gate that keeps an unsigned commit off `master`, on the pull request it arrives on : that a branch is refused for one missing trailer and every offender named in a single run, that the merge a contributor made to resolve their conflict is not asked to certify anything, and that a range it cannot read fails closed rather than green. Against a repository built for each case rather than a stubbed `git`, so skipped where `git` is missing |

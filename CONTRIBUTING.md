@@ -74,5 +74,5 @@ Do not add your own copyright line: the collective notice above already covers e
 
 - Run the test suite: `./tests/run_tests.sh`. It needs no Dell hardware, no iDRAC and no network.
 - Add a test case for what you changed. The suite covers every PowerEdge generation from the 9th to the 17th, and a behaviour with no test is a behaviour the next refactor is free to break.
-- Keep [`shellcheck`](https://www.shellcheck.net/) quiet — CI runs it on every push.
+- Keep [`shellcheck`](https://www.shellcheck.net/) quiet — CI runs it on every pull request.
 - Say which server model and iDRAC generation you tested on, if you tested on real hardware. That context is worth more than it looks in a project that talks to twenty years of firmware.

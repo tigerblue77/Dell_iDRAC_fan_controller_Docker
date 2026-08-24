@@ -224,11 +224,11 @@ services:
 <!-- PARAMETERS -->
 ## Parameters
 
-All parameters are optional as they have default values (including default iDRAC username and password).
+Every parameter has a default value except `IDRAC_USERNAME` and `IDRAC_PASSWORD`, which are credentials : the image ships none, and both have to be set whenever `IDRAC_HOST` is not `local`.
 
 - `IDRAC_HOST` parameter can be set to "local" or to your distant iDRAC's IP address. **Default** value is "local".
-- `IDRAC_USERNAME` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "root".
-- `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. **Default** value is "calvin".
+- `IDRAC_USERNAME` parameter is only necessary if you're adressing a distant iDRAC. It has **no default value** : the image ships none.
+- `IDRAC_PASSWORD` parameter is only necessary if you're adressing a distant iDRAC. It has **no default value** : the image ships none.
 - `FAN_SPEED` parameter is the duty cycle the fans are held at while your fan control profile is applied. It can be set as a decimal percentage (from 0 to 100%) or as the same value in hexadecimal (from 0x00 to 0x64). **Default** value is 5(%).
   - Anything outside that range stops the container at startup rather than being clamped or passed through to the fans, `200` having once reached `ipmitool` as `0xc8`.
   - :warning: **The `0x` prefix is the only thing that tells the two notations apart**, and both are accepted, so a value that lost its prefix is not refused — it just applies a different duty cycle than the one you meant. `0x64` is 100% while `64` is 64%; `0x30` is 48% while `30` is 30%. The startup log always states the one that was resolved:
@@ -283,7 +283,7 @@ All parameters are optional as they have default values (including default iDRAC
   - The minimum is **1**, `0` being refused: nothing can be concluded from fewer than one observed failure. Use an empty value, not `0`, to disable the escalation.
   - `1` is accepted but **warned about** at startup, since it means exiting on the very first unreachable reading — on any transient glitch. It is legitimate on a rock-solid LAN, which is why it is a warning rather than a refusal; the same warning fires when `MAXIMUM_IPMI_UNREACHABLE_DURATION` resolves to a single check.
 - `DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE` parameter is a boolean that allows to disable third-party PCIe card Dell default cooling response. **Default** value is false.
-  - **From the 14th generation this parameter has no effect, and the container now says so rather than reporting the server unable.** Dell moved the setting at that generation, from one IPMI command covering the whole server to one attribute per PCIe slot reachable only over Redfish, so the command this container sends is answered *"invalid command"*. When that happens and the iDRAC is reachable over the network, the container asks it whether the setting is nonetheless there, and the temperatures table says `Not over IPMI (this server has it over Redfish)` instead of `Not supported by this server` — which was true of the command and false of the machine. Setting it yourself takes a moment : *Configuration > System Settings > Hardware Settings*, under **Cooling Configuration** (named **Fans Configuration** on older iDRAC 9 firmware), then in the *PCIe Airflow Settings* table set **LFM Mode** to `Disabled` on the slot holding the card. The question of whether the container should drive that itself is [#360](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/360).
+  - **From the 14th generation the IPMI command this parameter used is gone.** Dell moved the setting at that generation, from one command covering the whole server to one attribute per PCIe slot reachable only over Redfish, so the command this container sends is answered *"invalid command"*. Setting it yourself by hand takes a moment, should you ever want to : *Configuration > System Settings > Hardware Settings*, under **Cooling Configuration** (named **Fans Configuration** on older iDRAC 9 firmware), then in the *PCIe Airflow Settings* table set **LFM Mode** to `Disabled` on the slot holding the card.
   - **On those servers the container now applies it over Redfish**, so the parameter works again. Only the slots actually holding a third-party card are written to — a slot with a Dell card or no card at all is left alone, its airflow being something Dell has real data for — and every slot goes in a single request, because a Redfish write creates a configuration job on the iDRAC. It is written once rather than on every cycle for the same reason, and a slot already in the wanted state is not written at all.
   - `KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT` keeps its meaning on this transport : `false` puts **Dell's default** back on the way out, not whatever value was there before the container started, which is exactly what it has always done over IPMI.
   - Reaching the setting at all is retried up to three times, one `CHECK_INTERVAL` apart, when what stopped it describes a moment the iDRAC was having — busy, its configuration job queue full, or a request that never completed. An answer about the request, the resource or the credentials is concluded on the first one instead, none of those changing while the container runs. Either way the log says which, and how long it went on. This is not tunable, and does not need to be.
@@ -483,6 +483,7 @@ export IDRAC_USERNAME=<iDRAC username>
 export IDRAC_PASSWORD=<iDRAC password>
 export FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
 export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
+export CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
 export CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
 export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
 export MAXIMUM_CONSECUTIVE_IPMI_FAILURES=<the same threshold in cycles instead, 1 or more, or empty>
@@ -501,7 +502,7 @@ The repository ships an automated test suite that runs the controller against a 
 ```bash
 ./tests/run_tests.sh                 # run everything
 ./tests/run_tests.sh --list          # list the test cases without running them
-./tests/run_tests.sh -f temperature  # only run the test cases whose name matches
+./tests/run_tests.sh -f temperature  # only run the cases whose name, or whose case file, matches
 ./tests/run_tests.sh --tap           # emit TAP output for a CI parser
 ```
 
@@ -509,7 +510,7 @@ It covers every PowerEdge generation from the 9th (2006) to the 17th (2024) — 
 
 Blades and modular servers are covered too : the M1000e and VRTX blades, the FX2 and MX7000 sleds and the nodes of a C-series chassis. They carry no fan of their own — the enclosure does, driven by its CMC — so this container cannot cool them, and the suite pins what it does instead : identify the server, report that the fan control commands were rejected, and keep monitoring.
 
-The suite also runs on every push and pull request through the [`Tests`](.github/workflows/tests.yml) workflow, both directly and inside the built Docker image. Each run publishes a report on the pull request : the test count compared against the base commit, and, behind the check run, every test case that ran with what a failing one expected and what it obtained. See [`tests/README.md`](./tests/README.md) for the layout and for how to add a test case.
+The suite also runs on every pull request, and on every push to `master`, through the [`Tests`](.github/workflows/tests.yml) workflow, both directly and inside the built Docker image. Each run publishes a report on the pull request : the test count compared against the base commit, and, behind the check run, every test case that ran with what a failing one expected and what it obtained. See [`tests/README.md`](./tests/README.md) for the layout and for how to add a test case.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 

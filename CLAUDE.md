@@ -37,7 +37,7 @@ dependency graph.
 
 ```bash
 ./tests/run_tests.sh                 # the whole suite : no hardware, no iDRAC, no network
-./tests/run_tests.sh -f temperature  # only the cases whose name matches
+./tests/run_tests.sh -f temperature  # only the cases whose name, or whose case file, matches
 ./tests/run_tests.sh --list          # list them without running
 
 shellcheck -x Dell_iDRAC_fan_controller.sh functions.sh constants.sh \
