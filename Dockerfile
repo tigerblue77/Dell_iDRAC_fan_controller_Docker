@@ -40,16 +40,23 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 # The three commands are one RUN because the layer, not the filesystem, is what gets pulled : deleting
 # /var/lib/apt/lists from a later layer would hide the package lists without making this one any
 # smaller, and they would still be transferred. Merged, they are never committed in the first place.
-# apt-get install keeps its recommends on purpose - dropping them is a change to what is installed,
-# not to what is shipped, and is argued in its own right rather than smuggled in beside a size fix
 # lm-sensors is used to read the CPUs' own "high" temperature, which is the default CPU_TEMPERATURE_THRESHOLD
 # perl and libio-socket-ssl-perl are the HTTPS client : Redfish is HTTPS and the base image ships no client
-# at all - no curl, no wget, no openssl, no python3. perl and its core HTTP::Tiny already arrive here as a
-# recommends of lm-sensors, so only the TLS layer is really added, about 2 MB against curl's 13.5 MB and its
-# 24 packages of dependency surface. perl is named explicitly all the same rather than relied upon as
-# somebody else's recommends, so that a later --no-install-recommends cannot silently take it away
+# at all - no curl, no wget, no openssl, no python3, and the perl the base image does carry is perl-base,
+# which has no HTTP::Tiny in it. About 2 MB of TLS layer, against curl's 13.5 MB and its 24 packages
+# --no-install-recommends makes those four names the whole of what is asked for. Without it apt adds 13
+# packages and 3.3 MB that nothing in the image calls : ipmitool recommends openipmi, a daemon whose job is
+# loading the IPMI kernel modules on a host - which a container can neither do nor need, being handed a
+# /dev/ipmi0 the host already opened - and openipmi carries libsnmp, kmod, libpci and libpopt in behind it ;
+# libio-socket-ssl-perl recommends liburi-perl, which HTTP::Tiny does not use. Measured on ubuntu:latest :
+# 117 packages and 61.6 MB with the recommends, 104 and 58.3 MB without, and the two images answer
+# "ipmitool -h" with the same interface list, fail an absent /dev/ipmi0 with the same message, print the
+# same "sensors -u", and complete the same HTTPS round trip with Basic auth against a local TLS server.
+# That openipmi chain is where full perl came from before #374 named it - libsnmp depends on libperl - so
+# it is the one thing worth checking twice here : perl stays because libio-socket-ssl-perl depends on it
+# outright and because it is named, not because somebody's recommends still supplies it
 RUN apt-get update \
- && apt-get install ipmitool lm-sensors perl libio-socket-ssl-perl -y \
+ && apt-get install --no-install-recommends ipmitool lm-sensors perl libio-socket-ssl-perl -y \
  && rm -rf /var/lib/apt/lists/*
 
 # AGPL section 4 asks that the notices travel with every copy conveyed, and an image is a copy. They
