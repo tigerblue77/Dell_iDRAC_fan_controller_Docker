@@ -59,11 +59,13 @@ Forgot it on the last commit ? `git commit --amend -s`. On several ? `git rebase
 
 Some of the code here is written by a coding agent working on the maintainer's instruction. The DCO does not bend for that, and this project cannot afford it to : the sign-off is what records that a contribution could be offered under **both** licences, which is what keeps the commercial arm grantable.
 
-An agent is a tool. A tool cannot certify anything, and a `Signed-off-by` naming one would be a trailer that satisfies a checker while naming nobody who could make the statement above. So for those commits :
+An agent is a tool. A tool cannot certify anything, and a `Signed-off-by` naming one would be a trailer that satisfies a checker while naming nobody who could make the statement above. But it is also what actually wrote the code, and a commit has room to say both. So for those commits :
 
-- **the `Signed-off-by` is the maintainer's**, set from the repository's git configuration rather than typed before each merge — `.claude/hooks/session-start.sh` does it at the start of every session, because a rule that has to be remembered every time is a rule that gets forgotten ;
-- **the agent is recorded as `Co-Authored-By`**, which is what a tool can honestly claim ;
+- **the author is the agent.** `git log`, `git blame`, `git shortlog` and GitHub's contributor graph all read that field, so it is the one place where recording who wrote the work counts. Naming the maintainer there would say they typed what a tool wrote ;
+- **the `Signed-off-by` is the maintainer's**, because the certification is theirs to make. It cannot come from `git commit -s`, which derives the trailer from the author — the field that has to stay the agent's — so it is passed explicitly through the `git signoff` alias that `.claude/hooks/session-start.sh` sets at the start of every session, a rule that has to be remembered every time being a rule that gets forgotten ;
 - **the certification is the maintainer's act of reviewing and merging.** The trailer states it ; the review is what makes it true. A pull request merged unread carries a sign-off that means nothing, and no workflow can tell the difference — [`.github/check_sign_off.sh`](./.github/check_sign_off.sh) reads the trailer's shape, never who stands behind it.
+
+No `Co-Authored-By` accompanies them : the author field already names the agent, and a secondary attribution repeating it would only be another place to fall out of step.
 
 If you are a contributor rather than the maintainer, none of this concerns you : sign your own work, with your own name.
 

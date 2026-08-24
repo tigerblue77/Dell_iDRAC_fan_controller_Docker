@@ -56,35 +56,56 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
-# The identity a commit made here is signed off with, set before anything below can exit
+# The two identities a commit made here carries, set before anything below can exit
 # early : the container is cached once this has run, so a second session reaches the
 # "already installed" return and nothing after it.
 #
-# CONTRIBUTING.md requires a Signed-off-by on every commit and asks for "a real name and a
-# reachable address" ; the DCO's own text is first-person -- "I certify that". A session's
-# default identity is neither. Left alone it writes "Signed-off-by: Claude
-# <noreply@anthropic.com>", which satisfies the gate in .github/check_sign_off.sh while
-# naming nobody who could make the attestation -- the third state issue #388 set out and
-# would not leave standing, where the document asks for one thing and the log shows another.
+# A commit has three identity fields, and they answer two different questions. WHO WROTE IT
+# is the author, and that is the tool : git log, git blame, git shortlog and GitHub's
+# contributor graph all read that field, so recording the tool anywhere else is not
+# recording it. WHO CERTIFIES IT is the Signed-off-by trailer -- CONTRIBUTING.md asks for
+# "a real name and a reachable address" and the DCO's own text is first-person, "I certify
+# that", which a tool cannot say -- so that one is the maintainer's.
 #
-# So the trailer carries the maintainer's identity, set here rather than typed before every
-# merge : it comes out of git config, and a rule that needs a human to remember it every
-# time is a rule that will be forgotten. The address is the GitHub noreply one already
-# throughout this history, not a personal mailbox. Authorship of the work stays recorded by
-# the Co-Authored-By trailer, which is what a tool can honestly claim.
+# Collapsing the two is what issue #388 refused to leave standing, and it can be collapsed
+# in either direction. Left alone, a session writes "Signed-off-by: Claude
+# <noreply@anthropic.com>", a trailer that satisfies the gate in .github/check_sign_off.sh
+# while naming nobody who could make the attestation. Setting user.* to the maintainer
+# repairs that trailer but moves the confusion into the author field, where the log then
+# says the maintainer typed what a tool wrote (#439). Setting each field to the identity it
+# is actually asking about is what says both things at once.
+#
+# The trailer therefore cannot come from "commit -s", which derives it from user.* -- the
+# very fields that have to stay the tool's. It is passed explicitly instead, wrapped in an
+# alias so that it is a command rather than something to remember : a rule that needs a
+# human to recall it every time is a rule that will be forgotten, which is why #421 put the
+# identity here in the first place.
+#
+# /!\ Do not fold this into "trailer.<token>.key". That config does work -- with the key
+# spelled exactly "Signed-off-by", git supplies the ": " separator and the gate accepts the
+# result -- but it fails invisibly when the key is spelled with the separator already in it.
+# "Signed-off-by: " (trailing space) emits a line that is byte-for-byte identical to a valid
+# sign-off, that "git log" displays normally and that %(trailers) lists, while a keyed read
+# of it returns empty : git stored the key WITH the separator, so the gate looks for
+# "Signed-off-by", finds nothing, and refuses a commit whose message looks perfectly right.
+# There is no symptom to notice and nothing reports it. The alias carries the whole trailer
+# as one string instead, where a mistake shows up in the line itself.
 #
 # What this does not do is make the certification true by itself : the maintainer certifies
-# by reviewing and merging. It only stops the trailer from saying something else meanwhile.
+# by reviewing and merging. It only stops either field from saying something else meanwhile.
 # See CONTRIBUTING.md, "Contributions written by an agent".
 #
 # Repository-local on purpose -- this is this project's rule, and nothing here should reach
 # into a configuration the session may share with other work
 readonly SIGN_OFF_NAME="Tigerblue77"
 readonly SIGN_OFF_EMAIL="37409593+tigerblue77@users.noreply.github.com"
+readonly AGENT_NAME="Claude"
+readonly AGENT_EMAIL="noreply@anthropic.com"
 
-if ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.name "$SIGN_OFF_NAME" 2> /dev/null ||
-  ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.email "$SIGN_OFF_EMAIL" 2> /dev/null; then
-  echo "session-start : could not set the git identity, so a commit made here would be signed off by the session's default rather than by the maintainer"
+if ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.name "$AGENT_NAME" 2> /dev/null ||
+  ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.email "$AGENT_EMAIL" 2> /dev/null ||
+  ! git -C "${CLAUDE_PROJECT_DIR:-.}" config alias.signoff "commit --trailer \"Signed-off-by: $SIGN_OFF_NAME <$SIGN_OFF_EMAIL>\"" 2> /dev/null; then
+  echo "session-start : could not set the git identity and its sign-off alias, so a commit made here would be authored and signed off by the session's default rather than by the tool and the maintainer"
 fi
 
 # Bounded so that a mirror which accepts a connection and then goes quiet cannot hold the
