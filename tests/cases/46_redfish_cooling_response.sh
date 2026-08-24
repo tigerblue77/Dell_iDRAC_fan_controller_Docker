@@ -28,6 +28,18 @@ function make_redfish_attributes_body() {
   local SUPPORT_FLAG="Supported"
   local THIRD_PARTY_SLOTS=""
   local LFM_MODE="Automatic"
+  # "<slot>=<mode> <slot>=<mode>", overriding --mode for those slots. A server where one third-party
+  # card is already where it should be and another is not is the only shape in which the skip and the
+  # comma-joining of the write meet, and it was describable by nothing until #417
+  local SLOT_MODES=""
+  # An iDRAC minifies its answers, and this builder does too by default -- but nothing in HTTP or JSON
+  # promises it, so --pretty produces the same document with the whitespace a formatter would add
+  local PRETTY=false
+  # Orders the whole document the way an iDRAC really returns it -- alphabetically, which puts
+  # PCIeSlotLFM before ThermalSettings and, within a slot, 3rdPartyCard before LFMMode. That makes
+  # "PCIeSlotLFM.1.3rdPartyCard" the first attribute of the object, which is the entry the slot list
+  # used to drop
+  local SLOTS_FIRST=false
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -35,25 +47,55 @@ function make_redfish_attributes_body() {
       --support) SUPPORT_FLAG="$2"; shift 2 ;;
       --third-party) THIRD_PARTY_SLOTS=" $2 "; shift 2 ;;
       --mode) LFM_MODE="$2"; shift 2 ;;
+      --slot-modes) SLOT_MODES=" $2 "; shift 2 ;;
+      --pretty) PRETTY=true; shift ;;
+      --slots-first) SLOTS_FIRST=true; shift ;;
       *) shift ;;
     esac
   done
 
-  local BODY='{"@odata.id":"/redfish/v1","Attributes":{"ThermalSettings.1.ThermalProfile":"Default Thermal Profile Settings"'
-  BODY+=',"ThermalSettings.1.PCIeSlotLFMSupport":"'"$SUPPORT_FLAG"'"'
+  local THERMAL_ATTRIBUTES='"ThermalSettings.1.ThermalProfile":"Default Thermal Profile Settings"'
+  THERMAL_ATTRIBUTES+=',"ThermalSettings.1.PCIeSlotLFMSupport":"'"$SUPPORT_FLAG"'"'
 
+  local SLOT_ATTRIBUTES=""
   local SLOT
   local CARD
+  local MODE
   for ((SLOT = 1; SLOT <= SLOT_COUNT; SLOT++)); do
     if [[ "$THIRD_PARTY_SLOTS" == *" $SLOT "* ]]; then
       CARD="Yes"
     else
       CARD="No"
     fi
-    BODY+=',"PCIeSlotLFM.'"$SLOT"'.LFMMode":"'"$LFM_MODE"'","PCIeSlotLFM.'"$SLOT"'.3rdPartyCard":"'"$CARD"'"'
+
+    MODE="$LFM_MODE"
+    if [[ "$SLOT_MODES" == *" $SLOT="* ]]; then
+      MODE="${SLOT_MODES##* $SLOT=}"
+      MODE="${MODE%% *}"
+    fi
+
+    [ -n "$SLOT_ATTRIBUTES" ] && SLOT_ATTRIBUTES+=","
+    if "$SLOTS_FIRST"; then
+      SLOT_ATTRIBUTES+='"PCIeSlotLFM.'"$SLOT"'.3rdPartyCard":"'"$CARD"'","PCIeSlotLFM.'"$SLOT"'.LFMMode":"'"$MODE"'"'
+    else
+      SLOT_ATTRIBUTES+='"PCIeSlotLFM.'"$SLOT"'.LFMMode":"'"$MODE"'","PCIeSlotLFM.'"$SLOT"'.3rdPartyCard":"'"$CARD"'"'
+    fi
   done
 
-  BODY+='}}'
+  local BODY
+  if "$SLOTS_FIRST"; then
+    # No @odata.id either : it is a real key of a real answer, but putting it first would leave the slot
+    # attributes in the middle of the document and hide the very position being tested
+    BODY='{"Attributes":{'"$SLOT_ATTRIBUTES"','"$THERMAL_ATTRIBUTES"'}}'
+  else
+    BODY='{"@odata.id":"/redfish/v1","Attributes":{'"$THERMAL_ATTRIBUTES"','"$SLOT_ATTRIBUTES"'}}'
+  fi
+
+  if "$PRETTY"; then
+    BODY="${BODY//\":\"/\" : \"}"
+    BODY="${BODY//,\"/, \"}"
+  fi
+
   printf '%s' "$BODY"
 }
 
@@ -395,9 +437,13 @@ function test_a_busy_idrac_is_retried_and_settles_after_the_bounded_number_of_at
     "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
   # Three attempts a five second interval apart span ten seconds, not fifteen : the reader is told the
   # span between the first and the last, not a count multiplied by an interval
-  assert_matches "$LAST_OUTPUT" "refused to change it 3 times, i.e. over about 10 seconds" \
+  assert_matches "$LAST_OUTPUT" "could not be made in 3 attempts, spread over about 10 seconds" \
     "the message must say how long it went on, CHECK_INTERVAL ranging from seconds to minutes"
-  assert_matches "$LAST_OUTPUT" "HTTP 503"
+  # It counts the errand rather than asserting three refusals : the budget is shared with the probe, so
+  # some of those attempts may never have reached the iDRAC at all, and saying it refused three times
+  # would be a statement about the server made out of attempts it never saw (#413)
+  assert_matches "$LAST_OUTPUT" "HTTP 503 while writing it" \
+    "the message must name which half of the errand the last answer came from"
 }
 
 function test_an_answer_about_the_credentials_is_not_retried_at_all() {
@@ -434,7 +480,7 @@ function test_the_controller_retries_a_busy_idrac_across_cycles_and_then_stops()
 
   assert_equals "3" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
     "three attempts, one per cycle, and then no more for the life of the container"
-  assert_matches "$OUTPUT" "refused to change it 3 times"
+  assert_matches "$OUTPUT" "could not be made in 3 attempts"
   assert_matches "$OUTPUT" "fan control profile.*Redfish refused this change \(see the log\)" \
     "the table must stop implying a later cycle could clear it"
 }
@@ -513,4 +559,268 @@ function test_the_controller_keeps_asking_a_briefly_unreachable_idrac_instead_of
   assert_matches "$OUTPUT" "fan control profile.*Cannot reach Redfish yet, retrying" \
     "the early cycles must say the transport is the problem"
   assert_matches "$OUTPUT" "3 attempts, i.e. over about"
+}
+
+# The cases below come from an audit of everything #374, #375 and #377 shipped, against what the suite
+# actually pinned. Five of them reproduce defects that were live in master -- two in the parser, two in
+# what the write path records and says, one in a timeout that did not fit the deadline enforcing it --
+# and the rest pin branches that were correct and reached by nothing at all
+# (#412, #413, #414, #417).
+
+function test_a_third_party_slot_that_opens_the_document_is_not_dropped() {
+  # The slot list is read out of comma-separated fields, and the pattern used to be anchored : "^[^"]*"
+  # cannot cross the quote that opens the enclosing "Attributes" key, so whichever slot came FIRST in
+  # the answer never matched and was left out of every write. Dell orders these documents
+  # alphabetically, which puts PCIeSlotLFM before ThermalSettings -- so on a real answer the slot being
+  # silently dropped was the first PCIe slot of the machine
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 3 --third-party "1 3" --slots-first
+
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  assert_equals "1 3 " "$REDFISH_THIRD_PARTY_SLOTS" \
+    "a card in the first slot of the document is a card like any other"
+  assert_equals "3" "$REDFISH_COOLING_RESPONSE_SLOT_COUNT"
+}
+
+function test_an_answer_that_was_not_minified_is_read_the_same_way() {
+  # Nothing in HTTP or JSON promises a body without whitespace, and this document is parsed with sed and
+  # grep. The failure was asymmetric, which is what made it dangerous : the slot COUNT matches the bare
+  # key and would still have said the server has the setting, while the slot LIST and the mode read-back
+  # both matched on a hard-coded ":" and found nothing. The container would then settle, once and for
+  # the life of the container, on a server that has the setting and nothing to apply it to
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 2 --third-party "2" \
+    --mode "Disabled" --pretty
+
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  assert_equals "2 " "$REDFISH_THIRD_PARTY_SLOTS" "the whitespace is the formatter's, not the server's"
+  assert_equals "Disabled" "$(read_the_lfm_mode_of_slot "$MOCK_REDFISH_CONFORMANT_BODY" 2)" \
+    "a mode read as empty never equals the wanted one, so every slot would be rewritten every cycle"
+}
+
+function test_only_the_third_party_slots_not_already_set_are_written() {
+  # The one shape where the skip and the comma-joining of the write meet. A leading or doubled comma
+  # produces a body the iDRAC answers 400 to, which is_this_redfish_answer_a_verdict() then reads as a
+  # decision -- so the feature would be off for the life of the container over a punctuation mistake
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 6 --third-party "2 5" \
+    --mode "Automatic" --slot-modes "2=Disabled"
+
+  does_this_server_expose_the_cooling_response_over_redfish
+  set_the_cooling_response_over_redfish "Disabled"
+
+  assert_equals "1" "$REDFISH_SLOTS_WRITTEN" "the slot already in the wanted state is left alone"
+  assert_equals "1" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" "and the other one still goes in one request"
+  assert_matches "$(cat "$MOCK_REDFISH_PATCH_LOG")" '\{"Attributes":\{"PCIeSlotLFM\.5\.LFMMode":"Disabled"\}\}' \
+    "the body carries the one slot that needed changing, and no stray comma"
+}
+
+function test_a_read_refused_inside_the_write_path_names_what_stopped_it() {
+  # The errand is two requests and only the second used to record its answer. A server that stopped
+  # answering after the probe therefore produced "refused to change it 3 times ... The last answer was
+  # HTTP ." -- a truncated sentence, about refusals that never happened, with no status for the reader
+  # to quote on the tracker and no PATCH ever sent
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  export CHECK_INTERVAL_IN_SECONDS=5
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  # The probe is done ; from here the iDRAC answers nothing but 500
+  export MOCK_REDFISH_CONFORMANT_STATUS="500"
+
+  local ATTEMPT
+  for ((ATTEMPT = 1; ATTEMPT <= MAXIMUM_REDFISH_ATTEMPTS; ATTEMPT++)); do
+    apply_the_cooling_response_over_redfish "Disabled" "Disabled" \
+      > "$TEST_TEMPORARY_DIRECTORY/read_refused" 2>&1
+  done
+  local -r OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/read_refused")
+
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED"
+  assert_equals "500" "$REDFISH_LAST_WRITE_STATUS" "the read's answer is what stopped the errand"
+  assert_matches "$OUTPUT" "HTTP 500 while reading the setting back" \
+    "the reader is told which half of the errand answered, and what it answered"
+  assert_not_contains "$OUTPUT" "HTTP \." "an empty status is a sentence about nothing"
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "nothing was ever written, so nothing can have been refused"
+}
+
+function test_an_answer_about_the_credentials_while_reading_back_settles_at_once() {
+  # #377's rule is that a decision concludes on the first answer, and it was enforced on the PATCH only.
+  # A 401 on the read half was retried three times instead -- three requests an account whose rights are
+  # what they are will refuse identically
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  export MOCK_REDFISH_CONFORMANT_STATUS="401"
+  apply_the_cooling_response_over_redfish "Disabled" "Disabled" \
+    > "$TEST_TEMPORARY_DIRECTORY/credentials_read" 2>&1
+
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "a 401 will not read differently next cycle"
+  assert_equals "1" "$REDFISH_ATTEMPTS" "and is therefore asked exactly once"
+  assert_matches "$(cat "$TEST_TEMPORARY_DIRECTORY/credentials_read")" \
+    "HTTP 401 while reading the setting back"
+}
+
+function test_a_probe_refused_over_the_credentials_is_not_asked_again() {
+  # The same split, on the half that asks whether the server has the setting at all. The write half had
+  # both its cases pinned since #377 ; this one had neither
+  local PROBE_STATUS
+  for PROBE_STATUS in 401 403 405; do
+    export MOCK_REDFISH_CONFORMANT_STATUS="$PROBE_STATUS"
+    export MOCK_REDFISH_LEGACY_STATUS="$PROBE_STATUS"
+    REDFISH_ATTEMPTS=0
+    REDFISH_COOLING_RESPONSE_SETTLED=false
+
+    attempt_the_redfish_cooling_response "Disabled" "Disabled" \
+      > "$TEST_TEMPORARY_DIRECTORY/probe_$PROBE_STATUS" 2>&1
+
+    assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "HTTP $PROBE_STATUS is a decision"
+    assert_equals "1" "$REDFISH_ATTEMPTS" "HTTP $PROBE_STATUS must not be asked twice"
+    assert_equals "Redfish refused to answer (see the log)" \
+      "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" \
+      "HTTP $PROBE_STATUS says nothing about the hardware, so the column must not name it"
+  done
+}
+
+function test_a_legacy_uri_that_never_answered_is_not_a_server_without_the_setting() {
+  # 404 then 599 : an iDRAC 9 4.x, which has no conformant URI, whose HTTPS stack is briefly down. The
+  # only fallback case any test reached ended in 200, so nothing pinned what the other endings do -- and
+  # this one is #376's exact scenario, one URI further along
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_REDFISH_CONFORMANT_STATUS="404"
+  export MOCK_REDFISH_LEGACY_STATUS="599"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  assert_equals "2" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "the legacy URI is the one that has to answer"
+  assert_equals "false" "$REDFISH_COOLING_RESPONSE_SETTLED" "an unreachable URI settles nothing"
+  assert_equals "Cannot reach Redfish yet, retrying" \
+    "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
+}
+
+function test_both_uris_answering_404_is_the_one_case_that_names_the_server() {
+  # Read, understood, and the answer is no : neither URI is there. That is a statement about the
+  # machine, and the only shape in which making one is honest
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_REDFISH_CONFORMANT_STATUS="404"
+  export MOCK_REDFISH_LEGACY_STATUS="404"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  assert_equals "2" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "both URIs are tried before the server is named"
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "no later cycle grows the resource"
+  assert_equals "Not supported by this server" \
+    "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
+}
+
+function test_keeping_the_state_on_exit_writes_nothing_over_redfish() {
+  # KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT is a user asking the container to leave
+  # the slot where it put it. Over IPMI that promise is pinned ; over Redfish nothing checked it
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=true
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2" --mode "Disabled"
+  does_this_server_expose_the_cooling_response_over_redfish
+  IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=true
+
+  # graceful_exit() ends the shell it runs in, so it is run in one of its own
+  ( graceful_exit > /dev/null 2>&1 )
+
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "the slot is left exactly where the container put it"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0xce")" \
+    "and the command this server does not have is not sent either"
+}
+
+function test_a_hand_back_the_idrac_refuses_names_the_manual_path() {
+  # The one moment the owner needs the three clicks : the container is going away with the slot still
+  # where it put it. Both exit paths used to word that themselves rather than use the constant that
+  # exists so the same three clicks are never described two slightly different ways
+  export KEEP_THIRD_PARTY_PCIE_CARD_COOLING_RESPONSE_STATE_ON_EXIT=false
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2" --mode "Disabled"
+  does_this_server_expose_the_cooling_response_over_redfish
+  IS_THE_COOLING_RESPONSE_DRIVEN_OVER_REDFISH=true
+  export MOCK_REDFISH_PATCH_STATUS="500"
+
+  ( graceful_exit > "$TEST_TEMPORARY_DIRECTORY/exit_refused" 2>&1 )
+  local -r OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/exit_refused")
+
+  assert_matches "$OUTPUT" "Could not hand the third-party PCIe card cooling response back" \
+    "a hand-back that did not land is never silent"
+  assert_contains "$OUTPUT" "Cooling Configuration" "and says where to put it back by hand"
+}
+
+function test_the_exit_timeout_fits_the_deadlines_it_runs_inside() {
+  # This is arithmetic, and it was wrong from #375 until #414. The exit figure is per REQUEST and the
+  # hand-back makes two of them -- it reads the slots back, then writes them -- inside a deadline the
+  # supervisor enforces with SIGKILL. At 3 seconds each, a pair could not fit a 3 second grace period,
+  # so an iDRAC that simply did not answer made a healthy monitoring process be killed as wedged. The
+  # supervisor's own hand-back on that path can make four requests, against Docker's ten seconds
+  local -r DOCKER_DEFAULT_STOP_GRACE_PERIOD_IN_SECONDS=10
+
+  assert_equals "true" \
+    "$([ $((2 * REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS)) -lt "$SUPERVISOR_GRACE_PERIOD_IN_SECONDS" ] && echo true || echo false)" \
+    "graceful_exit()'s two requests must fit inside the supervisor's grace period"
+  assert_equals "true" \
+    "$([ $((4 * REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS)) -lt "$DOCKER_DEFAULT_STOP_GRACE_PERIOD_IN_SECONDS" ] && echo true || echo false)" \
+    "and the supervisor's own four must fit inside Docker's"
+  assert_equals "true" \
+    "$([ "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" -lt "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" ] && echo true || echo false)" \
+    "the way out is the half that cannot afford to wait"
+}
+
+function test_monitoring_only_mode_never_reaches_redfish_at_all() {
+  # MONITORING_ONLY_MODE is the promise that nothing is sent to the server, and Redfish is the one
+  # transport in this container that can write over something other than IPMI. The IPMI call returns
+  # before touching ipmitool in that mode, so the verdict that starts the Redfish errand is never
+  # reached -- which is the right behaviour and was pinned by nothing
+  export MONITORING_ONLY_MODE=true
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_PERL_CALL_LOG"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_server "PowerEdge R6515" --cpus 1
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+
+  local -r OUTPUT=$(run_controller "" 4)
+
+  assert_equals "0" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" \
+    "not one HTTPS request may leave a container asked to observe and nothing else"
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")"
+  assert_matches "$OUTPUT" "not applied: monitoring only mode" \
+    "and the table says why, rather than reporting a setting that was never touched"
+}
+
+function test_the_controller_puts_dells_default_back_over_redfish_when_the_parameter_is_off() {
+  # Every controller-level case here runs with the parameter on. Both branches write to the owner's PCIe
+  # slots, and swapping them would send "Disabled" to a user who asked to keep Dell's cooling response
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=false
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_server "PowerEdge R6515" --cpus 1
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2" --mode "Disabled"
+
+  local -r OUTPUT=$(run_controller "" 3)
+
+  assert_matches "$(cat "$MOCK_REDFISH_PATCH_LOG")" '"PCIeSlotLFM\.2\.LFMMode":"Automatic"' \
+    "Automatic is what enabled means for a slot : the iDRAC decides that slot's airflow itself"
+  assert_matches "$OUTPUT" "fan control profile.*Enabled over Redfish" \
+    "and the table reports the state that was asked for"
 }

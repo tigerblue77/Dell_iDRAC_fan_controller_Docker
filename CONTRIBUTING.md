@@ -55,6 +55,18 @@ Signed-off-by: Random J Developer <random@developer.example.org>
 
 Forgot it on the last commit ? `git commit --amend -s`. On several ? `git rebase --signoff <base>`.
 
+### Contributions written by an agent
+
+Some of the code here is written by a coding agent working on the maintainer's instruction. The DCO does not bend for that, and this project cannot afford it to : the sign-off is what records that a contribution could be offered under **both** licences, which is what keeps the commercial arm grantable.
+
+An agent is a tool. A tool cannot certify anything, and a `Signed-off-by` naming one would be a trailer that satisfies a checker while naming nobody who could make the statement above. So for those commits :
+
+- **the `Signed-off-by` is the maintainer's**, set from the repository's git configuration rather than typed before each merge — `.claude/hooks/session-start.sh` does it at the start of every session, because a rule that has to be remembered every time is a rule that gets forgotten ;
+- **the agent is recorded as `Co-Authored-By`**, which is what a tool can honestly claim ;
+- **the certification is the maintainer's act of reviewing and merging.** The trailer states it ; the review is what makes it true. A pull request merged unread carries a sign-off that means nothing, and no workflow can tell the difference — [`.github/check_sign_off.sh`](./.github/check_sign_off.sh) reads the trailer's shape, never who stands behind it.
+
+If you are a contributor rather than the maintainer, none of this concerns you : sign your own work, with your own name.
+
 ## Licence headers
 
 Every shell script carries a two-line [SPDX](https://spdx.dev/) header, right after the shebang:
