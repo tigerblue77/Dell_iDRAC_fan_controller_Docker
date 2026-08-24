@@ -132,6 +132,18 @@ function apply_user_fan_control_profile() {
           fi
         fi
       fi
+    else
+      # The broadcast selector landed, on a server a walk had found no identifier on. That walk asked
+      # "which of your fans take this command", and the answer it got was none -- an answer about a
+      # server that was refusing 0xff. This server is not refusing 0xff, so the answer no longer
+      # describes it, and keeping it would be the one way this container could hold a verdict older
+      # than the machine it is about.
+      #
+      # It costs nothing while the broadcast keeps landing, since a server that takes 0xff is never
+      # walked at all. It is what happens on the check after this one that matters : an iDRAC that was
+      # reset, or a firmware that came back answering 0xcc the way an 11th generation one does, gets
+      # its address space worked out again instead of being handed back fans it would now accept
+      HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=false
     fi
   fi
 
@@ -202,7 +214,14 @@ WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
 # What it deliberately does NOT remember is that the server refuses the speed. The single broadcast
 # command still goes out on every check, so a server that starts accepting it is noticed on the very
 # next one -- the controller never stops trying, which is what
-# test_a_refused_fan_speed_never_stops_the_controller_from_trying() holds it to
+# test_a_refused_fan_speed_never_stops_the_controller_from_trying() holds it to.
+#
+# And it is cleared the moment one of those broadcast commands lands. The walk's answer was about a
+# server that was refusing 0xff ; a server that accepts it is no longer that server, so the answer is
+# dropped rather than outliving the machine it describes. The alternative is a container that, having
+# once been told "none", would hand back fans it could by then drive -- an iDRAC that was reset, or a
+# firmware that came back answering 0xcc the way an 11th generation one does, would never be walked
+# again for the life of the container
 HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=false
 
 # Set the fan speed one fan at a time, on a server that refuses to have them all addressed at once.
