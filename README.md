@@ -44,6 +44,10 @@ This container drives the fans with two IPMI raw commands Dell removed from its 
 
 None of it has to be worked out in advance : the container asks the server, logs its iDRAC firmware version at startup and [says what it was answered](#your-fan-speed-never-changes-and-the-log-says-the-server-refused-fan-control).
 
+**On the 11th generation the commands are there, but the fans are addressed differently.** Dell's speed command normally carries `0xff`, meaning "every fan at once". An iDRAC 6 has been reported to refuse that byte — answering completion code `0xcc`, *"invalid data field in request"* — while accepting the very same command addressed to one fan at a time ([#378](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/378), on an R510). Nothing has to be configured for it : the container tries `0xff` first, and on that answer it asks the server which fans it will take, walking upwards from `0x00` until one is refused, then sets each of them on every cycle. It says so once when it switches.
+
+The set is discovered rather than counted from `ipmitool sdr type fan`, because the two do not match : the R510 above exposes ten fan RPM sensors — five modules, an A and a B rotor each — plus a `Fan Redundancy` row that is not a fan at all, and accepts eight identifiers, `0x00` to `0x07`. A count taken from that list would have addressed ten identifiers, or eleven, on a server that accepts eight ; the surplus are refused, so the profile would have been reported *not applied* on a server where it was. Had the mismatch gone the other way, fans would have been left running at whatever speed they had while the table said the profile was applied. Every identifier in the range is tried rather than stopping at the first refusal, for the same reason : nothing says the ones a BMC accepts form an unbroken run from `0x00`.
+
 ### iDRAC user privileges
 
 The account this container uses must be an **Administrator** on the iDRAC : fan control is not read-only, and a lesser account is refused it with the very completion code (`0xd4`) a firmware that removed the commands returns.

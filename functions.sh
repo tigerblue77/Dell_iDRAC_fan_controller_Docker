@@ -77,15 +77,38 @@ function apply_user_fan_control_profile() {
   else
     HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=true
   fi
-  ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
-  # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
-  if [ $? -ne 0 ]; then
-    print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
-    # A server that answered "invalid data field" ran the command and refused an argument, which is a
-    # different situation from the refusals below and gets its own explanation -- once, rather than as
-    # a raw ipmitool line on every cycle. It settles nothing and stops nothing being sent
-    note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
-    IS_PROFILE_APPLIED=false
+  # The speed, sent the way this server was found to accept it.
+  #
+  # A server already known to refuse the broadcast selector is not asked with it again : it answered
+  # that question once, and re-asking would put one doomed command on the wire every cycle for the life
+  # of the container, which is what issues #267 and #347 exist about
+  if [ ${#DISCOVERED_FAN_IDENTIFIERS[@]} -gt 0 ]; then
+    if ! set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"; then
+      IS_PROFILE_APPLIED=false
+    fi
+  else
+    ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
+    # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
+    if [ $? -ne 0 ]; then
+      # A server that answered "invalid data field" ran the command and refused an argument rather than
+      # the command itself, and on the hardware this was reported from that argument is the selector :
+      # the fans are there and take the very same command addressed one at a time (issue #378). So the
+      # speed is sent that way instead, and only a server that refuses it both ways has really refused it
+      if ! does_the_server_reject_this_data_field "$ipmitool_stderr" ||
+        ! set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"; then
+        IS_PROFILE_APPLIED=false
+        # A walk that was abandoned mid-way answered nothing about this server : it was interrupted,
+        # not refused. Saying "both ways were refused" there would be a verdict drawn from a moment,
+        # and it would spend the one-off explanation that the real answer needs on the next check.
+        # The walk has already said what happened, so there is nothing to add here either
+        if ! "${WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED:-false}"; then
+          print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+          # Explained once, rather than as a raw ipmitool line on every cycle. It settles nothing and
+          # stops nothing being sent
+          note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
+        fi
+      fi
+    fi
   fi
 
   # Only the first of the two commands can settle whether this server lets its fans be taken at all.
@@ -101,6 +124,107 @@ function apply_user_fan_control_profile() {
     return 1
   fi
   CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
+}
+
+# The fan identifiers this server was found to accept, discovered once and reused on every cycle after
+# that. Empty until the broadcast selector has actually been refused : a server that takes 0xff never
+# probes anything and never fills this
+DISCOVERED_FAN_IDENTIFIERS=()
+
+# Whether the last walk gave up before reaching the end of the range, because an identifier answered
+# something that was not a refusal. It means the walk was interrupted rather than answered, which is
+# the one thing that must not be read as a verdict about this server
+WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
+
+# Set the fan speed one fan at a time, on a server that refuses to have them all addressed at once.
+# Usage : set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"
+# Returns : 0 if every fan this server has was set, 1 if none was or the set is incomplete
+#
+# Only ever called after "raw 0x30 0x30 0x02 0xff <speed>" came back 0xcc, which is a BMC that has the
+# command and refused the selector byte. An 11th generation iDRAC6 answers exactly that (issue #378).
+#
+# The identifiers are discovered by asking the server, rather than counted from "ipmitool sdr type fan".
+# That distinction is the whole reason this waited for hardware to answer : the R510 in #378 exposes ten
+# fan RPM sensors (five modules, each with an A and a B rotor) plus a "Fan Redundancy" row that is not a
+# fan, and accepts eight identifiers, 0x00 to 0x07. Ten sensors, eight identifiers -- so the sensor list
+# is not the address space, and a count taken from it would have addressed identifiers this server
+# refuses. The server itself is the only thing that knows, and the probe is the question put to it.
+#
+# Every identifier in the range is tried, rather than stopping at the first refusal. Nothing says the
+# ones a BMC accepts form an unbroken run from 0x00 : a set with a gap, or one numbered from 0x01, would
+# otherwise be cut short, leaving the fans past the cut running at whatever speed they had while the
+# profile was reported applied.
+#
+# Each probe is the real speed command rather than a test, so discovery costs no extra round trip and
+# leaves every accepted fan already set to FAN_SPEED
+function set_the_fan_speed_on_each_fan_individually() {
+  local -r HEXADECIMAL_SPEED="$1"
+
+  # Discovered once. A server does not grow fans while the container runs, and re-walking every cycle
+  # would put one refused command per cycle in the log for the life of the container
+  if [ ${#DISCOVERED_FAN_IDENTIFIERS[@]} -gt 0 ]; then
+    local IDENTIFIER
+    local IS_EVERY_FAN_SET=true
+    for IDENTIFIER in "${DISCOVERED_FAN_IDENTIFIERS[@]}"; do
+      local IPMITOOL_STDERR
+      IPMITOOL_STDERR=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 "$IDENTIFIER" "$HEXADECIMAL_SPEED" 2>&1 >/dev/null)
+      # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
+      if [ $? -ne 0 ]; then
+        print_error "Failed to set fan $IDENTIFIER to $DECIMAL_FAN_SPEED%, on a server that accepted it before. ipmitool said: $IPMITOOL_STDERR"
+        IS_EVERY_FAN_SET=false
+      fi
+    done
+    $IS_EVERY_FAN_SET
+    return
+  fi
+
+  WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
+  local -a ACCEPTED_IDENTIFIERS=()
+  local PROBE
+  local IDENTIFIER
+  local PROBE_STDERR
+  for ((PROBE = 0; PROBE < MAXIMUM_FAN_IDENTIFIER_PROBES; PROBE++)); do
+    IDENTIFIER=$(convert_decimal_value_to_hexadecimal "$PROBE")
+    PROBE_STDERR=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 "$IDENTIFIER" "$HEXADECIMAL_SPEED" 2>&1 >/dev/null)
+    # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
+    if [ $? -ne 0 ]; then
+      # Only "invalid data field" says this identifier is not one of the server's fans. Every other
+      # answer describes a moment rather than a decision -- a busy BMC, a dropped session, an iDRAC
+      # being reset -- and ipmitool exits non-zero for all of them alike, which is why the completion
+      # code has to be read rather than the exit status.
+      #
+      # Concluding from one would end the discovery early and freeze a set missing the fans past it,
+      # for the life of the container, while the profile was reported applied : precisely the failure
+      # this fallback exists to remove. So nothing is remembered and nothing is concluded -- the whole
+      # discovery is abandoned, and the next cycle starts it again against a server that may by then
+      # be answering normally
+      if ! does_the_server_reject_this_data_field "$PROBE_STDERR"; then
+        WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=true
+        print_error "Gave up working out which fans this server accepts : identifier $IDENTIFIER answered something that is not a refusal, so the set would have been incomplete. It will be worked out again on the next check. ipmitool said: $PROBE_STDERR"
+        return 1
+      fi
+      # Not a fan of this server. The walk carries on rather than stopping here : nothing says the
+      # identifiers a BMC accepts form an unbroken run from 0x00, and stopping at the first gap would
+      # leave every fan above it unset while the profile claimed to be applied. The reporter's R510
+      # happens to accept 0x00 to 0x07, but one machine is not the rule
+      continue
+    fi
+    ACCEPTED_IDENTIFIERS+=("$IDENTIFIER")
+  done
+
+  # Nothing was accepted, so this server refuses the command whichever way it is addressed and the
+  # selector was never what stood in the way. Saying so is the caller's job ; there is no set to keep
+  if [ ${#ACCEPTED_IDENTIFIERS[@]} -eq 0 ]; then
+    return 1
+  fi
+
+  DISCOVERED_FAN_IDENTIFIERS=("${ACCEPTED_IDENTIFIERS[@]}")
+
+  local TIMESTAMP
+  set_log_timestamp TIMESTAMP
+  printf "%19s  This server refuses to have every fan addressed at once, so its fans are set one at a time. It accepts %d of them (%s), and they are now running at %d%%.\n" \
+    "$TIMESTAMP" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "${DISCOVERED_FAN_IDENTIFIERS[*]}" "$DECIMAL_FAN_SPEED"
+  return 0
 }
 
 # Convert first parameter given ($DECIMAL_NUMBER) to hexadecimal
@@ -1887,11 +2011,10 @@ HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
 # supposed to follow it never landed. The fans are therefore on neither profile -- not Dell's, and not
 # the user's -- which is exactly the shape of "too low with nobody raising them" reported in issue #378
 #
-# /!\ The per-fan fallback this points to is NOT implemented yet, and this message must not claim it is.
-# The one server that has reported this answers 0xcc to the broadcast selector 0xff and accepts the same
-# command with a single fan's ID, but one accepted ID says nothing about how many fans the server has
-# nor whether Dell numbers them from 0 or from 1, and addressing the wrong set would leave some fans
-# unset while reporting the profile applied
+# /!\ Reached only once set_the_fan_speed_on_each_fan_individually() has ALSO failed. A server that
+# refuses the broadcast selector and accepts its fans one at a time never gets here -- it is handled,
+# not reported -- so this message describes a server that refused the speed both ways, and must not
+# suggest that addressing the fans individually is still worth trying
 function note_that_the_server_rejects_the_broadcast_fan_selector() {
   local -r IPMITOOL_STDERR="$1"
 
@@ -1907,9 +2030,9 @@ function note_that_the_server_rejects_the_broadcast_fan_selector() {
 
   print_warning "This server took the command that puts its fans under manual control, then refused the one that sets their speed, over one of its arguments rather than over the command itself (completion code 0xcc, \"invalid data field in request\").
  Its fans are consequently on neither profile : they have left Dell's own dynamic fan control profile, and the speed of $DECIMAL_FAN_SPEED% that was meant to replace it never reached them. They are running at whatever this iDRAC does with manual control and no speed set, which nothing here can read back.
- The known cause is the fan selector : the speed is addressed to every fan at once with 0xff, and an 11th generation iDRAC6 has been reported to reject that and to accept the very same command addressed to one fan's ID at a time (issue #378). Sending it per fan instead is not implemented yet -- it needs to be known how many fans a server exposes and how this iDRAC numbers them, and guessing would silently leave some of them unset.
- Until then, set MONITORING_ONLY_MODE=true so the container never takes the fans from Dell's own dynamic fan control profile at all and only logs temperatures, or stop it : stopping hands them back to that profile on the way out.
- If your server answers this, the output of \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type fan\" on issue #378 is what is missing to implement it"
+ Both ways of asking were refused. The speed is normally addressed to every fan at once with the selector 0xff, and an 11th generation iDRAC6 refuses that while accepting the very same command addressed to one fan at a time (issue #378) -- so the fans were then asked individually, walking upwards from 0x00, and this server refused that too. The selector is therefore not what stands in the way here.
+ Set MONITORING_ONLY_MODE=true so the container never takes the fans from Dell's own dynamic fan control profile at all and only logs temperatures, or stop it : stopping hands them back to that profile on the way out.
+ If your server answers this, the output of \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type fan\" on issue #378 would help work out what it wants instead"
 }
 
 # Prepare traps in case of container exit
