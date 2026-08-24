@@ -21,6 +21,7 @@ It exits `0` when every test case passed, `1` otherwise.
 | File | What it checks |
 | --- | --- |
 | `cases/10_shell_scripts.sh` | Syntax of every script, files shipped in the Docker image, drift between the code and what documents it, healthcheck |
+| `cases/11_claude_code_settings.sh` | The settings a Claude Code session starts from, which no server ever reads : that the file still parses, and that the rules letting any session run a command without asking are the ones argued for — in the shape they were argued in, still runnable, and only those. Skipped where `jq` is missing, the list being read out of JSON |
 | `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh. Also that every workflow carries the licence header, which is the whole directory rather than those two |
 | `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, built by a workflow no pull request fires either : that it stays a pointer at the documentation rather than a copy of it, and that no change to `README.md` can alter it |
 | `cases/14_latest_tag_reconciliation.sh` | Which version `latest` ends up on after a release, against a stubbed registry. Skipped where `jq` is missing, the one thing the script needs that the suite does not |

@@ -10,5 +10,12 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(./tests/run_tests.sh)",
+      "Bash(shellcheck:*)",
+      "Bash(bash -n:*)"
+    ]
   }
 }
