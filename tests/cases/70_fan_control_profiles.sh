@@ -751,6 +751,37 @@ function test_an_interrupted_walk_is_never_remembered_as_a_server_that_refused_e
     "a walk that reached the end of the range settles it"
 }
 
+function test_a_walk_that_found_nothing_is_dropped_once_the_broadcast_selector_lands() {
+  # What the walk settles is an answer about a server that was refusing 0xff. A server that accepts
+  # 0xff is no longer that server, so the answer is dropped rather than outliving the machine it
+  # describes : an iDRAC that was reset, or a firmware that came back answering 0xcc the way an 11th
+  # generation one does, must have its address space worked out again instead of being handed back
+  # fans it would by then accept
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  assert_equals "0" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "the walk found nothing, which is what is settled"
+
+  # The server now takes the broadcast selector it was refusing
+  unset MOCK_IPMITOOL_RAW_FAIL_PATTERN
+  capture_output apply_user_fan_control_profile
+  assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE" \
+    "the speed lands, which is what says the walk's answer no longer describes this server"
+
+  # And refuses it again, this time the way an 11th generation iDRAC6 does : the selector alone
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "8" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" \
+    "the range must be walked afresh and find the fans this server does accept"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x07")" \
+    "including the last of them, which would otherwise run at whatever speed it had"
+  assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE" \
+    "and the fans are driven rather than handed back to Dell"
+}
+
 function test_a_server_that_takes_the_broadcast_selector_never_probes_a_single_fan() {
   # The fallback must be invisible on healthy hardware : one command, no walk, no message
   DECIMAL_FAN_SPEED=30
