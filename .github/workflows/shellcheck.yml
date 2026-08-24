@@ -15,8 +15,13 @@ name: Shellcheck
 # moment it was written - a comment line opening with the linter's own name parsed as a directive, which
 # only this job would have found.
 #
-# The tests/ tree stays out for the reason those do not have : the suite runs on every pull request, so a
-# mistake in it is found the moment it is pushed rather than at release time.
+# The tests/ tree used to stay out for the reason those do not have : the suite runs on every pull request,
+# so a mistake in it is found the moment it is pushed rather than at release time. That holds for a mistake
+# which FAILS the run, and the suite plus "bash -n" already catch all of those. It does not hold for the
+# mistake that leaves the run green - a variable a case sets and nothing reads, a global assigned across a
+# subshell boundary, an unquoted expansion that behaves until a path carries a glob character. None of those
+# fail anything ; they make a test quieter than it looks, which in a suite whose whole job is to notice is
+# the failure that costs the most. So it is linted too, in a step of its own (issue #432).
 #
 # -x resolves the "source functions.sh" / "source constants.sh" lines so shared declarations are understood
 # correctly instead of reported as unknown or unused when the sourcing file is linted on its own.
@@ -55,3 +60,25 @@ jobs:
             .github/release_note_already_exists.sh \
             .github/check_sign_off.sh \
             .claude/hooks/session-start.sh
+
+      # Globbed rather than named one by one, because a case file is added to this tree far more often than a
+      # script is added to the three above, and a hand-maintained list is what let two .github/ scripts stay
+      # unlinted for months. tests/mocks/ carries no extension : those files are executables first in the
+      # PATH, not libraries.
+      #
+      # The five exclusions belong to this invocation alone and never reach .shellcheckrc, so the scripts
+      # above keep the full strength of the lint they have. Each is this suite's shape rather than a defect :
+      #   SC2155  "local -r X=$(...)" is the idiom the "compute into a variable" invariant asks for
+      #   SC2034  a case sets the CONTROLLER's globals ; the code reading them is sourced at runtime
+      #   SC2016  awk programs, whose "$1" is awk's and not the shell's
+      #   SC1091  source paths built from runtime variables, which -x cannot resolve either
+      #   SC1090  the same, where the path is a variable outright
+      # Everything else is on, SC2031 included : losing a global across a subshell boundary is the invariant
+      # CLAUDE.md warns is enforced by nothing, and this is the one place that can enforce it.
+      - name: Run shellcheck on the test suite
+        run: |
+          shellcheck -x -e SC2155,SC2034,SC2016,SC1091,SC1090 \
+            tests/run_tests.sh \
+            tests/lib/*.sh \
+            tests/cases/*.sh \
+            tests/mocks/*

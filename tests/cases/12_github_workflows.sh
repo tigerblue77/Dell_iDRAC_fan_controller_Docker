@@ -105,7 +105,7 @@ function test_no_docker_action_list_entry_ends_with_a_comment() {
     if [ -z "$TRAILING_COMMENTS" ]; then
       pass
     else
-      fail "${WORKFLOW#$REPO_ROOT/} ends a list entry with a comment, which the action reads as part of the value" \
+      fail "${WORKFLOW#"$REPO_ROOT"/} ends a list entry with a comment, which the action reads as part of the value" \
         "$TRAILING_COMMENTS"
     fi
   done

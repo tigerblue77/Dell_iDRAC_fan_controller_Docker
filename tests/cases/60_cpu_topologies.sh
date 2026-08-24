@@ -14,6 +14,13 @@
 # The CPUs are detected in their own step, from the same sdr output the readings
 # come from, so a test drives the pair the way the controller does.
 
+# CPUS_TEMPERATURES is the semicolon-joined display string retrieve_temperatures
+# builds in functions.sh, beside the DETECTED_CPU_TEMPERATURES array the cases
+# below also read. The two names differ by one letter and only one of them is
+# assigned in this file's own text, so the linter reads the other as a typo of
+# it -- it is a global of the code under test, set where that code runs
+# shellcheck disable=SC2153
+
 function detect_then_retrieve_temperatures() {
   detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
   retrieve_temperatures

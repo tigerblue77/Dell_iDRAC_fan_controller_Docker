@@ -44,11 +44,18 @@ shellcheck -x Dell_iDRAC_fan_controller.sh functions.sh constants.sh \
               healthcheck.sh supervisor.sh .github/*.sh \
               .claude/hooks/session-start.sh   # what CI lints
 
+shellcheck -x -e SC2155,SC2034,SC2016,SC1091,SC1090 \
+              tests/run_tests.sh tests/lib/*.sh \
+              tests/cases/*.sh tests/mocks/*    # the suite, same as CI
+
 docker build -t dell_idrac_fan_controller:dev .
 ```
 
-Run both before pushing. CI runs the suite twice — on the runner and inside the built
-image — and shellcheck on every pull request.
+Run all three before pushing. CI runs the suite twice — on the runner and inside the
+built image — and both shellcheck invocations on every pull request. The five codes the
+second one silences are the suite's own shape rather than defects, and they are argued
+in `.github/workflows/shellcheck.yml` beside the step that carries them ; they never
+reach `.shellcheckrc`, so the scripts above keep the full lint (issue #432).
 
 ## Conventions
 
