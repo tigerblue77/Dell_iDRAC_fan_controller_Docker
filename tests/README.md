@@ -15,13 +15,16 @@ enough.
 ./tests/run_tests.sh --no-color      # disable colored output
 ```
 
-It exits `0` when every test case passed, `1` otherwise.
+It exits `0` when every test case passed, `1` when one failed or the run refused
+to start — a test case name declared twice, a case file that ends the runner while
+it is being sourced — and `2` when it was given an option it does not take, or one
+without the value it takes.
 
 ## What is covered
 
 | File | What it checks |
 | --- | --- |
-| `cases/10_shell_scripts.sh` | Syntax of every script, the licence header each one and the `Dockerfile` carry, files shipped in the Docker image, drift between the code and what documents it — the two lint invocations, one a hand-maintained list and one a set of globs that has to keep reaching every file of this tree, `CLAUDE.md`'s layout table, paths, figures, dependency graph and worked example, the runner options both `CLAUDE.md` and the runner's own help name against the parser that decides them, and the packages its Environment section promises — healthcheck |
+| `cases/10_shell_scripts.sh` | Syntax of every script, the licence header each one and the `Dockerfile` carry, files shipped in the Docker image, drift between the code and what documents it — the two lint invocations, one a hand-maintained list and one a set of globs that has to keep reaching every file of this tree, `CLAUDE.md`'s layout table, paths, figures, dependency graph and worked example, the runner options all three documents that run the suite name — and the runner's own help — against the parser that decides them, the exit codes this file states against the ones the runner can reach, and the packages its Environment section promises — healthcheck |
 | `cases/11_claude_code_settings.sh` | The settings a Claude Code session starts from, which no server ever reads : that the file still parses, that the rules letting any session run a command without asking are the ones argued for — in the shape they were argued in, still runnable, only those, and all of them still there — and that the `SessionStart` hook is still wired to a script that exists, under a budget outlasting what that script allows itself. Skipped where `jq` is missing, the list being read out of JSON |
 | `cases/12_github_workflows.sh` | The two publishing workflows no pull request ever runs : the release build and the base image refresh. Also two checks over the whole directory rather than those two : that every workflow carries the licence header, and that the shell every `run:` block holds — the several hundred lines no linter here reads — still parses |
 | `cases/13_dockerhub_description.sh` | The page Docker Hub shows on the image's repository, built by a workflow no pull request fires either : that it stays a pointer at the documentation rather than a copy of it, and that no change to `README.md` can alter it |
