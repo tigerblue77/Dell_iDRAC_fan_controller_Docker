@@ -218,6 +218,14 @@ function make_sdr_line() {
 #   --exhaust N / --no-exhaust exhaust sensor reading, or no exhaust sensor at all
 #   --cpu2-disabled            CPU 2 is listed but has no reading ("ns | Disabled"),
 #                              like a second socket left empty
+#   --every-cpu-disabled       EVERY processor entity is listed and none carries a
+#                              reading. This is not an empty socket : it is what an
+#                              iDRAC6 reports on an 11G server whose CPUs it cannot
+#                              measure at all (issue #378, an R510 on firmware 2.92),
+#                              and it is the shape the lm-sensors fallback of #216
+#                              exists to rescue. Distinct from "--cpus 0", which emits
+#                              no processor row at all -- a shape no reported hardware
+#                              produces, and the one the fallback used to be tested on
 #   --with-extra-sensors       add the non-CPU, non-inlet, non-exhaust temperature
 #                              sensors bigger servers report (board, PCIe risers)
 #   --eleventh-generation-sensor-names
@@ -235,6 +243,7 @@ function make_sdr_output() {
   local WITH_INLET=true
   local WITH_EXHAUST=true
   local CPU2_DISABLED=false
+  local EVERY_CPU_DISABLED=false
   local WITH_EXTRA_SENSORS=false
   local ELEVENTH_GENERATION_SENSOR_NAMES=false
 
@@ -248,6 +257,7 @@ function make_sdr_output() {
       --no-inlet) WITH_INLET=false; shift ;;
       --no-exhaust) WITH_EXHAUST=false; shift ;;
       --cpu2-disabled) CPU2_DISABLED=true; shift ;;
+      --every-cpu-disabled) EVERY_CPU_DISABLED=true; shift ;;
       --with-extra-sensors) WITH_EXTRA_SENSORS=true; shift ;;
       --eleventh-generation-sensor-names) ELEVENTH_GENERATION_SENSOR_NAMES=true; shift ;;
       *) printf 'make_sdr_output: unknown option "%s"\n' "$1" >&2; return 1 ;;
@@ -278,6 +288,11 @@ function make_sdr_output() {
   for ((CPU_INDEX = 1; CPU_INDEX <= CPU_COUNT; CPU_INDEX++)); do
     local SENSOR_ID
     SENSOR_ID=$(printf '%02Xh' "$((CPU_SENSOR_ID_BASE + CPU_INDEX - 1))")
+
+    if $EVERY_CPU_DISABLED; then
+      make_sdr_line "Temp" "$SENSOR_ID" "ns" "3.$CPU_INDEX" "Disabled"
+      continue
+    fi
 
     if $CPU2_DISABLED && [ "$CPU_INDEX" -eq 2 ]; then
       make_sdr_line "Temp" "$SENSOR_ID" "ns" "3.$CPU_INDEX" "Disabled"
