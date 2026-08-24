@@ -693,6 +693,7 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
     "Redfish refused this change (see the log)" \
     "Redfish refused this change, retrying" \
     "Not over IPMI (Redfish needs network mode)" \
+    "Not over IPMI (no HTTPS client to ask with)" \
     "Cannot reach Redfish yet, retrying" \
     "Redfish could not be reached (see the log)" \
     "Redfish refused to answer (see the log)" \

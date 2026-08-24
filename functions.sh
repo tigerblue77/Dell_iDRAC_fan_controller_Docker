@@ -1738,10 +1738,37 @@ function redfish_request() {
   local -r HTTP_METHOD="$1"
   local -r RESOURCE_PATH="$2"
   local -r REQUEST_BODY="${3:-}"
-  local -r TIMEOUT_IN_SECONDS="${4:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
+  local TIMEOUT_IN_SECONDS="${4:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
 
   if [ "$IDRAC_HOST" == "local" ]; then
     return 1
+  fi
+
+  # The figure above is what ONE request may take, and the monitoring errand makes up to four of them --
+  # the probe's two URIs, then the write path's read and its PATCH. Multiplied out that was up to forty
+  # seconds inside a cycle whose CHECK_INTERVAL defaults to five, with nothing reading temperatures
+  # meanwhile : the gap between two runs of is_any_CPU_overheating() went from one interval to nine, on
+  # fans sitting at the static speed the user asked for. So the budget belongs to the ERRAND, and each
+  # request is given what is left of it (#430).
+  #
+  # A healthy iDRAC answers in well under a second and never notices this ; one that is slow but working
+  # still fits its four requests inside the budget ; only one that hangs is cut short -- which is the
+  # right thing to do with it, since the whole errand is attempted again on the next cycle anyway.
+  #
+  # Never less than a second, because a timeout of zero is not "no time left" to HTTP::Tiny, it is no
+  # timeout at all. So the true bound is the budget plus a second for each request still to be made, and
+  # a request is always made rather than skipped : skipping is how the legacy URI would stop being tried
+  # at all on a server whose conformant one hangs
+  if [ -n "${REDFISH_ERRAND_DEADLINE_IN_SECONDS:-}" ]; then
+    local REMAINING_IN_SECONDS=$(( REDFISH_ERRAND_DEADLINE_IN_SECONDS - SECONDS ))
+
+    if [ "$REMAINING_IN_SECONDS" -lt 1 ]; then
+      REMAINING_IN_SECONDS=1
+    fi
+
+    if [ "$REMAINING_IN_SECONDS" -lt "$TIMEOUT_IN_SECONDS" ]; then
+      TIMEOUT_IN_SECONDS="$REMAINING_IN_SECONDS"
+    fi
   fi
 
   REDFISH_REQUEST_BODY="$REQUEST_BODY" perl - "https://${IDRAC_HOST}${RESOURCE_PATH}" "$IDRAC_USERNAME" "$HTTP_METHOD" "$TIMEOUT_IN_SECONDS" <<'PERL_SCRIPT'
@@ -2037,6 +2064,27 @@ function apply_the_cooling_response_over_redfish() {
 # setting it has, for the life of the container. So the same split the write uses applies here : an
 # answer about the resource or the credentials settles it, a moment is tried again (#376)
 function attempt_the_redfish_cooling_response() {
+  # One budget for the whole errand, opened here and closed at the end whatever happened, so that no
+  # later caller inherits a deadline that has nothing to do with it : graceful_exit() and supervisor.sh
+  # reach set_the_cooling_response_over_redfish() on their own, with the short per-request timeout #414
+  # sized against the deadline that kills them, and must keep it
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=$(( SECONDS + REDFISH_REQUEST_TIMEOUT_IN_SECONDS ))
+
+  local ERRAND_EXIT_CODE=0
+  run_the_redfish_cooling_response_errand "$@" || ERRAND_EXIT_CODE=$?
+
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=""
+
+  return "$ERRAND_EXIT_CODE"
+}
+
+# The errand itself. Called only by attempt_the_redfish_cooling_response() above, which is what gives it
+# its time budget -- and what makes sure the budget is closed again however this returns.
+# Usage : run_the_redfish_cooling_response_errand "<wanted LFM mode>" "<Enabled|Disabled>"
+#
+# Not called in a subshell, and never to be : every global it sets -- the column's status, whether the
+# question is settled, how many attempts have been made -- would be lost at that boundary
+function run_the_redfish_cooling_response_errand() {
   local -r WANTED_LFM_MODE="$1"
   local -r REQUESTED_STATE="$2"
 
@@ -2067,13 +2115,30 @@ function attempt_the_redfish_cooling_response() {
 
   REDFISH_ATTEMPTS=$(( ${REDFISH_ATTEMPTS:-0} + 1 ))
 
-  # Nothing was asked, because there was nothing to ask. In local mode the controller reaches the BMC
-  # through /dev/ipmi0 and is given no iDRAC address and no credentials, so this says what is true --
-  # the transport is missing -- rather than blaming a server that may well have the setting
+  # Nothing was asked, because the request could not be made at all. There are two reasons for that and
+  # they need different things from the reader, so they are told apart rather than both being called
+  # local mode : redfish_request() returns without asking in local mode, and it also returns without an
+  # answer when the HTTPS client it runs is not there or will not start. Saying "set IDRAC_HOST,
+  # IDRAC_USERNAME and IDRAC_PASSWORD" to somebody who has set all three sends them to check
+  # configuration that is correct, while the real cause goes unnamed (#429)
   if [ -z "$REDFISH_LAST_PROBE_STATUS" ]; then
     REDFISH_COOLING_RESPONSE_SETTLED=true
-    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (Redfish needs network mode)"
-    print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server. Nothing else changes : temperatures keep being read and logged every cycle."
+
+    if [ "$IDRAC_HOST" == "local" ]; then
+      # In local mode the controller reaches the BMC through /dev/ipmi0 and is given no iDRAC address and
+      # no credentials, so this says what is true -- the transport is missing -- rather than blaming a
+      # server that may well have the setting
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (Redfish needs network mode)"
+      print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server. Nothing else changes : temperatures keep being read and logged every cycle."
+      return 1
+    fi
+
+    # Addressed, credentialed, and still nothing was asked : the client did not run. The image installs
+    # perl and libio-socket-ssl-perl for exactly this, so inside it this means a stripped or half-built
+    # image ; run from a plain checkout, it means the host has no perl or no IO::Socket::SSL. Either way
+    # it is about this machine rather than about the server, and no cycle will clear it
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (no HTTPS client to ask with)"
+    print_error "This server does not have the IPMI command for the third-party PCIe card cooling response, and the Redfish request that would have replaced it could not be made at all : the HTTPS client did not run. That is perl with IO::Socket::SSL, which the image installs -- so in the published image this means a stripped or half-built one, and outside it, a host missing either. The iDRAC was never asked, so this says nothing about whether the server has the setting. Fan control and temperature monitoring are unaffected. $REDFISH_MANUAL_INSTRUCTIONS"
     return 1
   fi
 
