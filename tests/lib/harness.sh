@@ -154,6 +154,21 @@ function provide_local_ipmi_device() {
 # the middle of a cycle instead of between two of them
 readonly CONTROLLER_TEMPERATURE_LINE_PATTERN='°C .*fan control profile'
 
+# How long a signalled controller is given to run its own graceful_exit() before
+# it is killed outright : 150 polls of 20ms, three seconds, which is the deadline
+# supervisor.sh gives it in production and for the same reason.
+#
+# That deadline is genuinely reached. A SIGTERM landing while bash is expanding a
+# command substitution is swallowed : the trap never runs and the process keeps
+# looping (issues #188 and #249, and supervisor.sh exists for it). Measured on
+# master, two controllers in two hundred do it.
+#
+# Waiting for such a process without a bound stops the whole run on it -- no
+# timeout, no diagnostic, and no name of the case it stopped on, since the runner
+# only reports a case once it returns. Killing it costs that one case its graceful
+# exit and lets the suite finish, and the run says how often it had to (#427)
+readonly CONTROLLER_STOP_GRACE_POLLS=150
+
 # Run the whole controller with the mocks in place, until what the test is
 # waiting for shows up in its output (by default one line of the temperature
 # table), then stop it with SIGTERM, exactly like "docker stop" does, so that its
@@ -203,6 +218,28 @@ function run_controller() {
     done
 
     kill -TERM "$CONTROLLER_PID" 2> /dev/null
+
+    STOP_POLLS=0
+    while [ "$STOP_POLLS" -lt "$CONTROLLER_STOP_GRACE_POLLS" ]; do
+      kill -0 "$CONTROLLER_PID" 2> /dev/null || break
+      command -p sleep 0.02
+      STOP_POLLS=$((STOP_POLLS + 1))
+    done
+
+    if kill -0 "$CONTROLLER_PID" 2> /dev/null; then
+      # Recorded, not asserted on. A controller that swallowed its signal is not
+      # this test case's doing, and failing a case at random on it would teach the
+      # reader to distrust a red suite. The run reports the total instead, and the
+      # exit code below still tells this case's own assertions what happened
+      if [ -n "${TEST_WEDGED_CONTROLLERS_FILE:-}" ]; then
+        printf '%s\n' "${TEST_CASE_NAME:-an unnamed test case}" >> "$TEST_WEDGED_CONTROLLERS_FILE"
+      fi
+      kill -KILL "$CONTROLLER_PID" 2> /dev/null
+    fi
+
+    # Reports the real status either way : 0 when graceful_exit() ran, 137 when it
+    # had to be killed. Reporting a clean exit for a process that was killed would
+    # be the silence this whole bound exists to remove
     wait "$CONTROLLER_PID"
   ) || EXIT_CODE=$?
 

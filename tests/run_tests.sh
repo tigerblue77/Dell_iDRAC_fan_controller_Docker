@@ -247,8 +247,13 @@ trap 'rm -rf "$TEST_TEMPORARY_DIRECTORY"' EXIT
 TEST_ASSERTIONS_FILE="$TEST_TEMPORARY_DIRECTORY/assertions"
 TEST_DIAGNOSTICS_FILE="$TEST_TEMPORARY_DIRECTORY/diagnostics"
 TEST_SKIPPED_FILE="$TEST_TEMPORARY_DIRECTORY/skipped"
-readonly TEST_ASSERTIONS_FILE TEST_DIAGNOSTICS_FILE TEST_SKIPPED_FILE
-export TEST_ASSERTIONS_FILE TEST_DIAGNOSTICS_FILE TEST_SKIPPED_FILE
+# Deliberately NOT truncated between test cases, unlike the three above : it counts
+# the controllers that had to be killed across the whole run, which is a property of
+# the run and not of any one case. run_controller() appends the name of the case it
+# happened in (#427)
+TEST_WEDGED_CONTROLLERS_FILE="$TEST_TEMPORARY_DIRECTORY/wedged_controllers"
+readonly TEST_ASSERTIONS_FILE TEST_DIAGNOSTICS_FILE TEST_SKIPPED_FILE TEST_WEDGED_CONTROLLERS_FILE
+export TEST_ASSERTIONS_FILE TEST_DIAGNOSTICS_FILE TEST_SKIPPED_FILE TEST_WEDGED_CONTROLLERS_FILE
 
 if $TAP_OUTPUT; then
   printf 'TAP version 13\n'
@@ -373,6 +378,16 @@ if ! $TAP_OUTPUT; then
     printf ', %d skipped' "$SKIPPED_TEST_CASES"
   fi
   printf ' (%d assertions)\n' "$TOTAL_ASSERTIONS"
+
+  # Said out loud rather than left in the exit code : the run is still green, the
+  # cases still asserted what they assert, but a controller ignored the signal the
+  # container is stopped with and the reader deserves to know how often
+  if [ -s "$TEST_WEDGED_CONTROLLERS_FILE" ]; then
+    WEDGED_CONTROLLERS=$(wc -l < "$TEST_WEDGED_CONTROLLERS_FILE" | tr -d ' ')
+    printf '\n%s%s controller(s) ignored SIGTERM and had to be killed%s (issues #188, #249, #427), in:\n' \
+      "$COLOR_YELLOW" "$WEDGED_CONTROLLERS" "$COLOR_RESET"
+    sort -u "$TEST_WEDGED_CONTROLLERS_FILE" | sed 's/^/  /'
+  fi
 
   if [ "$FAILED_TEST_CASES" -ne 0 ]; then
     printf '\nRe-run a single failing test case with:\n'

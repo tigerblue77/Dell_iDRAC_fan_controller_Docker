@@ -152,3 +152,56 @@ function test_a_test_case_the_runner_cannot_discover_fails_the_run() {
   assert_contains "$PROBE_OUTPUT" "${PROBE_PREFIX}_defined_through_eval" \
     "the report should name the test case that would never run"
 }
+
+function test_a_controller_that_ignores_sigterm_is_killed_rather_than_left_to_hang_the_run() {
+  # The fifth way the runner used to stay silent, and the worst of them : it did not
+  # stay green, it stopped. run_controller() signalled the controller and then waited
+  # for it with no bound at all, so a controller that swallowed its SIGTERM -- which
+  # a real one does about twice in two hundred starts (issues #188 and #249, and the
+  # reason supervisor.sh exists) -- kept looping and the run stopped on it. No
+  # timeout, no diagnostic, and not even the name of the case it stopped on, since a
+  # case is only reported once it returns.
+  #
+  # The probe controller refuses the signal outright rather than racing for it, so
+  # what is pinned here is the harness's behaviour and not the odds of reproducing a
+  # bash bug. The declaration below carries a placeholder rather than the prefix
+  # itself for the reason the file's header gives : discovery reads this file as
+  # text, and a literal definition would be discovered here too
+  local PROBE_CONTENT
+  PROBE_CONTENT=$(cat <<'PROBE'
+function PROBE_PREFIX_PLACEHOLDER_meets_a_controller_that_will_not_stop() {
+  local -r WEDGED_CONTROLLER_DIRECTORY="$TEST_TEMPORARY_DIRECTORY/wedged_controller"
+  mkdir -p "$WEDGED_CONTROLLER_DIRECTORY"
+  cat > "$WEDGED_CONTROLLER_DIRECTORY/Dell_iDRAC_fan_controller.sh" <<'WEDGED_CONTROLLER'
+#!/bin/bash
+# What a controller whose trap was swallowed does in practice : it keeps looping
+trap '' SIGTERM
+while true; do
+  printf '  23°C  User static fan control profile (5%%)\n'
+  command -p sleep 0.05
+done
+WEDGED_CONTROLLER
+
+  CONTROLLER_WORKING_DIRECTORY="$WEDGED_CONTROLLER_DIRECTORY"
+
+  # Two statements on purpose : "local X=$(...)" reports the exit code of "local"
+  # and not of what it ran, so a killed controller would read as a clean stop
+  local OUTPUT=""
+  local EXIT_CODE=0
+  OUTPUT=$(run_controller) || EXIT_CODE=$?
+
+  assert_equals 137 "$EXIT_CODE" "a controller that had to be killed should report it, not a clean exit"
+  assert_contains "$OUTPUT" "fan control profile" "what it printed before being killed is still its output"
+}
+PROBE
+)
+
+  run_the_runner_on_a_probe_case_file "${PROBE_CONTENT//PROBE_PREFIX_PLACEHOLDER/$PROBE_PREFIX}"
+
+  assert_equals 0 "$PROBE_EXIT_CODE" \
+    "the run should finish rather than stop on a controller that will not stop" || return 1
+  assert_contains "$PROBE_OUTPUT" "ignored SIGTERM and had to be killed" \
+    "and it should say so, a killed controller being worth knowing about"
+  assert_contains "$PROBE_OUTPUT" "meets_a_controller_that_will_not_stop" \
+    "naming the case it happened in, which is what an unbounded wait could never do"
+}
