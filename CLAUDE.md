@@ -116,15 +116,17 @@ controller cannot cool them, and the suite pins what it does instead.
 
 `.claude/hooks/session-start.sh` installs `shellcheck` and `jq` in Claude Code on the
 web, where neither is there by default : CI gates every pull request on the first, and
-`tests/cases/14_latest_tag_reconciliation.sh` skips itself without the second. `ipmitool`,
-`lm-sensors` and `perl` are not needed to run the suite — it mocks them.
+`tests/cases/11_claude_code_settings.sh` and `tests/cases/14_latest_tag_reconciliation.sh`
+skip themselves without the second. `ipmitool`, `lm-sensors` and `perl` are not needed to
+run the suite — it mocks them.
 
 `.claude/settings.json` also pre-approves three commands, so a session runs them without
 stopping to ask : `./tests/run_tests.sh` **exactly**, then `shellcheck` and `bash -n`
 with any arguments. The suite's rule carries no `:*` on purpose — a prefix rule
 pre-approves every argument list, and `--junit FILE` / `--summary FILE` create
-directories and truncate files wherever they are pointed ; `shellcheck` and `bash -n`
-have no option that names a file to write. `git` and `docker build` were deliberately
+directories and write wherever they are pointed — the first truncating the file it is
+given, the second appending to it ; `shellcheck` and `bash -n` have no option that
+names a file to write. `git` and `docker build` were deliberately
 left out (issue #382). That list is a standing grant to every session opened here, so
 adding to it is a decision to argue, not a line to append :
 `tests/cases/11_claude_code_settings.sh` holds it.

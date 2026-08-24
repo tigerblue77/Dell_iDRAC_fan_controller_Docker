@@ -59,7 +59,8 @@ terms above, as the MIT licence requires:
 
 The Docker image this repository publishes also contains software that
 this project neither wrote nor distributes in source form here: the
-Ubuntu base image, ipmitool and lm-sensors, each under its own licence.
+Ubuntu base image, ipmitool, lm-sensors, perl and libio-socket-ssl-perl,
+each under its own licence.
 They are aggregated with this program, not derived from it, and their
 terms are the ones shipped inside the image itself.
 
