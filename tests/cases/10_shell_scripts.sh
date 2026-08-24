@@ -957,6 +957,32 @@ function test_every_repository_path_claude_md_names_exists() {
   shopt -u nullglob
 }
 
+function test_the_workflow_claude_md_gives_as_its_reason_still_skips_drafts() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ] || [ ! -f "$REPO_ROOT/.github/workflows/auto_update_pull_request_branches.yml" ]; then
+    skip_test "no CLAUDE.md and no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # CLAUDE.md tells a session never to open a draft, and the reason it gives is this
+  # workflow : drafts are filtered out of what it updates, so a draft opened here would be
+  # the one pull request master's moves never reach, falling behind at every merge under
+  # "Require branches to be up to date before merging" (#448).
+  #
+  # Two documents, one fact, and the rule is only worth its line while the fact holds. The
+  # filter is right for what it was written for -- a contributor's work in progress, often
+  # in a fork -- so nothing here asks for it to go ; what this refuses is the filter going
+  # quietly, leaving an instruction that a session still obeys and nobody can still argue
+  local -r BRANCH_UPDATE_WORKFLOW=$(cat "$REPO_ROOT/.github/workflows/auto_update_pull_request_branches.yml")
+
+  assert_contains "$(cat "$REPO_ROOT/CLAUDE.md")" "never as a draft" \
+    "CLAUDE.md should still tell a session not to open a draft" || return 1
+
+  assert_matches "$BRANCH_UPDATE_WORKFLOW" '\-\-json [A-Za-z,]*isDraft' \
+    "the branch updater should still ask which open pull requests are drafts"
+  assert_matches "$BRANCH_UPDATE_WORKFLOW" 'select\(\.isDraft[[:space:]]*\|[[:space:]]*not\)' \
+    "the branch updater should still leave the drafts out of what it updates, which is why CLAUDE.md refuses to open one"
+}
+
 # What the runner takes is decided in one place : the "case" arms of its option
 # parser, each naming the spellings it accepts, under a "*)" arm that turns
 # everything else into a usage error and exit 2. The help text is a "cat" block
