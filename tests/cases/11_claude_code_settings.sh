@@ -406,3 +406,100 @@ function test_the_session_start_hook_authors_as_the_session_and_signs_off_as_the
   assert_equals "Tigerblue77 <37409593+tigerblue77@users.noreply.github.com>" "${COMMIT_SIGN_OFF//$'\n'/}" \
     "the trailer names who certifies it, which is the maintainer"
 }
+
+# The GitHub half of what a session starts with. The identity above governs the commits it
+# makes ; this governs the two things it opens, and neither of them is a setting anywhere :
+# an issue and a pull request are created through the platform's API with whatever the
+# caller passes, so the only place this repository's answer can live is a sentence the
+# session is handed. Two fields, both decided at that call, both left to a default nobody
+# here chose until #448 : assigned, because what is not on the maintainer's list is not
+# scheduled ; not a draft, because
+# .github/workflows/auto_update_pull_request_branches.yml skips drafts, which makes one
+# opened here the single pull request master's moves never reach.
+#
+# A sentence is all it is, which is exactly why it is guarded : nothing downstream refuses a
+# pull request for being a draft, and nothing refuses an assignee for being the wrong
+# person, so a line quietly lost here has no symptom at all
+function test_the_session_start_hook_states_how_an_issue_or_pull_request_is_opened() {
+  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
+    skip_test "no hook script next to the settings"
+    return 0
+  fi
+
+  # Run rather than grepped, for the reason the sign-off case above is run : the login
+  # reaches the message through a variable, and reading the line's text would prove that
+  # the variable is mentioned while saying nothing about which name comes out of it.
+  # Taken from the constant to the echo that uses it, so a rewrite moving either end
+  # fails here rather than silently narrowing what is checked
+  local -r ANNOUNCEMENT_BLOCK=$(awk '/^readonly MAINTAINER_GITHUB_LOGIN=/ { IS_BLOCK = 1 }
+       IS_BLOCK
+       IS_BLOCK && /^echo / { exit }' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT")
+
+  assert_not_empty "$ANNOUNCEMENT_BLOCK" \
+    "the hook should still name the login a session opens an issue and a pull request under" || return 1
+
+  local ANNOUNCEMENT
+  ANNOUNCEMENT=$(bash -c "$ANNOUNCEMENT_BLOCK")
+
+  assert_contains "$ANNOUNCEMENT" "assigned to tigerblue77" \
+    "the session should be told who an issue and a pull request opened here belong to"
+  assert_contains "$ANNOUNCEMENT" "never a draft" \
+    "the session should be told that a pull request opened here is not a draft, its harness having told it otherwise"
+}
+
+function test_the_session_start_hook_says_that_before_it_can_return_early() {
+  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
+    skip_test "no hook script next to the settings"
+    return 0
+  fi
+
+  # The same trap the identity case above pins, and this half falls into it more easily
+  # because it is only an echo : the container is cached once the packages are installed,
+  # so from the second session onwards the run reaches the "already installed" return and
+  # stops there. A reminder printed after that point would be printed once, on a fresh
+  # container, to the one session that happened to open it first
+  local -r ANNOUNCEMENT_LINE=$(grep -n 'MAINTAINER_GITHUB_LOGIN' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" | tail -1 | cut -d: -f1)
+  local -r EARLY_RETURN_LINE=$(grep -n 'MISSING_PACKAGES\[@\]} -eq 0' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" | head -1 | cut -d: -f1)
+
+  assert_not_empty "$ANNOUNCEMENT_LINE" "the hook should still say how an issue and a pull request are opened" || return 1
+  assert_not_empty "$EARLY_RETURN_LINE" "the hook should still return early once nothing is missing" || return 1
+
+  if [ "$ANNOUNCEMENT_LINE" -lt "$EARLY_RETURN_LINE" ]; then
+    pass
+  else
+    fail "the rule is stated at line $ANNOUNCEMENT_LINE, after the early return at line $EARLY_RETURN_LINE" \
+      "every session but the first on a fresh container would stop before being told it"
+  fi
+}
+
+function test_the_login_a_session_assigns_to_is_the_maintainer_the_commits_are_signed_off_under() {
+  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
+    skip_test "no hook script next to the settings"
+    return 0
+  fi
+
+  # One person, written down twice in the same file : the address the sign-off trailer
+  # carries, and the login an issue is assigned to. Nothing makes them agree, and they
+  # fail differently -- a wrong address is refused by .github/check_sign_off.sh, while a
+  # wrong login is refused by nobody, GitHub accepting any name that exists, and the work
+  # simply lands on a stranger's list with everything looking right here.
+  #
+  # The address is the half with a gate behind it, so it is the one the login is measured
+  # against : GitHub's no-reply form is "<id>+<login>@users.noreply.github.com"
+  local -r SIGN_OFF_ADDRESS=$(sed -nE 's/^readonly SIGN_OFF_EMAIL="(.*)"$/\1/p' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" | head -1)
+  local -r ASSIGNEE_LOGIN=$(sed -nE 's/^readonly MAINTAINER_GITHUB_LOGIN="(.*)"$/\1/p' "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" | head -1)
+
+  assert_not_empty "$SIGN_OFF_ADDRESS" "the hook should still name the address a commit is signed off with" || return 1
+  assert_not_empty "$ASSIGNEE_LOGIN" "the hook should still name the login an issue is assigned to" || return 1
+
+  # Checked rather than assumed : the parse below reads a "+" that a plain address does
+  # not carry, and would otherwise compare the login against a whole local part and call
+  # the difference drift
+  assert_matches "$SIGN_OFF_ADDRESS" '^[0-9]+\+[^@]+@users\.noreply\.github\.com$' \
+    "the sign-off address should still be a GitHub no-reply one, which is what carries the login" || return 1
+
+  local -r LOGIN_IN_ADDRESS="${SIGN_OFF_ADDRESS#*+}"
+
+  assert_equals "${LOGIN_IN_ADDRESS%@*}" "$ASSIGNEE_LOGIN" \
+    "the login a session assigns to and the address it signs off under should name the same person"
+}

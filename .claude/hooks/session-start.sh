@@ -108,6 +108,33 @@ if ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.name "$AGENT_NAME" 2> /dev/nu
   echo "session-start : could not set the git identity and its sign-off alias, so a commit made here would be authored and signed off by the session's default rather than by the tool and the maintainer"
 fi
 
+# The other half of what a session here has to know before it touches GitHub, and the half
+# there is nothing to configure for : an issue and a pull request are not settings, they are
+# created through the platform's API with whatever the caller passes, and both fields below
+# are decided at that call. A web session is told by its harness to open a pull request as a
+# DRAFT, and told by nobody to assign anything, so both end up at a value nobody here chose --
+# and the session that would come back to repair them has ended by then.
+#
+# Draft is the one with a price on it. .github/workflows/auto_update_pull_request_branches.yml
+# skips drafts deliberately, so a draft opened here is the single pull request master's moves
+# never reach : it falls behind at every merge and owes a hand-pressed "Update branch" at the
+# moment somebody wanted to merge it, having bought nothing, since it has to be converted
+# before it can be merged at all. Unassigned is quieter and costs the same way, one list
+# further : what is not on the maintainer's is not scheduled, it is remembered instead.
+#
+# Said at the start of every session rather than left in CLAUDE.md alone, for the reason the
+# alias above exists : a rule that has to be recalled every time is a rule that gets forgotten
+# (#448). CLAUDE.md carries the argument, this carries the reminder -- and it is printed
+# before the early return below, so the second session on a cached container is told too.
+#
+# The login is this repository's maintainer, the same person the trailer above names.
+# tests/cases/11_claude_code_settings.sh checks it against that address rather than trusting
+# the two to stay in step : a wrong login is refused by nothing, GitHub accepts any name that
+# exists, and the work simply lands on a stranger's list
+readonly MAINTAINER_GITHUB_LOGIN="tigerblue77"
+
+echo "session-start : an issue or pull request opened here is assigned to $MAINTAINER_GITHUB_LOGIN and is never a draft -- see CLAUDE.md, \"Conventions\""
+
 # Bounded so that a mirror which accepts a connection and then goes quiet cannot hold the
 # session open : two acquire timeouts because a source line may be either scheme, one retry
 # rather than apt's three, and an outer wall clock in case something below the acquire layer

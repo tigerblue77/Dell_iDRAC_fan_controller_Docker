@@ -93,8 +93,25 @@ function stop_the_monitored_process() {
 
   local WAITED_TENTHS_OF_A_SECOND=0
   local -r DEADLINE_IN_TENTHS_OF_A_SECOND=$((SUPERVISOR_GRACE_PERIOD_IN_SECONDS * 10))
+  local -r SECOND_ASK_IN_TENTHS_OF_A_SECOND=$((SUPERVISOR_SECOND_ASK_DELAY_IN_SECONDS * 10))
+  local HAS_BEEN_ASKED_TWICE=false
   while [ "$WAITED_TENTHS_OF_A_SECOND" -lt "$DEADLINE_IN_TENTHS_OF_A_SECOND" ]; do
     kill -0 "$MONITORED_PROCESS_PID" 2> /dev/null || break
+
+    # Ask once more before giving up on asking. The request above is sometimes lost outright -- a
+    # SIGTERM landing while bash expands a command substitution is swallowed and the process carries on
+    # as though nothing had been sent -- and the handler survives that, so a second signal is honoured
+    # where the first was not. Killing without having asked twice spends this container's own graceful
+    # exit on a process that never heard the question (#443).
+    #
+    # Once, not on every iteration : a process that DID hear the first one is running graceful_exit
+    # right now, and re-entering it is what its own guard exists to prevent rather than something to
+    # provoke repeatedly
+    if ! "$HAS_BEEN_ASKED_TWICE" && [ "$WAITED_TENTHS_OF_A_SECOND" -ge "$SECOND_ASK_IN_TENTHS_OF_A_SECOND" ]; then
+      HAS_BEEN_ASKED_TWICE=true
+      kill -TERM "$MONITORED_PROCESS_PID" 2> /dev/null
+    fi
+
     sleep 0.1
     WAITED_TENTHS_OF_A_SECOND=$((WAITED_TENTHS_OF_A_SECOND + 1))
   done

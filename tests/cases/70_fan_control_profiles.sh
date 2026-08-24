@@ -1069,3 +1069,34 @@ function test_a_cycle_that_applied_the_user_profile_says_so_plainly() {
     "$(fan_control_comment_clause "user's fan control profile applied")" \
     "the cycle that worked says so, whatever the previous one did"
 }
+
+function test_a_second_stop_request_does_not_hand_the_fans_back_twice() {
+  # A stop request can arrive more than once : a second Ctrl-C sends one, and supervisor.sh
+  # deliberately asks twice because the first is sometimes swallowed whole (#188, #249, #443).
+  # Bash runs the trap handler again on each, so without a guard the second one re-enters
+  # graceful_exit() WHILE the first is still running : the IPMI commands go out again and the
+  # log tells the reader the container stopped twice. The commands are idempotent, the line is not
+  HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=true
+  # What the re-entering call finds : the first one has already begun
+  HAS_THE_GRACEFUL_EXIT_STARTED=true
+
+  local -r OUTPUT=$(graceful_exit 2>&1)
+
+  assert_empty "$OUTPUT" "a re-entered graceful_exit should say nothing, the first entry saying it all"
+  assert_equals "0" "$(count_ipmitool_calls_matching "$DELL_DEFAULT_FAN_CONTROL_COMMAND")" \
+    "and send nothing : the entry still running is the one handing the fans back"
+}
+
+function test_the_guard_does_not_stop_the_first_request_from_working() {
+  # The other half : a guard that also swallowed the FIRST request would leave the fans pinned on
+  # every stop, which is the failure this whole file exists to keep away from
+  HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=true
+  HAS_THE_GRACEFUL_EXIT_STARTED=false
+
+  # graceful_exit() ends the shell it runs in, so it is run in one of its own
+  local -r OUTPUT=$(graceful_exit 2>&1)
+
+  assert_contains "$OUTPUT" "Container stopped" "the first request is honoured and says so"
+  assert_equals "1" "$(count_ipmitool_calls_matching "$DELL_DEFAULT_FAN_CONTROL_COMMAND")" \
+    "and hands the fans back to Dell"
+}

@@ -53,6 +53,12 @@ HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
 # again : it costs the supervision that file adds, not the monitoring (issue #440)
 HAS_THE_HEARTBEAT_FAILURE_BEEN_REPORTED=false
 
+# Whether graceful_exit() has already begun. The stop signal can arrive more than once -- a second
+# Ctrl-C, and supervisor.sh deliberately asking twice because the first request is sometimes lost
+# (#443) -- and bash runs the handler again on each one. Declared here, before the trap below, because
+# that is what reads it
+HAS_THE_GRACEFUL_EXIT_STARTED=false
+
 # Catch the stop signals Docker sends so graceful_exit runs before the process ends
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 

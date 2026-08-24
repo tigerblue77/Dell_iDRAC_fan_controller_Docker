@@ -67,6 +67,19 @@ reach `.shellcheckrc`, so the scripts above keep the full lint (issue #432).
   the author and would collapse the two, so the alias carrying the right one is set by
   `.claude/hooks/session-start.sh` at the start of every session and nothing has to be
   remembered (#439). No `Co-Authored-By` is needed : the author field already says it.
+- **Open every issue and pull request assigned to `tigerblue77`, and never as a draft.**
+  Both are fields on the call that creates the thing, and the session that would come back
+  to repair them afterwards has ended by then. Draft is the half with a price on it :
+  `.github/workflows/auto_update_pull_request_branches.yml` skips drafts deliberately, so a
+  pull request opened as one is the pull request "Require branches to be up to date before
+  merging" leaves further behind `master` at every merge, owing a hand-pressed *Update
+  branch* at the moment somebody wanted to merge it — and it has to be converted before it
+  can be merged at all, so the state buys nothing here. Unassigned is quieter and costs the
+  same way : the maintainer's *Assigned* list is where the work is scheduled, and what is
+  not on it has to be remembered instead. A contributor's own draft is untouched by this —
+  the rule is what a session opens, not what that workflow does with a draft it finds.
+  `.claude/hooks/session-start.sh` says both at the start of every session and
+  `tests/cases/11_claude_code_settings.sh` holds them (#448).
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
 - **A new script under the repository root, `.github/` or `.claude/` must be added
