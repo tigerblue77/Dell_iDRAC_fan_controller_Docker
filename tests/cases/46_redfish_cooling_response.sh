@@ -824,3 +824,177 @@ function test_the_controller_puts_dells_default_back_over_redfish_when_the_param
   assert_matches "$OUTPUT" "fan control profile.*Enabled over Redfish" \
     "and the table reports the state that was asked for"
 }
+
+function test_a_missing_https_client_is_not_reported_as_local_mode() {
+  # redfish_request() comes back without an answer for two reasons that need different things from the
+  # reader : local mode, where there is no address to ask, and an HTTPS client that did not run. Both
+  # produced the local mode wording, so a container addressed at 192.168.1.100 with credentials set was
+  # told to "set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD" -- three variables it had set -- while
+  # the real cause went unnamed. Reachable from the README's own "run it from a plain checkout" path, on
+  # a host without perl or without IO::Socket::SSL (#429)
+  local -r CLIENTLESS_DIRECTORY="$TEST_TEMPORARY_DIRECTORY/no_https_client"
+  mkdir -p "$CLIENTLESS_DIRECTORY"
+  cat > "$CLIENTLESS_DIRECTORY/perl" << 'STUB'
+#!/bin/bash
+echo "Can't locate IO/Socket/SSL.pm in @INC" >&2
+exit 2
+STUB
+  chmod +x "$CLIENTLESS_DIRECTORY/perl"
+
+  export MOCK_REDFISH_CONFORMANT_STATUS="200"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  PATH="$CLIENTLESS_DIRECTORY:$PATH" \
+    attempt_the_redfish_cooling_response "Disabled" "Disabled" \
+    > "$TEST_TEMPORARY_DIRECTORY/no_client" 2>&1
+  local -r OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/no_client")
+
+  assert_equals "Not over IPMI (no HTTPS client to ask with)" \
+    "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" \
+    "the column must not claim a network mode container needs network mode"
+  assert_not_contains "$OUTPUT" "Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD" \
+    "they are already set : sending the reader to check them is sending them to the wrong place"
+  assert_matches "$OUTPUT" "IO::Socket::SSL" "the cause has to be named to be fixable"
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "no later cycle grows an HTTPS client"
+}
+
+function test_local_mode_still_says_local_mode() {
+  # The other half of the same branch, so that telling the two causes apart cannot silently become
+  # telling neither
+  export IDRAC_HOST="local"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" \
+    > "$TEST_TEMPORARY_DIRECTORY/local_again" 2>&1
+
+  assert_equals "Not over IPMI (Redfish needs network mode)" \
+    "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
+  assert_matches "$(cat "$TEST_TEMPORARY_DIRECTORY/local_again")" \
+    "Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD" \
+    "here they are genuinely unset, and setting them is genuinely the answer"
+}
+
+function test_a_server_whose_slots_all_hold_dell_cards_is_told_there_is_nothing_to_apply_it_to() {
+  # The last branch of the errand no case reached. A server that has the setting and nothing to apply it
+  # to must say so and settle : "Not supported by this server" would be false about the machine,
+  # "Disabled over Redfish" false about what was done, and re-probing every cycle for the life of the
+  # container is what #347 removed everywhere else
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 6
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" \
+    > "$TEST_TEMPORARY_DIRECTORY/nothing_to_apply" 2>&1
+
+  assert_equals "No third-party PCIe card to apply it to" \
+    "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "no later cycle grows a third-party card"
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "a slot holding a Dell card is airflow Dell has real data for, and is left alone"
+  assert_matches "$(cat "$TEST_TEMPORARY_DIRECTORY/nothing_to_apply")" "6 PCIe slots over Redfish" \
+    "the reader is told what was found rather than only what was not"
+}
+
+function test_one_cycle_of_the_errand_costs_at_most_four_requests() {
+  # The count the budget is shared between : the probe's two URIs, then the write path's read and its
+  # PATCH. It is pinned so that a fifth request cannot join the errand without the arithmetic beside
+  # REDFISH_REQUEST_TIMEOUT_IN_SECONDS being revisited -- the budget is one figure for all of them, so
+  # each new request makes every other one's share smaller rather than adding to the total (#430)
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  # The worst arrangement : the conformant URI is not there, the legacy one answers, and the write is
+  # refused by something that describes a moment
+  export MOCK_REDFISH_CONFORMANT_STATUS="404"
+  export MOCK_REDFISH_LEGACY_STATUS="200"
+  export MOCK_REDFISH_LEGACY_BODY
+  MOCK_REDFISH_LEGACY_BODY=$(make_redfish_attributes_body --slots 4 --third-party "2")
+  export MOCK_REDFISH_PATCH_STATUS="503"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  assert_equals "4" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" \
+    "the errand is two probe requests and two write ones, which is what the timeout has to be read against"
+  assert_equals "true" \
+    "$([ $((4 * REDFISH_REQUEST_TIMEOUT_IN_SECONDS * MAXIMUM_REDFISH_ATTEMPTS)) -le 120 ] && echo true || echo false)" \
+    "and what the whole errand may cost a container over its life stays bounded and stated"
+}
+
+function test_the_errand_spends_one_budget_rather_than_one_per_request() {
+  # Each request used to be given REDFISH_REQUEST_TIMEOUT_IN_SECONDS of its own, and the errand makes up
+  # to four of them : forty seconds inside a cycle whose CHECK_INTERVAL defaults to five, with nothing
+  # reading temperatures meanwhile. The budget is the errand's now, and each request gets what is left of
+  # it -- so an iDRAC that answers slowly is watched spending it, rather than being handed it four times
+  # over (#430)
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_PERL_DELAY_IN_SECONDS=1
+  export MOCK_REDFISH_CONFORMANT_STATUS="404"
+  export MOCK_REDFISH_LEGACY_STATUS="200"
+  export MOCK_REDFISH_LEGACY_BODY
+  MOCK_REDFISH_LEGACY_BODY=$(make_redfish_attributes_body --slots 4 --third-party "2")
+  export MOCK_REDFISH_PATCH_STATUS="503"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  # The timeout the controller chose is the fourth argument of each invocation
+  local -r TIMEOUTS=$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG")
+  local -r FIRST_TIMEOUT=$(printf '%s\n' "$TIMEOUTS" | head -n 1)
+  local -r LAST_TIMEOUT=$(printf '%s\n' "$TIMEOUTS" | tail -n 1)
+
+  assert_equals "4" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "the errand is still four requests at most"
+  assert_equals "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" "$FIRST_TIMEOUT" \
+    "the first request may have the whole budget, nothing having been spent yet"
+  assert_equals "true" "$([ "$LAST_TIMEOUT" -lt "$FIRST_TIMEOUT" ] && echo true || echo false)" \
+    "and the last must be given only what three seconds of answering left of it, not a fourth full share"
+}
+
+function test_no_request_is_ever_given_no_time_at_all() {
+  # A timeout of zero is not "no time left" to HTTP::Tiny, it is no timeout at all -- which would turn an
+  # exhausted budget into the one request that can hang for ever. The floor is a second, and the request
+  # is still made rather than skipped : skipping is how the legacy URI would stop being tried at all on a
+  # server whose conformant one hangs
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_REDFISH_CONFORMANT_STATUS="200"
+
+  # A budget that ran out five seconds ago
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=$(( SECONDS - 5 ))
+  redfish_get "$REDFISH_CONFORMANT_ATTRIBUTES_URI" "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" > /dev/null 2>&1
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=""
+
+  assert_equals "1" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "the request is made rather than skipped"
+  assert_equals "1" "$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG")" \
+    "and given a second, never zero, which perl would read as no timeout at all"
+}
+
+function test_the_way_out_keeps_the_budget_the_deadline_that_kills_it_allows() {
+  # graceful_exit() and supervisor.sh reach set_the_cooling_response_over_redfish() on their own, with the
+  # short per-request timeout #414 sized against the supervisor's grace period. The errand's budget must
+  # not leak into them : a deadline left over from a monitoring cycle would clamp every exit request to
+  # the one second floor, and worse, an unclosed one would do it for the life of the container
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  export MOCK_REDFISH_CONFORMANT_STATUS="200"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  assert_empty "$REDFISH_ERRAND_DEADLINE_IN_SECONDS" \
+    "the errand closes its budget however it returned"
+
+  : > "$MOCK_PERL_CALL_LOG"
+  set_the_cooling_response_over_redfish "Automatic" "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" > /dev/null 2>&1
+
+  assert_equals "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
+    "$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG" | head -n 1)" \
+    "the way out asks for what it was given, not for what is left of somebody else's budget"
+}
