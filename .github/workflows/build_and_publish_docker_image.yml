@@ -382,7 +382,8 @@ jobs:
       # action appends to it. Asked only to generate notes it is handed no body
       # of its own, so it re-sends the body already there and appends the notes
       # it generates to that, and every re-fire added one more copy of the
-      # changelog - v1.71 still carries two - which would eventually have
+      # changelog - v1.71 carried two until it was repaired by hand - which
+      # would eventually have
       # happened to the upgrade notes v1.72 and v1.75 carry above theirs
       # (issue #337).
       #

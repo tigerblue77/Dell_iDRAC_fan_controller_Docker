@@ -297,12 +297,11 @@ function test_the_usage_examples_offer_every_parameter_the_image_declares() {
     return 0
   fi
 
-  # The configuration examples are the fenced blocks of the "Usage" section that
-  # set IDRAC_HOST : the two "docker run" ones and the two docker-compose ones.
-  # Found by what they contain rather than by their position, so that reordering
-  # them, or adding a fifth, needs no change here
-  local -r USAGE_SECTION=$(awk '/^## Usage$/ {inside = 1; next} /^## / {inside = 0} inside' "$REPO_ROOT/README.md")
-
+  # Every fenced block of the README that sets IDRAC_HOST : the two "docker run"
+  # ones, the two docker-compose ones, and the "export" block further down for
+  # running it from a plain checkout. Found by what they contain rather than by
+  # their position -- and read from the whole file rather than from the "Usage"
+  # section, because the export block sits outside it and was the one that drifted
   local -a USAGE_EXAMPLES=()
   local BLOCK="" IS_INSIDE_BLOCK=false LINE
   while IFS= read -r LINE; do
@@ -315,11 +314,11 @@ function test_the_usage_examples_offer_every_parameter_the_image_declares() {
       continue
     fi
     $IS_INSIDE_BLOCK && BLOCK+="$LINE"$'\n'
-  done < <(printf '%s\n' "$USAGE_SECTION")
+  done < "$REPO_ROOT/README.md"
 
   # Without this the loop below would pass by having nothing to iterate over,
   # which is the failure mode these guards exist to prevent in the first place
-  if (( ${#USAGE_EXAMPLES[@]} < 4 )); then
+  if (( ${#USAGE_EXAMPLES[@]} < 5 )); then
     fail "only ${#USAGE_EXAMPLES[@]} usage examples were found in the README, expected at least 4"
     return 1
   fi
@@ -1211,6 +1210,12 @@ function test_the_packages_claude_md_says_the_hook_installs_are_the_ones_it_inst
 }
 
 function test_every_shell_script_carries_the_licence_header() {
+  # The Dockerfile joins the walk : CONTRIBUTING.md calls the two SPDX lines how
+  # AGPL-3.0 section 5(a) is satisfied file by file, and the file that builds the
+  # image is not less of a file for not being a script. And .claude/ at any depth
+  # rather than .claude/hooks/ alone, naming one directory being the mistake the
+  # Shellcheck guard had to correct
+  shopt -s globstar
   # CLAUDE.md states it as a convention and CONTRIBUTING.md as a rule, "test cases,
   # mocks and helpers included", and NOTICE ties these headers to what discharges
   # AGPL 5(a) and 7(b) : this is licence compliance rather than style. The suite
@@ -1220,9 +1225,9 @@ function test_every_shell_script_carries_the_licence_header() {
   # Read from the first five lines, the same window the workflow case uses, so that
   # it sits where a human and a scanner both find it
   local SCRIPT
-  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh "$REPO_ROOT"/.claude/hooks/*.sh \
+  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh "$REPO_ROOT"/.claude/**/*.sh \
     "$TESTS_DIRECTORY"/*.sh "$TESTS_DIRECTORY"/lib/*.sh "$TESTS_DIRECTORY"/cases/*.sh \
-    "$TESTS_DIRECTORY"/mocks/*; do
+    "$TESTS_DIRECTORY"/mocks/* "$REPO_ROOT"/Dockerfile; do
     [ -f "$SCRIPT" ] || continue
 
     if head -5 "$SCRIPT" | grep -q '^# SPDX-License-Identifier: AGPL-3.0-only$'; then

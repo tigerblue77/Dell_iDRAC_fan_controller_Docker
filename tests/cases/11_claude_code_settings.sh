@@ -132,6 +132,17 @@ function test_every_pre_approved_rule_is_one_that_was_argued() {
           "git and docker build were deliberately left out ; a new entry has to be argued the same way, here and in the settings" ;;
     esac
   done < <(printf '%s\n' "$PERMISSION_RULES")
+
+  # The same list read the other way round. The loop above refuses a rule nobody
+  # argued for ; it has nothing to say about one that quietly left, and CLAUDE.md
+  # counts three of them and names all three. A grant that disappears costs no
+  # security and breaks no test -- it just puts the prompts back while the
+  # documentation says they are gone, which is the drift this file exists for
+  local VETTED_RULE
+  for VETTED_RULE in 'Bash(./tests/run_tests.sh)' 'Bash(shellcheck:*)' 'Bash(bash -n:*)'; do
+    assert_contains "$PERMISSION_RULES" "$VETTED_RULE" \
+      "[$VETTED_RULE] is one of the three rules #382 argued for and CLAUDE.md still names, and the settings no longer carry it"
+  done
 }
 
 function test_every_pre_approved_command_is_one_the_repository_still_runs() {
