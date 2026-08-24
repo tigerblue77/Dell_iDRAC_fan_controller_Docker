@@ -79,7 +79,12 @@ reach `.shellcheckrc`, so the scripts above keep the full lint (issue #432).
   not on it has to be remembered instead. A contributor's own draft is untouched by this —
   the rule is what a session opens, not what that workflow does with a draft it finds.
   `.claude/hooks/session-start.sh` says both at the start of every session and
-  `tests/cases/11_claude_code_settings.sh` holds them (#448).
+  `tests/cases/11_claude_code_settings.sh` holds them (#448). **This governs the
+  maintainer's sessions, not everyone who clones the repository** : the two documents that
+  carry the rule travel with the tree, so the hook checks that `origin` is this repository
+  before it says any of it, and says nothing on a fork. A contributor's session is not
+  addressed by this at all — its pull request is theirs to assign and theirs to open as a
+  draft, which is what the branch updater's filter is there to protect (#457).
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
 - **A new script under the repository root, `.github/` or `.claude/` must be added
