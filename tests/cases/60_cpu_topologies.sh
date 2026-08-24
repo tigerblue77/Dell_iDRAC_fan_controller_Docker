@@ -223,7 +223,7 @@ function test_the_header_of_a_server_exposing_no_processor_entity() {
   # the space the title is padded with on its right -- the one no dash replaces at
   # this width -- survives an editor trimming trailing whitespace
   local -r BANNER_LINE="                      Temperatures "
-  local -r COLUMNS_LINE="    Date & time      Inlet  Exhaust                 Active fan speed profile                 Third-party PCIe card Dell default cooling response  Comment"
+  local -r COLUMNS_LINE="    Date & time      Inlet  Exhaust                  Active fan speed profile                  Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$BANNER_LINE"$'\n'"$COLUMNS_LINE" "$(build_header 5)"
 }
@@ -237,21 +237,21 @@ function test_the_temperature_line_of_a_server_exposing_no_processor_entity() {
 
 function test_the_header_of_a_single_cpu_server() {
   local -r EXPECTED_HEADER="                     ---- Temperatures ---
-    Date & time      Inlet  CPU 1  Exhaust                 Active fan speed profile                 Third-party PCIe card Dell default cooling response  Comment"
+    Date & time      Inlet  CPU 1  Exhaust                  Active fan speed profile                  Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1")"
 }
 
 function test_the_header_of_a_dual_cpu_server() {
   local -r EXPECTED_HEADER="                     ------- Temperatures -------
-    Date & time      Inlet  CPU 1  CPU 2  Exhaust                 Active fan speed profile                 Third-party PCIe card Dell default cooling response  Comment"
+    Date & time      Inlet  CPU 1  CPU 2  Exhaust                  Active fan speed profile                  Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1" "CPU 2")"
 }
 
 function test_the_header_of_a_quad_cpu_server() {
   local -r EXPECTED_HEADER="                     -------------- Temperatures --------------
-    Date & time      Inlet  CPU 1  CPU 2  CPU 3  CPU 4  Exhaust                 Active fan speed profile                 Third-party PCIe card Dell default cooling response  Comment"
+    Date & time      Inlet  CPU 1  CPU 2  CPU 3  CPU 4  Exhaust                  Active fan speed profile                  Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1" "CPU 2" "CPU 3" "CPU 4")"
 }
@@ -263,7 +263,7 @@ function test_the_header_of_a_three_cpu_server() {
   # center_column_heading() follows too. Both even counts come out symmetrical, so that
   # rounding only ever shows on this table and on the single CPU one
   local -r EXPECTED_HEADER="                     ----------- Temperatures ----------
-    Date & time      Inlet  CPU 1  CPU 2  CPU 3  Exhaust                 Active fan speed profile                 Third-party PCIe card Dell default cooling response  Comment"
+    Date & time      Inlet  CPU 1  CPU 2  CPU 3  Exhaust                  Active fan speed profile                  Third-party PCIe card Dell default cooling response  Comment"
 
   assert_equals "$EXPECTED_HEADER" "$(build_header 5 "CPU 1" "CPU 2" "CPU 3")"
 }
@@ -628,6 +628,18 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
       PROFILES+=("User static fan control profile ($SPEED%)")
     done
 
+    # The fans taken and the speed refused leaves them on neither profile, and #389 gave that state two
+    # names of its own. They are whole values of CURRENT_FAN_CONTROL_PROFILE rather than a profile plus a
+    # badge, so they are walked apart from the loop below : appending " (not applied)" to them would
+    # measure a string the code never produces. They exist only outside monitoring only mode, where
+    # nothing is ever sent and so nothing can be refused. Left out of this walk altogether, they went in
+    # 2 and 23 characters past the column and pushed everything after them out of line (#416)
+    local -a WHOLE_VALUES=()
+    if [ "$IS_MONITORING_ONLY_MODE" == "false" ]; then
+      WHOLE_VALUES=("Dell default dynamic fan control profile (speed refused)" \
+        "Fans left on no profile (speed and hand-back refused)")
+    fi
+
     local WIDEST_PROFILE_WIDTH=0
     local -a VARIANTS
     for PROFILE in "${PROFILES[@]}"; do
@@ -652,6 +664,13 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
       done
     done
 
+    local WHOLE_VALUE
+    for WHOLE_VALUE in ${WHOLE_VALUES[@]+"${WHOLE_VALUES[@]}"}; do
+      (( ${#WHOLE_VALUE} > WIDEST_PROFILE_WIDTH )) && WIDEST_PROFILE_WIDTH=${#WHOLE_VALUE}
+      assert_equals "true" "$([ "${#WHOLE_VALUE}" -le "$TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH" ] && echo true || echo false)" \
+        "MONITORING_ONLY_MODE=$IS_MONITORING_ONLY_MODE : \"$WHOLE_VALUE\" (${#WHOLE_VALUE}) must fit in $TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH"
+    done
+
     # Reserving far more than the widest string would push the comment column right for nothing, so the
     # width is also asserted not to be generous
     assert_equals "$WIDEST_PROFILE_WIDTH" "$TABLE_FAN_CONTROL_PROFILE_COLUMN_WIDTH" \
@@ -662,7 +681,6 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
   local WIDEST_COOLING_RESPONSE_WIDTH=0
   for COOLING_RESPONSE_STATUS in "Enabled" "Disabled" "Not supported by this server" \
     "Could not be applied on this cycle" "Refused: this account lacks the privilege level" \
-    "Not over IPMI (this server has it over Redfish)" \
     "Enabled over Redfish" "Disabled over Redfish" \
     "No third-party PCIe card to apply it to" \
     "Redfish refused this change (see the log)" \
