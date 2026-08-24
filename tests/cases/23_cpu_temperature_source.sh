@@ -71,6 +71,15 @@ function simulate_iDRAC_reporting_no_CPU() {
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 0 --inlet 23 --exhaust 34)
 }
 
+# The same server as reported hardware actually presents it : the processor entities ARE there, they
+# simply carry no reading. Issue #256 asked which of the two shapes the affected servers have, and the
+# R510 of #378 answered -- it is this one, not the one above
+# Usage : simulate_iDRAC_reporting_every_CPU_as_disabled
+function simulate_iDRAC_reporting_every_CPU_as_disabled() {
+  export MOCK_IPMITOOL_SDR_OUTPUT
+  MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 2 --every-cpu-disabled --inlet 29 --no-exhaust)
+}
+
 # --- The parameter itself -----------------------------------------------------
 
 function test_the_three_sources_are_recognized() {
@@ -744,4 +753,73 @@ function test_a_package_read_column_says_nothing_extra() {
 
   assert_not_contains "$(format_detected_CPU_temperature_sensors)" "hottest core" \
     "nothing is standing in for anything on a chip that has its package"
+}
+
+# --- The shape reported hardware actually has (issues #256, #378) --------------
+
+function test_processor_entities_that_carry_no_reading_are_not_counted_as_CPUs() {
+  # An iDRAC6 on an 11G server lists its processor entities and reports "Disabled" where a temperature
+  # would be. "Disabled" is not a malformed reading to be parsed more cleverly -- it is the absence of
+  # one -- so the entity must not become a column whose value nothing can produce
+  local -r SDR_DATA=$(make_sdr_output --cpus 2 --every-cpu-disabled --inlet 29 --no-exhaust)
+
+  detect_CPU_temperature_sensors "$SDR_DATA"
+
+  assert_equals "0" "${#DETECTED_CPU_ENTITY_IDS[@]}" \
+    "entities 3.1 and 3.2 are listed, but neither carries a temperature"
+}
+
+function test_a_disabled_entity_is_told_apart_from_an_absent_one_only_by_its_reading() {
+  # The two shapes must reach the same verdict, because the container's answer to both is the same :
+  # ask another source. Pinning it here is what stops a looser reading check from making one of them
+  # look like a CPU -- the entity row is present in this one, and only the reading column says no
+  local -r NO_ENTITY_AT_ALL=$(make_sdr_output --cpus 0 --inlet 29)
+  local -r EVERY_ENTITY_DISABLED=$(make_sdr_output --cpus 2 --every-cpu-disabled --inlet 29)
+
+  assert_not_contains "$NO_ENTITY_AT_ALL" "3.1" "this shape emits no processor row"
+  assert_contains "$EVERY_ENTITY_DISABLED" "3.1" "this one does, which is the whole difference"
+
+  detect_CPU_temperature_sensors "$NO_ENTITY_AT_ALL"
+  local -r WITHOUT_ENTITIES=${#DETECTED_CPU_ENTITY_IDS[@]}
+  detect_CPU_temperature_sensors "$EVERY_ENTITY_DISABLED"
+  local -r WITH_DISABLED_ENTITIES=${#DETECTED_CPU_ENTITY_IDS[@]}
+
+  assert_equals "$WITHOUT_ENTITIES" "$WITH_DISABLED_ENTITIES" \
+    "both are a server with no readable CPU, however differently the iDRAC words it"
+}
+
+function test_the_controller_supervises_a_server_whose_cpu_entities_are_all_disabled() {
+  # The end to end path #216 built and #256 asked to confirm, on the shape real hardware has rather
+  # than on the one it was first tested with. Before the fallback this container could do nothing but
+  # hand the fans back to Dell forever
+  provide_local_ipmi_device
+
+  export IDRAC_HOST="local"
+  export CPU_TEMPERATURE_SOURCE="auto"
+  simulate_iDRAC_reporting_every_CPU_as_disabled
+  simulate_readable_CPUs_in_lm_sensors 45.000 47.000
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "reading the CPUs from lm-sensors instead" \
+    "the fallback must engage on this shape too"
+  assert_contains "$OUTPUT" "45°C" "the first CPU should be supervised"
+  assert_contains "$OUTPUT" "47°C" "the second CPU should be supervised"
+  assert_contains "$OUTPUT" "User static fan control profile" \
+    "the fans must finally be driven, which is what this container exists for"
+}
+
+function test_such_a_server_still_reports_the_one_temperature_its_idrac_can_read() {
+  # The R510 of #378 publishes exactly one readable temperature, its intake. Losing it while rescuing
+  # the CPU columns would trade one blind spot for another
+  provide_local_ipmi_device
+
+  export IDRAC_HOST="local"
+  export CPU_TEMPERATURE_SOURCE="auto"
+  simulate_iDRAC_reporting_every_CPU_as_disabled
+  simulate_readable_CPUs_in_lm_sensors 45.000 47.000
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" "29°C" "the intake reading must survive the switch of CPU source"
 }
