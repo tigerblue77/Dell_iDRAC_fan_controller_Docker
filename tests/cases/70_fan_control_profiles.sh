@@ -640,6 +640,117 @@ function test_a_server_refusing_the_speed_every_way_is_reported_rather_than_prob
     has_the_server_refused_fan_control
 }
 
+function test_a_server_refusing_every_identifier_is_never_walked_again() {
+  # The defect this removes : DISCOVERED_FAN_IDENTIFIERS only ever holds identifiers the server
+  # ACCEPTED, so on the one server that accepts none it stayed empty, the guard that stops a re-walk
+  # never fired, and the whole range went back on the wire on every check for the life of the
+  # container -- 32 commands a minute, all 32 known in advance to fail (issue #397)
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "$((MAXIMUM_FAN_IDENTIFIER_PROBES + 1))" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02")" \
+    "the first check asks the whole range once, after the broadcast selector"
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x0")" \
+    "not one identifier may be probed again once the whole range has answered"
+}
+
+function test_a_server_refusing_every_identifier_still_sends_three_commands_a_cycle() {
+  # The headline of #397, pinned as a number rather than described : 35 commands per cycle become the
+  # three that are not known in advance to fail -- take the fans, ask for the speed, hand them back
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "3" "$(count_ipmitool_calls_matching "raw 0x30 0x30")" \
+    "a settled server costs three commands a check, not thirty-five"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" "the fans are still taken"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0xff")" "the speed is still asked for"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "and they are still handed back, so the table never names a profile they are not running"
+}
+
+function test_a_server_that_starts_accepting_the_speed_again_is_noticed_on_the_next_check() {
+  # What the memory must not cost. Remembering that the WALK found nothing is not remembering that the
+  # server refuses fan control : the broadcast command still goes out every check, so a server that
+  # begins answering it is picked up immediately -- the invariant
+  # test_a_refused_fan_speed_never_stops_the_controller_from_trying() exists for
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "speed refused" "the speed was refused every way first"
+
+  # The very next check, against a server that now takes it
+  unset MOCK_IPMITOOL_RAW_FAIL_PATTERN
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+  local -r EXIT_CODE=$?
+
+  assert_equals "0" "$EXIT_CODE"
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0xff")" \
+    "the broadcast command was never stopped, which is the only reason this could be noticed"
+  assert_equals "User static fan control profile (5%)" "$CURRENT_FAN_CONTROL_PROFILE" \
+    "and the profile is applied on the check that follows, not one later"
+}
+
+function test_a_speed_refused_at_every_identifier_is_reported_once_rather_than_every_cycle() {
+  # The raw ipmitool line says the same thing every 60 seconds on a server whose answer is settled, and
+  # adds nothing the second time. Going quiet is not going silent : the profile column still names the
+  # state the fans are in on every row
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_contains "$CAPTURED_OUTPUT" "Failed to set fan speed" \
+    "the check that discovers it still says so"
+
+  capture_output apply_user_fan_control_profile
+
+  assert_not_contains "$CAPTURED_OUTPUT" "Failed to set fan speed" \
+    "the checks that follow have nothing to add"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "speed refused" \
+    "and the row still names the state the fans are in"
+}
+
+function test_an_interrupted_walk_is_never_remembered_as_a_server_that_refused_everything() {
+  # A walk cut short by a busy BMC reached no verdict, so there is nothing to remember and the range
+  # must be asked again. Remembering here would freeze "this server has no fan at any identifier" out
+  # of a moment, and no later check could ever undo it
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  export MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN="0x30 0x30 0x02 0x03"
+
+  capture_output apply_user_fan_control_profile
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x00")" \
+    "the range is walked again after a walk that answered nothing"
+
+  # And once a check finally gets a complete answer, that one IS remembered
+  unset MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN
+  capture_output apply_user_fan_control_profile
+
+  forget_recorded_ipmitool_calls
+  capture_output apply_user_fan_control_profile
+
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x02 0x00")" \
+    "a walk that reached the end of the range settles it"
+}
+
 function test_a_server_that_takes_the_broadcast_selector_never_probes_a_single_fan() {
   # The fallback must be invisible on healthy hardware : one command, no walk, no message
   DECIMAL_FAN_SPEED=30
