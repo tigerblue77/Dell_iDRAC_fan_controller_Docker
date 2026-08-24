@@ -100,13 +100,14 @@ the whole suite, every case file being sourced into the same shell : the runner
 refuses to run rather than let one definition silently replace another.
 
 ```bash
-function test_a_single_cpu_server_reports_one_cpu() {
+function test_a_single_socket_server_reports_one_cpu() {
   export MOCK_IPMITOOL_SDR_OUTPUT
   MOCK_IPMITOOL_SDR_OUTPUT=$(make_sdr_output --cpus 1 --cpu-temperatures "44")
 
-  retrieve_temperatures "$SDR_DATA"
+  detect_CPU_temperature_sensors "$(retrieve_sdr_temperature_data)"
+  retrieve_temperatures
 
-  assert_equals "1" "$NUMBER_OF_DETECTED_CPUS"
+  assert_equals "1" "${#DETECTED_CPU_ENTITY_IDS[@]}"
 }
 ```
 
