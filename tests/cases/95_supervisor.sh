@@ -36,7 +36,10 @@ function run_supervisor() {
 
   local EXIT_CODE=0
   (
-    cd "$REPO_ROOT" || exit 1
+    # The throwaway repository rather than this one : the controller the supervisor starts
+    # would otherwise record its cycles at the image's real /run path, on the machine running
+    # the suite, where two runs would then share one file (issue #440)
+    cd "${CONTROLLER_WORKING_DIRECTORY:-$REPO_ROOT}" || exit 1
 
     bash ./supervisor.sh "$STAND_IN" > "$OUTPUT_FILE" 2>&1 &
     SUPERVISOR_PID=$!
@@ -64,7 +67,10 @@ function run_supervisor_with_no_argument() {
 
   local EXIT_CODE=0
   (
-    cd "$REPO_ROOT" || exit 1
+    # The throwaway repository rather than this one : the controller the supervisor starts
+    # would otherwise record its cycles at the image's real /run path, on the machine running
+    # the suite, where two runs would then share one file (issue #440)
+    cd "${CONTROLLER_WORKING_DIRECTORY:-$REPO_ROOT}" || exit 1
 
     bash ./supervisor.sh > "$OUTPUT_FILE" 2>&1 &
     SUPERVISOR_PID=$!

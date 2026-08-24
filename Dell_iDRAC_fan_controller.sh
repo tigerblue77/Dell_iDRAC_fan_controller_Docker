@@ -44,6 +44,10 @@ IS_THE_COOLING_RESPONSE_A_REDFISH_QUESTION=false
 IS_FAN_CONTROL_SUPPORTED=true
 HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
 
+# Whether the healthcheck's heartbeat has already been reported unwritable. It is said once and never
+# again : it costs the supervision that file adds, not the monitoring (issue #440)
+HAS_THE_HEARTBEAT_FAILURE_BEEN_REPORTED=false
+
 # Catch the stop signals Docker sends so graceful_exit runs before the process ends
 trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 
@@ -414,6 +418,10 @@ while true; do
         printf "%19s  Target server is powered off, no fan control profile applied.\n" "$TIMESTAMP"
       fi
 
+      # A skipped cycle is a completed one : the server is off, or its iDRAC was briefly unreachable,
+      # and this container observed that correctly rather than stopping
+      note_that_this_cycle_completed
+
       wait $SLEEP_PROCESS_PID
 
       # Start timer in background for next cycle
@@ -629,6 +637,10 @@ while true; do
   print_temperature_array_line "$CPU_COLUMN_CONTENT_WIDTH" "$INLET_TEMPERATURE" "$CPUS_TEMPERATURES" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
   IS_FIRST_MONITORING_CYCLE=false
   ((TABLE_HEADER_PRINT_COUNTER++))
+
+  # The row is printed and the profile is applied : this cycle is done, which is what the healthcheck
+  # reads to tell a running loop from a wedged one (issue #440)
+  note_that_this_cycle_completed
 
   wait $SLEEP_PROCESS_PID
 

@@ -1323,7 +1323,7 @@ function test_the_image_installs_the_packages_it_names_and_nothing_else() {
 
 function test_the_healthcheck_succeeds_when_the_sensors_can_be_read() {
   local OUTPUT
-  OUTPUT=$(bash "$REPO_ROOT/healthcheck.sh" 2>&1)
+  OUTPUT=$(cd "$CONTROLLER_WORKING_DIRECTORY" && bash ./healthcheck.sh 2>&1)
   local -r EXIT_CODE=$?
 
   assert_equals 0 "$EXIT_CODE" "the healthcheck should succeed when ipmitool answers"
@@ -1335,9 +1335,128 @@ function test_the_healthcheck_fails_when_the_sensors_cannot_be_read() {
   export MOCK_IPMITOOL_SDR_OUTPUT=""
 
   local EXIT_CODE=0
-  bash "$REPO_ROOT/healthcheck.sh" > /dev/null 2>&1 || EXIT_CODE=$?
+  (cd "$CONTROLLER_WORKING_DIRECTORY" && bash ./healthcheck.sh) > /dev/null 2>&1 || EXIT_CODE=$?
 
   assert_not_equals 0 "$EXIT_CODE" "the healthcheck should fail when ipmitool fails, so Docker restarts the container"
+}
+
+# The heartbeat the healthcheck reads to tell a running monitoring loop from a wedged
+# one. Until #440 the check only ever asked whether the TEMPERATURE SOURCE answered,
+# so an iDRAC that kept answering while the loop had stopped left the container
+# healthy with the fans pinned at FAN_SPEED and nothing evaluating the threshold --
+# the one state with no recovery, the restart policy never firing.
+#
+# setup_test_context() points HEARTBEAT_FILE at this run's own temporary directory,
+# the CI runner not being root and /run not being writable there
+function test_a_recorded_cycle_says_the_monitoring_loop_is_running() {
+  note_that_this_cycle_completed
+
+  assert_command_succeeds "a completed cycle should be recorded" \
+    test -f "$TEST_HEARTBEAT_FILE" || return 1
+  assert_command_succeeds "a cycle recorded just now is a loop that is running" \
+    is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"
+}
+
+function test_a_loop_that_stopped_recording_its_cycles_is_reported() {
+  export CHECK_INTERVAL=5
+
+  note_that_this_cycle_completed
+
+  # Well past three check intervals AND past the one minute floor below them
+  local LONG_AGO
+  printf -v LONG_AGO '%(%s)T' -1
+  touch -d "@$((LONG_AGO - 600))" "$TEST_HEARTBEAT_FILE"
+
+  assert_command_fails "a record that stopped moving is a loop that stopped running" \
+    is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"
+}
+
+function test_no_cycle_recorded_yet_is_never_a_verdict() {
+  # The file does not exist before the first cycle, and the loop that waits for a
+  # powered-off server to come back can run for hours by design before there is one.
+  # Calling that unhealthy would restart exactly the container that loop exists to
+  # keep alive, which is why absence is deliberately not a fault
+  rm -f "$TEST_HEARTBEAT_FILE"
+
+  assert_command_succeeds "a container that has not completed a cycle yet is not a wedged one" \
+    is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"
+}
+
+function test_an_unreadable_record_is_never_a_verdict_either() {
+  # Same reasoning as the ipmitool completion codes : an answer that was not
+  # understood says nothing about the thing it was asked about
+  printf 'not a timestamp\n' > "$TEST_HEARTBEAT_FILE"
+  # stat reads the inode rather than the content, so the reading is broken the only
+  # way it can be from the outside : by taking the file away underneath it
+  rm -f "$TEST_HEARTBEAT_FILE"
+
+  assert_command_succeeds "a record that cannot be read is not a loop that stopped" \
+    is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"
+}
+
+function test_a_short_check_interval_cannot_make_the_deadline_tighter_than_the_floor() {
+  # Three cycles of a 1 second interval is 3 seconds, which a single cycle's own IPMI
+  # round trips can exceed on a slow iDRAC. Without the floor the healthcheck would
+  # fail on every check of a container that is working, and Docker's --retries=3 would
+  # turn that into a restart loop on a machine whose fans this container is holding
+  export CHECK_INTERVAL=1
+
+  note_that_this_cycle_completed
+
+  local NOW
+  printf -v NOW '%(%s)T' -1
+  # Older than three cycles, younger than the floor
+  touch -d "@$((NOW - 30))" "$TEST_HEARTBEAT_FILE"
+
+  assert_command_succeeds "the deadline should never fall below ${MINIMUM_HEARTBEAT_STALENESS_IN_SECONDS}s" \
+    is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"
+
+  touch -d "@$((NOW - MINIMUM_HEARTBEAT_STALENESS_IN_SECONDS - 30))" "$TEST_HEARTBEAT_FILE"
+
+  assert_command_fails "past the floor it is still a verdict" \
+    is_the_monitoring_loop_still_reporting "$CHECK_INTERVAL"
+}
+
+function test_the_healthcheck_fails_on_a_loop_that_stopped_even_when_the_idrac_answers() {
+  # The whole point of #440 : ipmitool answering is not the container working. Run
+  # from the throwaway repository so the healthcheck reads the same redirected
+  # heartbeat the test wrote
+  export CHECK_INTERVAL=5
+
+  note_that_this_cycle_completed
+
+  local NOW
+  printf -v NOW '%(%s)T' -1
+  touch -d "@$((NOW - 600))" "$TEST_HEARTBEAT_FILE"
+
+  local EXIT_CODE=0
+  local OUTPUT
+  OUTPUT=$(cd "$CONTROLLER_WORKING_DIRECTORY" && bash ./healthcheck.sh 2>&1) || EXIT_CODE=$?
+
+  assert_not_equals 0 "$EXIT_CODE" \
+    "the healthcheck should fail on a wedged loop, so Docker restarts the container"
+  assert_contains "$OUTPUT" "has not completed a cycle" \
+    "and say which of the two states it found"
+  assert_not_contains "$OUTPUT" "degrees C" \
+    "it should not go on to read the sensors it has already decided about"
+}
+
+function test_a_heartbeat_that_cannot_be_written_is_said_once_and_never_again() {
+  # It costs the supervision this file adds, not the monitoring, so it is a warning
+  # rather than a reason to stop -- and repeating it every cycle would be the log
+  # spam this project removes everywhere else
+  HEARTBEAT_FILE="$TEST_TEMPORARY_DIRECTORY/a_directory_that_does_not_exist/heartbeat"
+
+  local FIRST SECOND
+  capture_output note_that_this_cycle_completed
+  FIRST="$CAPTURED_OUTPUT"
+  capture_output note_that_this_cycle_completed
+  SECOND="$CAPTURED_OUTPUT"
+
+  assert_contains "$FIRST" "Could not write" "the first failure should be reported"
+  assert_contains "$FIRST" "Fan control and temperature monitoring are unaffected" \
+    "and say what it does and does not cost"
+  assert_empty "$SECOND" "the second one should say nothing"
 }
 
 function test_no_boolean_parameter_is_dispatched_unquoted() {
