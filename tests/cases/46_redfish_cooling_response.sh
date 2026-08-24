@@ -927,10 +927,9 @@ function test_one_cycle_of_the_errand_costs_at_most_four_requests() {
 
 function test_the_errand_spends_one_budget_rather_than_one_per_request() {
   # Each request used to be given REDFISH_REQUEST_TIMEOUT_IN_SECONDS of its own, and the errand makes up
-  # to four of them : forty seconds inside a cycle whose CHECK_INTERVAL defaults to five, with nothing
-  # reading temperatures meanwhile. The budget is the errand's now, and each request gets what is left of
-  # it -- so an iDRAC that answers slowly is watched spending it, rather than being handed it four times
-  # over (#430)
+  # to four of them. The budget is the errand's now, and each request gets what is left of it -- watched
+  # here on the probe's pair, which is the one place two requests still share a cycle : the conformant
+  # URI answers 404 quickly enough to be worth trying the legacy one straight away (#430)
   export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
   : > "$MOCK_PERL_CALL_LOG"
   export MOCK_PERL_DELAY_IN_SECONDS=1
@@ -938,22 +937,82 @@ function test_the_errand_spends_one_budget_rather_than_one_per_request() {
   export MOCK_REDFISH_LEGACY_STATUS="200"
   export MOCK_REDFISH_LEGACY_BODY
   MOCK_REDFISH_LEGACY_BODY=$(make_redfish_attributes_body --slots 4 --third-party "2")
-  export MOCK_REDFISH_PATCH_STATUS="503"
   REDFISH_ATTEMPTS=0
   REDFISH_COOLING_RESPONSE_SETTLED=false
+  REDFISH_ATTRIBUTES_URI=""
+  IS_THE_REDFISH_WRITE_PLANNED=false
 
   attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
 
-  # The timeout the controller chose is the fourth argument of each invocation
+  # The timeout the controller chose is the last argument of each invocation
   local -r TIMEOUTS=$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG")
   local -r FIRST_TIMEOUT=$(printf '%s\n' "$TIMEOUTS" | head -n 1)
   local -r LAST_TIMEOUT=$(printf '%s\n' "$TIMEOUTS" | tail -n 1)
 
-  assert_equals "4" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "the errand is still four requests at most"
+  assert_equals "2" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" \
+    "the probe's two URIs share one cycle ; the write does not join them on an iDRAC this slow"
   assert_equals "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" "$FIRST_TIMEOUT" \
     "the first request may have the whole budget, nothing having been spent yet"
   assert_equals "true" "$([ "$LAST_TIMEOUT" -lt "$FIRST_TIMEOUT" ] && echo true || echo false)" \
-    "and the last must be given only what three seconds of answering left of it, not a fourth full share"
+    "and the second is given only what the first left of it, not a second full share"
+}
+
+function test_a_slow_idrac_gets_one_request_per_cycle_instead_of_a_stretched_one() {
+  # The rhythm the loop keeps is max(CHECK_INTERVAL, the work), so work that runs long stretches the gap
+  # between two runs of is_any_CPU_overheating() -- the only thing that takes fans off the user's static
+  # speed. An iDRAC answering in a second or more therefore gets its errand spread over cycles : ask on
+  # one, read the slots back on the next, write on the one after. Each cycle spends one request (#444)
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  export MOCK_PERL_DELAY_IN_SECONDS=1
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  REDFISH_ATTRIBUTES_URI=""
+  IS_THE_REDFISH_WRITE_PLANNED=false
+
+  # Cycle one : the server is asked whether it has the setting, and nothing else
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+  assert_equals "1" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "the asking is a cycle's work on its own"
+  assert_equals "$REDFISH_SLOW_ANSWER_STATUS" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" \
+    "and the column says why the rest waits, rather than reporting a failure that did not happen"
+  assert_equals "false" "$REDFISH_COOLING_RESPONSE_SETTLED" "stopping for time settles nothing"
+
+  # Cycle two : the slots are read back. The server is not asked again -- that answer does not change
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+  assert_equals "2" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "one more request, not three"
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" "and nothing written yet"
+
+  # Cycle three : the PATCH
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+  assert_equals "1" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" "the write lands on the cycle after the read"
+  assert_matches "$(cat "$MOCK_REDFISH_PATCH_LOG")" '"PCIeSlotLFM\.2\.LFMMode":"Disabled"'
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "and the errand is done"
+  assert_equals "0" "$REDFISH_ATTEMPTS" \
+    "spreading the work over cycles is progress, not failed attempts : the retry budget is untouched"
+}
+
+function test_a_healthy_idrac_still_does_the_whole_errand_in_one_cycle() {
+  # The other half of the same decision. Splitting across cycles is for a server slow enough that the
+  # work would run past the interval ; one answering in milliseconds must still be finished with in one
+  # cycle, exactly as before #444
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  REDFISH_ATTRIBUTES_URI=""
+  IS_THE_REDFISH_WRITE_PLANNED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" "one cycle is enough on a server that answers"
+  assert_equals "1" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" "and the setting is applied in it"
+  assert_equals "Disabled over Redfish" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS"
 }
 
 function test_no_request_is_ever_given_no_time_at_all() {
@@ -997,4 +1056,37 @@ function test_the_way_out_keeps_the_budget_the_deadline_that_kills_it_allows() {
   assert_equals "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
     "$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG" | head -n 1)" \
     "the way out asks for what it was given, not for what is left of somebody else's budget"
+}
+
+function test_a_fast_errand_that_straddles_a_second_is_not_split() {
+  # The regression guard for how #444 was first written. Asking a whole-second counter whether a second
+  # has passed answers yes for any errand that crosses a boundary, however fast it was -- so a healthy
+  # iDRAC answering in milliseconds got its errand split across cycles whenever the boundary happened to
+  # fall inside it. That is a coin toss, which is why it passed here and failed on the runner.
+  #
+  # This case removes the luck : it waits until a boundary is imminent, THEN runs the errand, so the
+  # straddle is certain. Under a whole-second reading it fails every time
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  REDFISH_ATTRIBUTES_URI=""
+  IS_THE_REDFISH_WRITE_PLANNED=false
+
+  # Up to a second of 10ms steps, until the clock is within 50ms of ticking over
+  local WAITED_HUNDREDTHS=0
+  local FRACTION
+  while [ "$WAITED_HUNDREDTHS" -lt 100 ]; do
+    FRACTION="${EPOCHREALTIME#*[.,]}"
+    [ "${FRACTION:0:2}" == "99" ] && break
+    command -p sleep 0.01
+    WAITED_HUNDREDTHS=$((WAITED_HUNDREDTHS + 1))
+  done
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  assert_equals "true" "$REDFISH_COOLING_RESPONSE_SETTLED" \
+    "crossing a second is not spending one : a server answering in milliseconds is finished with in one cycle"
+  assert_equals "1" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" "and the setting is applied in it"
 }
