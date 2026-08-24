@@ -436,7 +436,11 @@ function test_the_sign_off_gate_knows_the_identities_the_hook_sets() {
   # The gate runs in a workflow that never sources the hook, so the two addresses are
   # written in both files. Held together here rather than left to agree by hand : a
   # change to either that missed the other would not fail, it would quietly stop
-  # matching, and the gate would go green on the very commits it exists to refuse
+  # matching, and the gate would go green on the very commits it exists to refuse.
+  #
+  # Read allowing indentation on the hook's side : those constants sit inside the branch
+  # that only runs where this repository is the origin (#459), and an anchored read of them
+  # is exactly the "quietly stops matching" this case was written about
   local -r HOOK="$REPO_ROOT/.claude/hooks/session-start.sh"
 
   if [ ! -f "$HOOK" ] || [ ! -f "$REPO_ROOT/$SIGN_OFF_SCRIPT" ]; then
@@ -445,7 +449,7 @@ function test_the_sign_off_gate_knows_the_identities_the_hook_sets() {
   fi
 
   local HOOK_AGENT_EMAIL GATE_AGENT_EMAIL
-  HOOK_AGENT_EMAIL=$(sed -n 's/^readonly AGENT_EMAIL="\(.*\)"$/\1/p' "$HOOK")
+  HOOK_AGENT_EMAIL=$(sed -n 's/^[[:space:]]*readonly AGENT_EMAIL="\(.*\)"$/\1/p' "$HOOK")
   GATE_AGENT_EMAIL=$(sed -n 's/^readonly AGENT_EMAIL="\(.*\)"$/\1/p' "$REPO_ROOT/$SIGN_OFF_SCRIPT")
 
   assert_not_empty "$HOOK_AGENT_EMAIL" "the hook should state the address it authors under" || return 1
@@ -453,7 +457,7 @@ function test_the_sign_off_gate_knows_the_identities_the_hook_sets() {
     "the gate has to look for the address the hook actually authors under"
 
   local HOOK_SIGN_OFF_EMAIL GATE_SIGN_OFF_EMAIL
-  HOOK_SIGN_OFF_EMAIL=$(sed -n 's/^readonly SIGN_OFF_EMAIL="\(.*\)"$/\1/p' "$HOOK")
+  HOOK_SIGN_OFF_EMAIL=$(sed -n 's/^[[:space:]]*readonly SIGN_OFF_EMAIL="\(.*\)"$/\1/p' "$HOOK")
   GATE_SIGN_OFF_EMAIL=$(sed -n 's/^readonly SIGN_OFF_EMAIL="\(.*\)"$/\1/p' "$REPO_ROOT/$SIGN_OFF_SCRIPT")
 
   assert_not_empty "$HOOK_SIGN_OFF_EMAIL" "and the address it puts on the trailer" || return 1
