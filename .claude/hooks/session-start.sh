@@ -56,107 +56,128 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
-# The two identities a commit made here carries, set before anything below can exit
-# early : the container is cached once this has run, so a second session reaches the
-# "already installed" return and nothing after it.
+# WHOSE COPY OF THIS REPOSITORY THIS IS, which decides everything below it.
 #
-# A commit has three identity fields, and they answer two different questions. WHO WROTE IT
-# is the author, and that is the tool : git log, git blame, git shortlog and GitHub's
-# contributor graph all read that field, so recording the tool anywhere else is not
-# recording it. WHO CERTIFIES IT is the Signed-off-by trailer -- CONTRIBUTING.md asks for
-# "a real name and a reachable address" and the DCO's own text is first-person, "I certify
-# that", which a tool cannot say -- so that one is the maintainer's.
-#
-# Collapsing the two is what issue #388 refused to leave standing, and it can be collapsed
-# in either direction. Left alone, a session writes "Signed-off-by: Claude
-# <noreply@anthropic.com>", a trailer that satisfies the gate in .github/check_sign_off.sh
-# while naming nobody who could make the attestation. Setting user.* to the maintainer
-# repairs that trailer but moves the confusion into the author field, where the log then
-# says the maintainer typed what a tool wrote (#439). Setting each field to the identity it
-# is actually asking about is what says both things at once.
-#
-# The trailer therefore cannot come from "commit -s", which derives it from user.* -- the
-# very fields that have to stay the tool's. It is passed explicitly instead, wrapped in an
-# alias so that it is a command rather than something to remember : a rule that needs a
-# human to recall it every time is a rule that will be forgotten, which is why #421 put the
-# identity here in the first place.
-#
-# /!\ Do not fold this into "trailer.<token>.key". That config does work -- with the key
-# spelled exactly "Signed-off-by", git supplies the ": " separator and the gate accepts the
-# result -- but it fails invisibly when the key is spelled with the separator already in it.
-# "Signed-off-by: " (trailing space) emits a line that is byte-for-byte identical to a valid
-# sign-off, that "git log" displays normally and that %(trailers) lists, while a keyed read
-# of it returns empty : git stored the key WITH the separator, so the gate looks for
-# "Signed-off-by", finds nothing, and refuses a commit whose message looks perfectly right.
-# There is no symptom to notice and nothing reports it. The alias carries the whole trailer
-# as one string instead, where a mistake shows up in the line itself.
-#
-# What this does not do is make the certification true by itself : the maintainer certifies
-# by reviewing and merging. It only stops either field from saying something else meanwhile.
-# See CONTRIBUTING.md, "Contributions written by an agent".
-#
-# Repository-local on purpose -- this is this project's rule, and nothing here should reach
-# into a configuration the session may share with other work
-readonly SIGN_OFF_NAME="Tigerblue77"
-readonly SIGN_OFF_EMAIL="37409593+tigerblue77@users.noreply.github.com"
-readonly AGENT_NAME="Claude"
-readonly AGENT_EMAIL="noreply@anthropic.com"
-
-if ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.name "$AGENT_NAME" 2> /dev/null ||
-  ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.email "$AGENT_EMAIL" 2> /dev/null ||
-  ! git -C "${CLAUDE_PROJECT_DIR:-.}" config alias.signoff "commit --trailer \"Signed-off-by: $SIGN_OFF_NAME <$SIGN_OFF_EMAIL>\"" 2> /dev/null; then
-  echo "session-start : could not set the git identity and its sign-off alias, so a commit made here would be authored and signed off by the session's default rather than by the tool and the maintainer"
-fi
-
-# The other half of what a session here has to know before it touches GitHub, and the half
-# there is nothing to configure for : an issue and a pull request are not settings, they are
-# created through the platform's API with whatever the caller passes, and both fields below
-# are decided at that call. A web session is told by its harness to open a pull request as a
-# DRAFT, and told by nobody to assign anything, so both end up at a value nobody here chose --
-# and the session that would come back to repair them has ended by then.
-#
-# Draft is the one with a price on it. .github/workflows/auto_update_pull_request_branches.yml
-# skips drafts deliberately, so a draft opened here is the single pull request master's moves
-# never reach : it falls behind at every merge and owes a hand-pressed "Update branch" at the
-# moment somebody wanted to merge it, having bought nothing, since it has to be converted
-# before it can be merged at all. Unassigned is quieter and costs the same way, one list
-# further : what is not on the maintainer's is not scheduled, it is remembered instead.
-#
-# Said at the start of every session rather than left in CLAUDE.md alone, for the reason the
-# alias above exists : a rule that has to be recalled every time is a rule that gets forgotten
-# (#448). CLAUDE.md carries the argument, this carries the reminder -- and it is printed
-# before the early return below, so the second session on a cached container is told too.
-#
-# The login is this repository's maintainer, the same person the trailer above names.
-# tests/cases/11_claude_code_settings.sh checks it against that address rather than trusting
-# the two to stay in step : a wrong login is refused by nothing, GitHub accepts any name that
-# exists, and the work simply lands on a stranger's list
-readonly MAINTAINER_GITHUB_LOGIN="tigerblue77"
-
-# Said to the maintainer's own sessions, and to nobody else's. This file is repository
-# content : it is cloned with the tree, so a contributor working on their FORK runs it too,
-# and neither half of the sentence is true there. GitHub silently drops "assignees" from a
-# caller without write access -- the call succeeds, the field stays empty, and nothing says
-# so -- and a contributor's draft is exactly what the branch updater's filter was written to
-# leave alone. Telling somebody else's agent otherwise is the one way this rule can do harm
-# rather than none (#457).
+# This file is repository content : it is cloned with the tree, so a contributor working on
+# their own FORK runs it exactly as the maintainer's session does. Everything this script
+# has to say is about this project's conventions -- an identity to commit under, an issue
+# and pull request rule -- and none of it is addressed to them. Said there anyway, it does
+# real harm rather than none : the sign-off alias puts THE MAINTAINER'S Developer
+# Certificate of Origin attestation on work the maintainer has never seen, silently, on a
+# commit .github/check_sign_off.sh is built to accept because that pairing is the one #439
+# asked it to enforce. CONTRIBUTING.md has always said the opposite to a contributor --
+# "sign your own work, with your own name" -- and this was the one thing in the tree
+# contradicting it (#459).
 #
 # The fork is visible in one command, in either URL form : "https://github.com/<owner>/..."
 # and "git@github.com:<owner>/...". Lower-cased because a clone URL keeps whatever case was
 # typed, while a GitHub login compares case-insensitively.
 #
-# Silence is the default on every other answer, deliberately. A checkout with no origin, or
-# with the remote under another name, loses the reminder rather than handing it to a
-# stranger : CLAUDE.md still carries the rule for the sessions it is addressed to, so what
-# is lost there is the belt and not the braces, where the opposite mistake instructs
-# somebody else's agent
+# Any other answer is treated as "not this repository", deliberately. A checkout with no
+# origin, or with the remote under another name, loses what CLAUDE.md still carries in
+# writing -- the belt, not the braces -- where the opposite default hands a stranger's
+# session an identity and a rule that are not theirs (#457, #459).
+#
+# The login is this repository's maintainer, the same person the trailer below names.
+# tests/cases/11_claude_code_settings.sh checks it against that address rather than trusting
+# the two to stay in step : a wrong login is refused by nothing, GitHub accepts any name that
+# exists, and the work simply lands on a stranger's list.
+#
+# Written as two tests and no "fi" of its own so that the region below closes on the first
+# one at column zero, which is how the suite lifts it out to run it against an origin of its
+# choosing -- the only way to see what a fork is told without owning one
+readonly MAINTAINER_GITHUB_LOGIN="tigerblue77"
+
 ORIGIN_URL=""
 ORIGIN_URL="$(git -C "${CLAUDE_PROJECT_DIR:-.}" remote get-url origin 2> /dev/null)"
 ORIGIN_URL="${ORIGIN_URL,,}"
 
-if [[ "$ORIGIN_URL" == *"/${MAINTAINER_GITHUB_LOGIN,,}/"* ]] ||
-  [[ "$ORIGIN_URL" == *":${MAINTAINER_GITHUB_LOGIN,,}/"* ]]; then
+IS_THIS_REPOSITORY=false
+[[ "$ORIGIN_URL" == *"/${MAINTAINER_GITHUB_LOGIN,,}/"* ]] && IS_THIS_REPOSITORY=true
+[[ "$ORIGIN_URL" == *":${MAINTAINER_GITHUB_LOGIN,,}/"* ]] && IS_THIS_REPOSITORY=true
+readonly IS_THIS_REPOSITORY
+
+if "$IS_THIS_REPOSITORY"; then
+  # The two identities a commit made here carries, set before anything below can exit
+  # early : the container is cached once this has run, so a second session reaches the
+  # "already installed" return and nothing after it.
+  #
+  # A commit has three identity fields, and they answer two different questions. WHO WROTE IT
+  # is the author, and that is the tool : git log, git blame, git shortlog and GitHub's
+  # contributor graph all read that field, so recording the tool anywhere else is not
+  # recording it. WHO CERTIFIES IT is the Signed-off-by trailer -- CONTRIBUTING.md asks for
+  # "a real name and a reachable address" and the DCO's own text is first-person, "I certify
+  # that", which a tool cannot say -- so that one is the maintainer's.
+  #
+  # Collapsing the two is what issue #388 refused to leave standing, and it can be collapsed
+  # in either direction. Left alone, a session writes "Signed-off-by: Claude
+  # <noreply@anthropic.com>", a trailer that satisfies the gate in .github/check_sign_off.sh
+  # while naming nobody who could make the attestation. Setting user.* to the maintainer
+  # repairs that trailer but moves the confusion into the author field, where the log then
+  # says the maintainer typed what a tool wrote (#439). Setting each field to the identity it
+  # is actually asking about is what says both things at once.
+  #
+  # The trailer therefore cannot come from "commit -s", which derives it from user.* -- the
+  # very fields that have to stay the tool's. It is passed explicitly instead, wrapped in an
+  # alias so that it is a command rather than something to remember : a rule that needs a
+  # human to recall it every time is a rule that will be forgotten, which is why #421 put the
+  # identity here in the first place.
+  #
+  # /!\ Do not fold this into "trailer.<token>.key". That config does work -- with the key
+  # spelled exactly "Signed-off-by", git supplies the ": " separator and the gate accepts the
+  # result -- but it fails invisibly when the key is spelled with the separator already in it.
+  # "Signed-off-by: " (trailing space) emits a line that is byte-for-byte identical to a valid
+  # sign-off, that "git log" displays normally and that %(trailers) lists, while a keyed read
+  # of it returns empty : git stored the key WITH the separator, so the gate looks for
+  # "Signed-off-by", finds nothing, and refuses a commit whose message looks perfectly right.
+  # There is no symptom to notice and nothing reports it. The alias carries the whole trailer
+  # as one string instead, where a mistake shows up in the line itself.
+  #
+  # What this does not do is make the certification true by itself : the maintainer certifies
+  # by reviewing and merging. It only stops either field from saying something else meanwhile.
+  # See CONTRIBUTING.md, "Contributions written by an agent".
+  #
+  # Repository-local on purpose -- this is this project's rule, and nothing here should reach
+  # into a configuration the session may share with other work
+  readonly SIGN_OFF_NAME="Tigerblue77"
+  readonly SIGN_OFF_EMAIL="37409593+tigerblue77@users.noreply.github.com"
+  readonly AGENT_NAME="Claude"
+  readonly AGENT_EMAIL="noreply@anthropic.com"
+
+  if ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.name "$AGENT_NAME" 2> /dev/null ||
+    ! git -C "${CLAUDE_PROJECT_DIR:-.}" config user.email "$AGENT_EMAIL" 2> /dev/null ||
+    ! git -C "${CLAUDE_PROJECT_DIR:-.}" config alias.signoff "commit --trailer \"Signed-off-by: $SIGN_OFF_NAME <$SIGN_OFF_EMAIL>\"" 2> /dev/null; then
+    echo "session-start : could not set the git identity and its sign-off alias, so a commit made here would be authored and signed off by the session's default rather than by the tool and the maintainer"
+  fi
+
+  # The other half of what a session here has to know before it touches GitHub, and the half
+  # there is nothing to configure for : an issue and a pull request are not settings, they
+  # are created through the platform's API with whatever the caller passes, and both fields
+  # are decided at that call. A web session is told by its harness to open a pull request as
+  # a DRAFT, and told by nobody to assign anything, so both end up at a value nobody here
+  # chose -- and the session that would come back to repair them has ended by then.
+  #
+  # Draft is the one with a price on it.
+  # .github/workflows/auto_update_pull_request_branches.yml skips drafts deliberately, so a
+  # draft opened here is the single pull request master's moves never reach : it falls behind
+  # at every merge and owes a hand-pressed "Update branch" at the moment somebody wanted to
+  # merge it, having bought nothing, since it has to be converted before it can be merged at
+  # all. Unassigned is quieter and costs the same way, one list further : what is not on the
+  # maintainer's is not scheduled, it is remembered instead.
+  #
+  # Said at the start of every session rather than left in CLAUDE.md alone, for the reason
+  # the alias above exists : a rule that has to be recalled every time is a rule that gets
+  # forgotten (#448). CLAUDE.md carries the argument, this carries the reminder -- and it is
+  # printed before the early return below, so the second session on a cached container is
+  # told too
   echo "session-start : an issue or pull request opened here is assigned to $MAINTAINER_GITHUB_LOGIN and is never a draft -- see CLAUDE.md, \"Conventions\""
+else
+  # Not silence, but the only sentence that is theirs rather than this repository's. An
+  # agent working on a fork has an obligation of its own -- CONTRIBUTING.md requires a
+  # sign-off on every commit, and .github/check_sign_off.sh refuses the pull request without
+  # one -- and learning it here rather than from a failed run is the same trade this script
+  # already makes by installing shellcheck up front : one CI round trip saved
+  echo "session-start : this is not $MAINTAINER_GITHUB_LOGIN's copy of the repository, so no identity and no issue or pull request convention has been set for it here -- sign your own work, with your own name (CONTRIBUTING.md)"
 fi
 
 # Bounded so that a mirror which accepts a connection and then goes quiet cannot hold the
