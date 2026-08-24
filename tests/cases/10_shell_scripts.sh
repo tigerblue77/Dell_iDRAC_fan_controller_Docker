@@ -897,8 +897,15 @@ function test_the_test_case_the_documentation_shows_passes_when_it_is_run() {
   for DOCUMENT in "${DOCUMENTS[@]}"; do
     RELATIVE_PATH="${DOCUMENT#"$REPO_ROOT"/}"
 
+    # Anchored on the section each document keeps it under -- "Writing a test
+    # case" here, "Adding a test case" there -- rather than on the first
+    # "function test_" anywhere in the file. Unanchored, any example added
+    # earlier silently becomes what both halves below check, and the block a
+    # contributor actually copies goes unguarded again
     DOCUMENTED_CASE=$(awk '
-      /^function test_/ { IS_THE_CASE = 1 }
+      /^## .*[Tt]est case$/ { IS_THE_SECTION = 1; next }
+      /^## / { IS_THE_SECTION = 0 }
+      IS_THE_SECTION && /^function test_/ { IS_THE_CASE = 1 }
       IS_THE_CASE { print }
       IS_THE_CASE && /^}/ { exit }' "$DOCUMENT")
 
@@ -1131,6 +1138,98 @@ function test_no_call_site_terminates_a_message_line_itself() {
       pass
     else
       fail "${SCRIPT#$REPO_ROOT/} terminates a message line a second time" "$OFFENDERS"
+    fi
+  done
+}
+
+function test_the_dependency_graph_claude_md_states_is_the_one_the_scripts_source() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    skip_test "no CLAUDE.md next to the scripts"
+    return 0
+  fi
+
+  # CLAUDE.md closes its Layout section on a completeness claim -- "That is the
+  # entire dependency graph" -- and a session relies on it when deciding where a
+  # declaration has to live. The sentence was wrong the first time it was written
+  # (it gave healthcheck.sh constants.sh as well), was fixed by hand, and was
+  # classed at the time among the statements no test can settle. It is settleable :
+  # the facts are the "source" lines of three files.
+  #
+  # The expected graph is written out here rather than parsed back out of the
+  # prose, because a parser tight enough to read that sentence would break on any
+  # rewording of it. A change to what a script sources therefore fails here and has
+  # to be made in both places, which is the point
+  local -r EXPECTED_GRAPH="Dell_iDRAC_fan_controller.sh: constants.sh functions.sh
+healthcheck.sh: functions.sh
+supervisor.sh: constants.sh functions.sh"
+
+  local ACTUAL_GRAPH=""
+  local SCRIPT SOURCED
+  for SCRIPT in Dell_iDRAC_fan_controller.sh healthcheck.sh supervisor.sh; do
+    [ -f "$REPO_ROOT/$SCRIPT" ] || continue
+
+    SOURCED="$(sed -n 's/^[[:space:]]*\(source\|\.\)[[:space:]]\{1,\}\([A-Za-z0-9_.-]*\.sh\).*/\2/p' \
+      "$REPO_ROOT/$SCRIPT" | sort -u | tr '\n' ' ')"
+    ACTUAL_GRAPH+="$SCRIPT: ${SOURCED% }"$'\n'
+  done
+
+  assert_equals "$EXPECTED_GRAPH" "${ACTUAL_GRAPH%$'\n'}" \
+    "the dependency graph changed ; CLAUDE.md's Layout section states it in prose and has to change with it"
+}
+
+function test_the_packages_claude_md_says_the_hook_installs_are_the_ones_it_installs() {
+  local -r HOOK="$REPO_ROOT/.claude/hooks/session-start.sh"
+
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ] || [ ! -f "$HOOK" ]; then
+    skip_test "no CLAUDE.md, or no .claude next to the scripts"
+    return 0
+  fi
+
+  # CLAUDE.md's Environment section names the tools a web session is promised and
+  # says why each matters. The hook's package set lives in one loop, and nothing
+  # read it : shrink the set and the suite stays green while the document goes on
+  # promising both, so a session trusts a run that is quietly skipping cases, or
+  # believes it can run the lint that gates its pull request when it cannot.
+  #
+  # Only the loop naming them literally : the hook has a second "for PACKAGE in"
+  # over the ones it found missing, and matching bare words leaves that one out
+  local -r INSTALLED_PACKAGES=$(sed -n 's/^for PACKAGE in \([a-z0-9 _-]\{1,\}\); do$/\1/p' "$HOOK")
+
+  assert_not_empty "$INSTALLED_PACKAGES" \
+    "the hook should still install its packages from one named loop" || return 1
+
+  local -r ENVIRONMENT_SECTION=$(awk '
+    /^## Environment$/ { IS_THE_SECTION = 1; next }
+    /^## / { IS_THE_SECTION = 0 }
+    IS_THE_SECTION' "$REPO_ROOT/CLAUDE.md")
+
+  local PACKAGE
+  for PACKAGE in $INSTALLED_PACKAGES; do
+    assert_contains "$ENVIRONMENT_SECTION" "\`$PACKAGE\`" \
+      "the hook installs $PACKAGE ; the Environment section is where a session is told so"
+  done
+}
+
+function test_every_shell_script_carries_the_licence_header() {
+  # CLAUDE.md states it as a convention and CONTRIBUTING.md as a rule, "test cases,
+  # mocks and helpers included", and NOTICE ties these headers to what discharges
+  # AGPL 5(a) and 7(b) : this is licence compliance rather than style. The suite
+  # guards the header on the workflows and on CLAUDE.md itself, and guarded it on
+  # no shell script at all -- which is every file the convention is about.
+  #
+  # Read from the first five lines, the same window the workflow case uses, so that
+  # it sits where a human and a scanner both find it
+  local SCRIPT
+  for SCRIPT in "$REPO_ROOT"/*.sh "$REPO_ROOT"/.github/*.sh "$REPO_ROOT"/.claude/hooks/*.sh \
+    "$TESTS_DIRECTORY"/*.sh "$TESTS_DIRECTORY"/lib/*.sh "$TESTS_DIRECTORY"/cases/*.sh \
+    "$TESTS_DIRECTORY"/mocks/*; do
+    [ -f "$SCRIPT" ] || continue
+
+    if head -5 "$SCRIPT" | grep -q '^# SPDX-License-Identifier: AGPL-3.0-only$'; then
+      pass
+    else
+      fail "${SCRIPT#"$REPO_ROOT"/} carries no SPDX licence header in its first five lines" \
+        "every shell script here carries the two lines, mocks and helpers included"
     fi
   done
 }
