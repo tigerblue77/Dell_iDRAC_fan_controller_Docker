@@ -44,7 +44,7 @@
 # authored.
 #
 # Exit 0 : every commit in the range carries a well-formed sign-off.
-# Exit 1 : at least one does not, or the range could not be read.
+# Exit 1 : at least one does not, or the range could not be read, or it is empty.
 # Exit 2 : called wrong.
 #
 # Which answer sits on which code is deliberate. Under "set -e" a script that
@@ -66,8 +66,17 @@ fi
 readonly BASE="$1"
 readonly HEAD="$2"
 
-# The trailer git itself writes with "commit -s", matched on its shape rather
-# than merely on its name : "Signed-off-by:" followed by nothing, or by a name
+# The trailer git itself writes with "commit -s", read as a TRAILER and matched on
+# its SHAPE. Both halves are needed, and each closes a hole the other leaves open :
+#
+# Searching the message body for the pattern passes a commit that merely QUOTES the
+# rule. The messages in this repository quote it routinely -- CONTRIBUTING.md's own
+# example, pasted into a commit explaining the sign-off, is a well-formed line that
+# certifies nobody -- and git itself reports no trailer on such a commit while a
+# grep over %B reports a match. Measured on one : the check answered "All 1 commits
+# carry a sign-off" over a commit git says has none.
+#
+# Reading the trailer without looking at its value passes the other shape : "Signed-off-by:" followed by nothing, or by a name
 # with no address, is what a broken git config produces, and it certifies
 # nobody. The address only has to look like one -- an "@" with something on
 # either side -- because deciding whether a mailbox is reachable is not this
@@ -76,7 +85,9 @@ readonly HEAD="$2"
 # Case-insensitive because a handful of tools write the trailer in their own
 # casing and the certification is the same either way ; git's own -s always
 # writes it exactly as CONTRIBUTING.md quotes it
-readonly SIGN_OFF_PATTERN='^[Ss]igned-off-by: .+ <[^[:space:]<>]+@[^[:space:]<>]+>[[:space:]]*$'
+# Matched against the trailer's VALUE, git having already consumed the key -- which
+# it matches case-insensitively itself, so nothing here has to
+readonly SIGN_OFF_VALUE_PATTERN='^.+ <[^[:space:]<>]+@[^[:space:]<>]+>[[:space:]]*$'
 
 # One command substitution per statement, for the reason CLAUDE.md gives : a
 # signal landing inside a second one in the same expansion gets its trap handler
@@ -88,12 +99,16 @@ if ! COMMITS="$(git log --no-merges --format='%H' "$BASE..$HEAD" 2> /dev/null)";
   exit 1
 fi
 
-# A pull request that adds no commit of its own has nothing to certify. It is
-# not a state worth failing over -- reopening a merged branch reaches it -- and
-# saying so is worth more than a silent green
+# An empty range is refused rather than passed. A pull request that genuinely
+# adds no commit is a state nobody needs this job's opinion on ; a range that
+# resolves to nothing because the base or the head was computed wrong is the
+# shape of a false green, and it is indistinguishable from here. Both land on
+# the refusal, for the reason the exit codes are chosen on above : this exists
+# to keep an unsigned commit off master, so the cheap mistake is the red one
 if [ -z "$COMMITS" ]; then
-  printf 'No commit between %s and %s to check\n' "$BASE" "$HEAD"
-  exit 0
+  printf '::error::No commit between %s and %s. A range that resolves to nothing is refused rather than reported clean, since a base or head computed wrong looks exactly like this\n' \
+    "$BASE" "$HEAD" >&2
+  exit 1
 fi
 
 UNSIGNED_COUNT=0
@@ -104,10 +119,21 @@ while IFS= read -r COMMIT; do
 
   CHECKED_COUNT=$((CHECKED_COUNT + 1))
 
-  MESSAGE=""
-  MESSAGE="$(git log -1 --format='%B' "$COMMIT")"
+  # git's own trailer parser rather than the message body : a line quoting the rule
+  # in a paragraph is not a trailer, and git is the authority on which is which
+  SIGN_OFFS=""
+  # What this reading is and is not : STRICTLY STRONGER than searching the message
+  # body, and not complete. Every trailer git finds is also a well-formed line, so
+  # it refuses everything a body search refuses -- and one shape besides, a
+  # well-formed sign-off quoted in a paragraph that is not the last, which git
+  # reports no trailer for. A quotation placed AT THE END is parsed as a trailer
+  # and still passes ; that is measured, it is the bound of what is claimed here,
+  # and it is written down so the next reader who finds it knows it was known
+  SIGN_OFFS="$(git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$COMMIT")"
 
-  if printf '%s\n' "$MESSAGE" | grep -qE "$SIGN_OFF_PATTERN"; then
+  # One well-formed value is enough : a commit may carry several, and a co-author's
+  # malformed line does not undo the author's certification
+  if printf '%s\n' "$SIGN_OFFS" | grep -qE "$SIGN_OFF_VALUE_PATTERN"; then
     continue
   fi
 
