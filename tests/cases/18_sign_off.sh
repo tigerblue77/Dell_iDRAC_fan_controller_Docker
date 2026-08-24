@@ -16,6 +16,13 @@
 # The sandbox is a repository of its own under a temporary directory, with its own
 # identity configured locally, so nothing here reads or writes the contributor's
 # git configuration and no test depends on how the machine running it is set up.
+#
+# The local identity is not what makes that last clause true, and for a long time it was
+# not true at all : git reads GIT_CONFIG_COUNT and its GIT_CONFIG_KEY_n pairs out of the
+# ENVIRONMENT, before either configuration file and above a repository's own, so one
+# variable turned two cases here red against a tree nobody had touched. The runner drops
+# that count for the whole suite, and cases/15 hands a probe run the hostile environment
+# to prove it (#461).
 
 readonly SIGN_OFF_SCRIPT=".github/check_sign_off.sh"
 readonly SIGN_OFF_WORKFLOW=".github/workflows/sign_off.yml"
