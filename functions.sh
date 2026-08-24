@@ -2557,7 +2557,12 @@ function is_any_CPU_overheating() {
   local RAW_CPU_TEMPERATURE_HYSTERESIS="${CPU_TEMPERATURE_HYSTERESIS:-0}"
   local NORMALIZED_CPU_TEMPERATURE_HYSTERESIS=0
   if [[ "$RAW_CPU_TEMPERATURE_HYSTERESIS" =~ ^[0-9]+$ ]]; then
-    NORMALIZED_CPU_TEMPERATURE_HYSTERESIS=$(normalize_decimal_value "$RAW_CPU_TEMPERATURE_HYSTERESIS")
+    # An arithmetic expansion rather than normalize_decimal_value : the pattern above has already
+    # established this is a plain unsigned integer, so "10#" is the whole of the octal guard it needs.
+    # Written this way because this runs on every monitoring cycle, and a command substitution there
+    # costs a fork and opens one more window for a SIGTERM to land in (issue #188). The threshold
+    # beside it pays that cost because it has a sign to handle ; this does not
+    NORMALIZED_CPU_TEMPERATURE_HYSTERESIS=$((10#$RAW_CPU_TEMPERATURE_HYSTERESIS))
   fi
 
   APPLIED_CPU_TEMPERATURE_BOUND="$NORMALIZED_CPU_TEMPERATURE_THRESHOLD"
