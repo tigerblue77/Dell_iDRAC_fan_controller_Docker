@@ -61,12 +61,16 @@ function apply_user_fan_control_profile() {
   # fan control away from Dell's own dynamic profile, the second sets the speed. Failing the first and
   # succeeding the second is not a partial success but the worst case -- the fans are still Dell's to
   # drive -- so either failure means the profile was not applied
+  WERE_THE_FANS_HANDED_BACK_THIS_CYCLE=false
   local ipmitool_stderr
   local IS_PROFILE_APPLIED=true
   # What the server answered to the command that takes the fans, kept until both commands have run so
   # that the verdict below is drawn after everything this cycle had to say, rather than between two
   # error lines it would then look like it did not cover
   local MANUAL_FAN_CONTROL_STDERR=""
+  # Whether the server DECIDED not to run the speed command, as opposed to being unable to answer it
+  # this once. Only a decision is worth acting on : see the hand-back below
+  local WAS_THE_SPEED_DEFINITIVELY_REFUSED=false
 
   ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x01 0x00 2>&1 >/dev/null)
   # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
@@ -106,6 +110,16 @@ function apply_user_fan_control_profile() {
           # Explained once, rather than as a raw ipmitool line on every cycle. It settles nothing and
           # stops nothing being sent
           note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
+          # The server answered with a completion code that is a decision rather than a moment : it
+          # rejected the selector byte and then rejected every fan it was offered one at a time, or it
+          # answered that it does not have the command at all, or that this account may not run it.
+          # A busy BMC, a dropped session or an answer nothing here recognizes is deliberately none of
+          # those, and is left to the next check rather than concluded from
+          if does_the_server_reject_this_data_field "$ipmitool_stderr" ||
+            does_the_server_lack_this_command "$ipmitool_stderr" ||
+            does_the_command_need_a_higher_privilege_level "$ipmitool_stderr"; then
+            WAS_THE_SPEED_DEFINITIVELY_REFUSED=true
+          fi
         fi
       fi
     fi
@@ -117,6 +131,34 @@ function apply_user_fan_control_profile() {
   # back fans it had already taken, which is the one outcome that leaves them pinned with nobody watching
   if [ -n "$MANUAL_FAN_CONTROL_STDERR" ]; then
     note_that_the_server_refuses_fan_control "$MANUAL_FAN_CONTROL_STDERR"
+  fi
+
+  # The fans were taken and the speed was refused, so they are on neither profile : Dell's own dynamic
+  # fan control no longer has them, and the speed meant to replace it never landed. They run at whatever
+  # this iDRAC does with manual control and no speed set, which nothing here can read back -- so the
+  # table could only ever name a profile that is not running, which is the one thing it must not do.
+  #
+  # Handing them back is the only state this container can both reach and describe. It is not what makes
+  # the server safe : is_any_CPU_overheating() already restores Dell's profile on a CPU above the
+  # threshold, on a reading it cannot parse, on an unusable threshold and on a server reporting no CPU
+  # at all, so the fans were never unwatched. What it removes is the window before any of those happen,
+  # in which a cool server sits at a duty nobody chose -- possibly higher than the user asked for, which
+  # is a noise complaint nothing in the table could have explained (issue #389).
+  #
+  # Only ever on a decision, and only if the fans were actually taken : an empty MANUAL_FAN_CONTROL_STDERR
+  # is the command that takes them having landed. Where it did not, the fans never left Dell and there is
+  # nothing to give back
+  if $WAS_THE_SPEED_DEFINITIVELY_REFUSED && [ -z "$MANUAL_FAN_CONTROL_STDERR" ]; then
+    WERE_THE_FANS_HANDED_BACK_THIS_CYCLE=true
+    if apply_Dell_default_fan_control_profile; then
+      CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile (speed refused)"
+    else
+      # The hand-back was refused too, so the fans are still on neither profile. apply_Dell_default_fan_control_profile()
+      # has already named that state ; saying the user's profile was applied over it would be the lie this
+      # whole branch exists to avoid
+      CURRENT_FAN_CONTROL_PROFILE="Fans left on no profile (speed refused, and Dell's own could not be restored)"
+    fi
+    return 1
   fi
 
   if ! $IS_PROFILE_APPLIED; then
@@ -2029,9 +2071,9 @@ function note_that_the_server_rejects_the_broadcast_fan_selector() {
   HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=true
 
   print_warning "This server took the command that puts its fans under manual control, then refused the one that sets their speed, over one of its arguments rather than over the command itself (completion code 0xcc, \"invalid data field in request\").
- Its fans are consequently on neither profile : they have left Dell's own dynamic fan control profile, and the speed of $DECIMAL_FAN_SPEED% that was meant to replace it never reached them. They are running at whatever this iDRAC does with manual control and no speed set, which nothing here can read back.
+ Its fans have therefore been handed back to Dell's own dynamic fan control profile, which is the only state this container can both reach and describe : they had already left it when the command that takes them landed, and the speed of $DECIMAL_FAN_SPEED% meant to replace it never arrived, so they were running at a duty nothing here can read back (issue #389).
  Both ways of asking were refused. The speed is normally addressed to every fan at once with the selector 0xff, and an 11th generation iDRAC6 refuses that while accepting the very same command addressed to one fan at a time (issue #378) -- so the fans were then asked individually, walking upwards from 0x00, and this server refused that too. The selector is therefore not what stands in the way here.
- Set MONITORING_ONLY_MODE=true so the container never takes the fans from Dell's own dynamic fan control profile at all and only logs temperatures, or stop it : stopping hands them back to that profile on the way out.
+ This container cannot make this server quieter, and will keep saying so rather than appearing to. Setting MONITORING_ONLY_MODE=true stops it trying at all and keeps the temperatures logged, which is the same outcome with a quieter log.
  If your server answers this, the output of \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type fan\" on issue #378 would help work out what it wants instead"
 }
 
@@ -2442,6 +2484,18 @@ function fan_control_comment_clause() {
 
   if has_the_server_refused_fan_control; then
     echo "and this server refused fan control, so its fans stay Dell's own to drive"
+    return
+  fi
+
+  # The profile column names Dell's profile on the cycles where the speed was refused and the fans were
+  # handed back (issue #389), so the comment cannot name the user's : one row would then say the fans are
+  # on both. CLAUDE.md is explicit that the table never names a profile the fans are not running, and a
+  # comment is part of the table.
+  # Read from what this cycle did, not from a verdict about the server : a refused speed deliberately
+  # settles nothing, the fans being the controller's by then and only the command that takes them able
+  # to say whether this server hands them over at all
+  if "${WERE_THE_FANS_HANDED_BACK_THIS_CYCLE:-false}"; then
+    echo "and this server refused the speed command, so its fans were handed back to Dell's own profile"
     return
   fi
 

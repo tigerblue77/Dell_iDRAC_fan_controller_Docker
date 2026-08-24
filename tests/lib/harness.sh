@@ -41,6 +41,7 @@ function setup_test_context() {
   # Same, for the fan control commands : a test starts against a server that has refused nothing and
   # accepted nothing, which is what the controller starts from too
   IS_FAN_CONTROL_SUPPORTED=true
+  WERE_THE_FANS_HANDED_BACK_THIS_CYCLE=false
   HAS_FAN_CONTROL_EVER_BEEN_ACCEPTED=false
   # Same, for the one-off explanation of a rejected fan selector : a test starts against a server that
   # has not been told anything yet
