@@ -122,6 +122,13 @@ while IFS= read -r COMMIT; do
   # git's own trailer parser rather than the message body : a line quoting the rule
   # in a paragraph is not a trailer, and git is the authority on which is which
   SIGN_OFFS=""
+  # What this reading is and is not : STRICTLY STRONGER than searching the message
+  # body, and not complete. Every trailer git finds is also a well-formed line, so
+  # it refuses everything a body search refuses -- and one shape besides, a
+  # well-formed sign-off quoted in a paragraph that is not the last, which git
+  # reports no trailer for. A quotation placed AT THE END is parsed as a trailer
+  # and still passes ; that is measured, it is the bound of what is claimed here,
+  # and it is written down so the next reader who finds it knows it was known
   SIGN_OFFS="$(git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$COMMIT")"
 
   # One well-formed value is enough : a commit may carry several, and a co-author's
