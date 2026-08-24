@@ -2067,13 +2067,30 @@ function attempt_the_redfish_cooling_response() {
 
   REDFISH_ATTEMPTS=$(( ${REDFISH_ATTEMPTS:-0} + 1 ))
 
-  # Nothing was asked, because there was nothing to ask. In local mode the controller reaches the BMC
-  # through /dev/ipmi0 and is given no iDRAC address and no credentials, so this says what is true --
-  # the transport is missing -- rather than blaming a server that may well have the setting
+  # Nothing was asked, because the request could not be made at all. There are two reasons for that and
+  # they need different things from the reader, so they are told apart rather than both being called
+  # local mode : redfish_request() returns without asking in local mode, and it also returns without an
+  # answer when the HTTPS client it runs is not there or will not start. Saying "set IDRAC_HOST,
+  # IDRAC_USERNAME and IDRAC_PASSWORD" to somebody who has set all three sends them to check
+  # configuration that is correct, while the real cause goes unnamed (#429)
   if [ -z "$REDFISH_LAST_PROBE_STATUS" ]; then
     REDFISH_COOLING_RESPONSE_SETTLED=true
-    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (Redfish needs network mode)"
-    print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server. Nothing else changes : temperatures keep being read and logged every cycle."
+
+    if [ "$IDRAC_HOST" == "local" ]; then
+      # In local mode the controller reaches the BMC through /dev/ipmi0 and is given no iDRAC address and
+      # no credentials, so this says what is true -- the transport is missing -- rather than blaming a
+      # server that may well have the setting
+      THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (Redfish needs network mode)"
+      print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server. Nothing else changes : temperatures keep being read and logged every cycle."
+      return 1
+    fi
+
+    # Addressed, credentialed, and still nothing was asked : the client did not run. The image installs
+    # perl and libio-socket-ssl-perl for exactly this, so inside it this means a stripped or half-built
+    # image ; run from a plain checkout, it means the host has no perl or no IO::Socket::SSL. Either way
+    # it is about this machine rather than about the server, and no cycle will clear it
+    THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (no HTTPS client to ask with)"
+    print_error "This server does not have the IPMI command for the third-party PCIe card cooling response, and the Redfish request that would have replaced it could not be made at all : the HTTPS client did not run. That is perl with IO::Socket::SSL, which the image installs -- so in the published image this means a stripped or half-built one, and outside it, a host missing either. The iDRAC was never asked, so this says nothing about whether the server has the setting. Fan control and temperature monitoring are unaffected. $REDFISH_MANUAL_INSTRUCTIONS"
     return 1
   fi
 

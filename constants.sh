@@ -132,6 +132,19 @@ readonly REDFISH_LEGACY_ATTRIBUTES_URI="/redfish/v1/Managers/System.Embedded.1/A
 # stop grace period, and a container killed for taking too long to stop would be a worse outcome than a
 # cooling response left as the user set it.
 #
+# Both figures are per REQUEST, and both paths make several. #414 did that arithmetic for the way out and
+# left the monitoring one unstated, so it is stated here : one cycle's errand makes up to FOUR requests --
+# the probe's two URIs, then the write path's read and its PATCH -- which is up to 40 seconds inside a
+# cycle whose CHECK_INTERVAL defaults to 5. It is bounded : only an iDRAC that answers each request just
+# under the timeout reaches four, one that answers nothing at all costs a single request, and
+# MAXIMUM_REDFISH_ATTEMPTS stops the whole thing after three cycles whatever happens. But it is worth
+# knowing, because the paragraph on MAXIMUM_REDFISH_ATTEMPTS below says the attempts are spaced a
+# CHECK_INTERVAL apart so the cycle keeps reading temperatures -- and a cycle that spends 40 seconds
+# inside the errand is not reading them either. Lowering this number is not the fix : an iDRAC's Redfish
+# stack is genuinely slow, and a timeout short enough to bound the cycle would turn a working server into
+# an unreachable one. Bounding the ERRAND rather than the request is (#430), and until that is decided
+# tests/cases/46_redfish_cooling_response.sh pins the request count so it cannot grow unnoticed
+#
 # The exit figure is per REQUEST and the hand-back makes two of them -- it reads the slots back, then
 # writes them -- so what has to fit inside a deadline is twice this number, not this number. At 3 it did
 # not fit anything : graceful_exit() runs under the supervisor's own SUPERVISOR_GRACE_PERIOD_IN_SECONDS,
