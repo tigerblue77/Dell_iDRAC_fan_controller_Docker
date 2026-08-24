@@ -227,7 +227,18 @@ function make_sdr_line() {
 #                              no processor row at all -- a shape no reported hardware
 #                              produces, and the one the fallback used to be tested on
 #   --with-extra-sensors       add the non-CPU, non-inlet, non-exhaust temperature
-#                              sensors bigger servers report (board, PCIe risers)
+#                              sensors bigger servers report : four power supply
+#                              rows, entity 10 being "Power Supply" in IPMI v2.0
+#                              table 43-13. Two carry the same uninformative
+#                              "Temp" name the CPU rows do, and two are named
+#                              "PSU1 Inlet Temp" and "PSU2 Inlet Temp".
+#                              That second pair is what the option is for : both
+#                              names contain "Inlet", so they are what makes the
+#                              anchored match in retrieve_temperature_by_sensor_name()
+#                              load-bearing rather than decorative -- unanchored,
+#                              a power supply's own intake answers for the chassis
+#                              air intake and the intake column shows a sensor
+#                              several degrees too hot (issue #231)
 #   --eleventh-generation-sensor-names
 #                              name the chassis sensors the way iDRAC6 does on 11G
 #                              servers (R610, R710, R510, T610...) : "Ambient Temp"

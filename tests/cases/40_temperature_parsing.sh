@@ -207,3 +207,32 @@ function test_a_power_supplys_own_intake_does_not_answer_for_the_chassis_one() {
   assert_equals "36" "$(retrieve_temperature_by_sensor_name "$SDR_DATA" "Exhaust")" \
     "the exhaust sensor is unaffected, but goes through the same matching rule"
 }
+
+# The option's own documentation is the only place saying what those four rows represent, and
+# it named the wrong hardware until issue #433 : "board, PCIe risers" for rows that are all on
+# entity 10, the power supply. Nothing held the sentence against the data, so it drifted from
+# the fixture the test above rests on, and a reader checking what a Dell reports beyond the
+# CPUs got an answer the rows do not support.
+#
+# Pinned here rather than left to the comment alone, for the reason #344 and #328 were : a
+# description nothing compares to its subject is one the next edit is free to invalidate
+function test_the_extra_sensors_are_the_power_supply_rows_the_option_describes() {
+  local SDR_DATA
+  SDR_DATA=$(make_sdr_output --no-inlet --no-exhaust --cpus 0 --with-extra-sensors)
+
+  # Read off the 4th pipe-delimited column, trimmed, the way every entity check in the
+  # production code does, so that this agrees with what detect_CPU_temperature_sensors() sees
+  local EXTRA_SENSOR_ENTITIES
+  EXTRA_SENSOR_ENTITIES=$(printf '%s\n' "$SDR_DATA" | awk -F'|' '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4); print $4 }' | sort -u)
+
+  assert_equals "$(printf '10.1\n10.2')" "$EXTRA_SENSOR_ENTITIES" \
+    "every extra row sits on entity 10, \"Power Supply\" in IPMI v2.0 table 43-13, and not on the system board (7) nor an add-in card (11) the option used to name"
+
+  # The pair the option exists for : both names contain "Inlet", which is what makes
+  # retrieve_temperature_by_sensor_name()'s anchoring load-bearing rather than decorative
+  local NUMBER_OF_PSU_INLET_ROWS
+  NUMBER_OF_PSU_INLET_ROWS=$(printf '%s\n' "$SDR_DATA" | grep -c '^PSU[0-9] Inlet Temp')
+
+  assert_equals "2" "$NUMBER_OF_PSU_INLET_ROWS" \
+    "the two \"PSU<n> Inlet Temp\" rows are the shape issue #231 was about"
+}
