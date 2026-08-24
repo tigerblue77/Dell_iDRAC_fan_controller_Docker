@@ -96,11 +96,17 @@ function apply_user_fan_control_profile() {
       # speed is sent that way instead, and only a server that refuses it both ways has really refused it
       if ! does_the_server_reject_this_data_field "$ipmitool_stderr" ||
         ! set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"; then
-        print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
-        # Explained once, rather than as a raw ipmitool line on every cycle. It settles nothing and
-        # stops nothing being sent
-        note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
         IS_PROFILE_APPLIED=false
+        # A walk that was abandoned mid-way answered nothing about this server : it was interrupted,
+        # not refused. Saying "both ways were refused" there would be a verdict drawn from a moment,
+        # and it would spend the one-off explanation that the real answer needs on the next check.
+        # The walk has already said what happened, so there is nothing to add here either
+        if ! "${WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED:-false}"; then
+          print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+          # Explained once, rather than as a raw ipmitool line on every cycle. It settles nothing and
+          # stops nothing being sent
+          note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
+        fi
       fi
     fi
   fi
@@ -124,6 +130,11 @@ function apply_user_fan_control_profile() {
 # that. Empty until the broadcast selector has actually been refused : a server that takes 0xff never
 # probes anything and never fills this
 DISCOVERED_FAN_IDENTIFIERS=()
+
+# Whether the last walk gave up before reaching the end of the range, because an identifier answered
+# something that was not a refusal. It means the walk was interrupted rather than answered, which is
+# the one thing that must not be read as a verdict about this server
+WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
 
 # Set the fan speed one fan at a time, on a server that refuses to have them all addressed at once.
 # Usage : set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"
@@ -167,6 +178,7 @@ function set_the_fan_speed_on_each_fan_individually() {
     return
   fi
 
+  WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
   local -a ACCEPTED_IDENTIFIERS=()
   local PROBE
   local IDENTIFIER
@@ -187,6 +199,7 @@ function set_the_fan_speed_on_each_fan_individually() {
       # discovery is abandoned, and the next cycle starts it again against a server that may by then
       # be answering normally
       if ! does_the_server_reject_this_data_field "$PROBE_STDERR"; then
+        WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=true
         print_error "Gave up working out which fans this server accepts : identifier $IDENTIFIER answered something that is not a refusal, so the set would have been incomplete. It will be worked out again on the next check. ipmitool said: $PROBE_STDERR"
         return 1
       fi

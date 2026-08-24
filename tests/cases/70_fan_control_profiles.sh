@@ -764,3 +764,32 @@ function test_a_remembered_fan_that_stops_answering_denies_the_profile() {
   assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied" \
     "one fan left behind is enough to deny the profile"
 }
+
+function test_an_interrupted_walk_never_claims_the_server_refused_the_speed_both_ways() {
+  # A walk cut short by a busy BMC answered nothing about this server. Saying "Both ways of asking
+  # were refused ... The selector is therefore not what stands in the way here" would be a verdict
+  # drawn from a moment -- and, worse, it would spend the one-off explanation, so the accurate message
+  # could never be printed on the check that finally gets a complete answer
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02 (0xff|$REFUSED_FAN_IDENTIFIER_PATTERN)"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="$BROADCAST_FAN_SELECTOR_REJECTED_STDERR"
+  export MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN="0x30 0x30 0x02 0x03"
+
+  capture_output apply_user_fan_control_profile
+  local -r EXIT_CODE=$?
+
+  assert_equals "1" "$EXIT_CODE" "the speed did not land, so the profile is not applied"
+  assert_contains "$CURRENT_FAN_CONTROL_PROFILE" "not applied"
+  assert_not_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
+    "an interrupted walk is not a server that refused anything"
+  assert_contains "$CAPTURED_OUTPUT" "Gave up working out which fans" \
+    "what actually happened is said instead"
+
+  # And the accurate verdict is still available for a later check that does get a complete answer
+  forget_recorded_ipmitool_calls
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30 0x02"
+  unset MOCK_IPMITOOL_RAW_TRANSIENT_PATTERN
+  capture_output apply_user_fan_control_profile
+
+  assert_contains "$CAPTURED_OUTPUT" "Both ways of asking were refused" \
+    "the one-off explanation must not have been spent by the interruption"
+}
