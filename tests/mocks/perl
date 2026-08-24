@@ -20,6 +20,9 @@
 #
 # Recognized environment variables:
 #   MOCK_PERL_CALL_LOG                the file invocations are appended to
+#   MOCK_PERL_DELAY_IN_SECONDS        how long each request takes to answer, so that a case can watch an
+#                                     errand's shared time budget being spent. The timeout the controller
+#                                     chose is the fourth argument of every logged invocation
 #   MOCK_REDFISH_CONFORMANT_STATUS    HTTP status for the DellAttributes URI (default 404)
 #   MOCK_REDFISH_CONFORMANT_BODY      its response body
 #   MOCK_REDFISH_LEGACY_STATUS        HTTP status for the Managers/System.Embedded.1 URI (default 404)
@@ -53,6 +56,12 @@ done
 
 if [ -n "$MOCK_PERL_CALL_LOG" ]; then
   echo "perl $*" >> "$MOCK_PERL_CALL_LOG"
+fi
+
+# An iDRAC that takes its time. Real perl would enforce the timeout it was handed ; this mock only has to
+# make the clock move, so that what the NEXT request in the same errand is given can be observed
+if [ -n "$MOCK_PERL_DELAY_IN_SECONDS" ]; then
+  command -p sleep "$MOCK_PERL_DELAY_IN_SECONDS"
 fi
 
 # Print a configured body with everything a PATCH has already changed applied over it

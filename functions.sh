@@ -1738,10 +1738,37 @@ function redfish_request() {
   local -r HTTP_METHOD="$1"
   local -r RESOURCE_PATH="$2"
   local -r REQUEST_BODY="${3:-}"
-  local -r TIMEOUT_IN_SECONDS="${4:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
+  local TIMEOUT_IN_SECONDS="${4:-$REDFISH_REQUEST_TIMEOUT_IN_SECONDS}"
 
   if [ "$IDRAC_HOST" == "local" ]; then
     return 1
+  fi
+
+  # The figure above is what ONE request may take, and the monitoring errand makes up to four of them --
+  # the probe's two URIs, then the write path's read and its PATCH. Multiplied out that was up to forty
+  # seconds inside a cycle whose CHECK_INTERVAL defaults to five, with nothing reading temperatures
+  # meanwhile : the gap between two runs of is_any_CPU_overheating() went from one interval to nine, on
+  # fans sitting at the static speed the user asked for. So the budget belongs to the ERRAND, and each
+  # request is given what is left of it (#430).
+  #
+  # A healthy iDRAC answers in well under a second and never notices this ; one that is slow but working
+  # still fits its four requests inside the budget ; only one that hangs is cut short -- which is the
+  # right thing to do with it, since the whole errand is attempted again on the next cycle anyway.
+  #
+  # Never less than a second, because a timeout of zero is not "no time left" to HTTP::Tiny, it is no
+  # timeout at all. So the true bound is the budget plus a second for each request still to be made, and
+  # a request is always made rather than skipped : skipping is how the legacy URI would stop being tried
+  # at all on a server whose conformant one hangs
+  if [ -n "${REDFISH_ERRAND_DEADLINE_IN_SECONDS:-}" ]; then
+    local REMAINING_IN_SECONDS=$(( REDFISH_ERRAND_DEADLINE_IN_SECONDS - SECONDS ))
+
+    if [ "$REMAINING_IN_SECONDS" -lt 1 ]; then
+      REMAINING_IN_SECONDS=1
+    fi
+
+    if [ "$REMAINING_IN_SECONDS" -lt "$TIMEOUT_IN_SECONDS" ]; then
+      TIMEOUT_IN_SECONDS="$REMAINING_IN_SECONDS"
+    fi
   fi
 
   REDFISH_REQUEST_BODY="$REQUEST_BODY" perl - "https://${IDRAC_HOST}${RESOURCE_PATH}" "$IDRAC_USERNAME" "$HTTP_METHOD" "$TIMEOUT_IN_SECONDS" <<'PERL_SCRIPT'
@@ -2037,6 +2064,27 @@ function apply_the_cooling_response_over_redfish() {
 # setting it has, for the life of the container. So the same split the write uses applies here : an
 # answer about the resource or the credentials settles it, a moment is tried again (#376)
 function attempt_the_redfish_cooling_response() {
+  # One budget for the whole errand, opened here and closed at the end whatever happened, so that no
+  # later caller inherits a deadline that has nothing to do with it : graceful_exit() and supervisor.sh
+  # reach set_the_cooling_response_over_redfish() on their own, with the short per-request timeout #414
+  # sized against the deadline that kills them, and must keep it
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=$(( SECONDS + REDFISH_REQUEST_TIMEOUT_IN_SECONDS ))
+
+  local ERRAND_EXIT_CODE=0
+  run_the_redfish_cooling_response_errand "$@" || ERRAND_EXIT_CODE=$?
+
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=""
+
+  return "$ERRAND_EXIT_CODE"
+}
+
+# The errand itself. Called only by attempt_the_redfish_cooling_response() above, which is what gives it
+# its time budget -- and what makes sure the budget is closed again however this returns.
+# Usage : run_the_redfish_cooling_response_errand "<wanted LFM mode>" "<Enabled|Disabled>"
+#
+# Not called in a subshell, and never to be : every global it sets -- the column's status, whether the
+# question is settled, how many attempts have been made -- would be lost at that boundary
+function run_the_redfish_cooling_response_errand() {
   local -r WANTED_LFM_MODE="$1"
   local -r REQUESTED_STATE="$2"
 

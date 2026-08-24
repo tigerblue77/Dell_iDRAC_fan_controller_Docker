@@ -900,12 +900,10 @@ function test_a_server_whose_slots_all_hold_dell_cards_is_told_there_is_nothing_
 }
 
 function test_one_cycle_of_the_errand_costs_at_most_four_requests() {
-  # Both timeout figures are per REQUEST, and this path makes several : the probe's two URIs, then the
-  # write path's read and its PATCH. At REDFISH_REQUEST_TIMEOUT_IN_SECONDS that is up to 40 seconds
-  # inside a cycle whose CHECK_INTERVAL defaults to 5 -- which is worth knowing, because what justifies
-  # spacing the attempts a CHECK_INTERVAL apart is that the cycle keeps reading temperatures. #414 did
-  # this arithmetic for the way out and left this one unstated ; the count is pinned here so that a
-  # fifth request cannot be added to the errand without the number in constants.sh being revisited (#430)
+  # The count the budget is shared between : the probe's two URIs, then the write path's read and its
+  # PATCH. It is pinned so that a fifth request cannot join the errand without the arithmetic beside
+  # REDFISH_REQUEST_TIMEOUT_IN_SECONDS being revisited -- the budget is one figure for all of them, so
+  # each new request makes every other one's share smaller rather than adding to the total (#430)
   export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
   : > "$MOCK_PERL_CALL_LOG"
   # The worst arrangement : the conformant URI is not there, the legacy one answers, and the write is
@@ -925,4 +923,78 @@ function test_one_cycle_of_the_errand_costs_at_most_four_requests() {
   assert_equals "true" \
     "$([ $((4 * REDFISH_REQUEST_TIMEOUT_IN_SECONDS * MAXIMUM_REDFISH_ATTEMPTS)) -le 120 ] && echo true || echo false)" \
     "and what the whole errand may cost a container over its life stays bounded and stated"
+}
+
+function test_the_errand_spends_one_budget_rather_than_one_per_request() {
+  # Each request used to be given REDFISH_REQUEST_TIMEOUT_IN_SECONDS of its own, and the errand makes up
+  # to four of them : forty seconds inside a cycle whose CHECK_INTERVAL defaults to five, with nothing
+  # reading temperatures meanwhile. The budget is the errand's now, and each request gets what is left of
+  # it -- so an iDRAC that answers slowly is watched spending it, rather than being handed it four times
+  # over (#430)
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_PERL_DELAY_IN_SECONDS=1
+  export MOCK_REDFISH_CONFORMANT_STATUS="404"
+  export MOCK_REDFISH_LEGACY_STATUS="200"
+  export MOCK_REDFISH_LEGACY_BODY
+  MOCK_REDFISH_LEGACY_BODY=$(make_redfish_attributes_body --slots 4 --third-party "2")
+  export MOCK_REDFISH_PATCH_STATUS="503"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  # The timeout the controller chose is the fourth argument of each invocation
+  local -r TIMEOUTS=$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG")
+  local -r FIRST_TIMEOUT=$(printf '%s\n' "$TIMEOUTS" | head -n 1)
+  local -r LAST_TIMEOUT=$(printf '%s\n' "$TIMEOUTS" | tail -n 1)
+
+  assert_equals "4" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "the errand is still four requests at most"
+  assert_equals "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" "$FIRST_TIMEOUT" \
+    "the first request may have the whole budget, nothing having been spent yet"
+  assert_equals "true" "$([ "$LAST_TIMEOUT" -lt "$FIRST_TIMEOUT" ] && echo true || echo false)" \
+    "and the last must be given only what three seconds of answering left of it, not a fourth full share"
+}
+
+function test_no_request_is_ever_given_no_time_at_all() {
+  # A timeout of zero is not "no time left" to HTTP::Tiny, it is no timeout at all -- which would turn an
+  # exhausted budget into the one request that can hang for ever. The floor is a second, and the request
+  # is still made rather than skipped : skipping is how the legacy URI would stop being tried at all on a
+  # server whose conformant one hangs
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_REDFISH_CONFORMANT_STATUS="200"
+
+  # A budget that ran out five seconds ago
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=$(( SECONDS - 5 ))
+  redfish_get "$REDFISH_CONFORMANT_ATTRIBUTES_URI" "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" > /dev/null 2>&1
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=""
+
+  assert_equals "1" "$(grep -c "" "$MOCK_PERL_CALL_LOG")" "the request is made rather than skipped"
+  assert_equals "1" "$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG")" \
+    "and given a second, never zero, which perl would read as no timeout at all"
+}
+
+function test_the_way_out_keeps_the_budget_the_deadline_that_kills_it_allows() {
+  # graceful_exit() and supervisor.sh reach set_the_cooling_response_over_redfish() on their own, with the
+  # short per-request timeout #414 sized against the supervisor's grace period. The errand's budget must
+  # not leak into them : a deadline left over from a monitoring cycle would clamp every exit request to
+  # the one second floor, and worse, an unclosed one would do it for the life of the container
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  export MOCK_REDFISH_CONFORMANT_STATUS="200"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  simulate_a_server_exposing_the_cooling_response_over_redfish --slots 4 --third-party "2"
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > /dev/null 2>&1
+
+  assert_empty "$REDFISH_ERRAND_DEADLINE_IN_SECONDS" \
+    "the errand closes its budget however it returned"
+
+  : > "$MOCK_PERL_CALL_LOG"
+  set_the_cooling_response_over_redfish "Automatic" "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" > /dev/null 2>&1
+
+  assert_equals "$REDFISH_EXIT_REQUEST_TIMEOUT_IN_SECONDS" \
+    "$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG" | head -n 1)" \
+    "the way out asks for what it was given, not for what is left of somebody else's budget"
 }

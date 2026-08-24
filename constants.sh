@@ -132,18 +132,27 @@ readonly REDFISH_LEGACY_ATTRIBUTES_URI="/redfish/v1/Managers/System.Embedded.1/A
 # stop grace period, and a container killed for taking too long to stop would be a worse outcome than a
 # cooling response left as the user set it.
 #
-# Both figures are per REQUEST, and both paths make several. #414 did that arithmetic for the way out and
-# left the monitoring one unstated, so it is stated here : one cycle's errand makes up to FOUR requests --
-# the probe's two URIs, then the write path's read and its PATCH -- which is up to 40 seconds inside a
-# cycle whose CHECK_INTERVAL defaults to 5. It is bounded : only an iDRAC that answers each request just
-# under the timeout reaches four, one that answers nothing at all costs a single request, and
-# MAXIMUM_REDFISH_ATTEMPTS stops the whole thing after three cycles whatever happens. But it is worth
-# knowing, because the paragraph on MAXIMUM_REDFISH_ATTEMPTS below says the attempts are spaced a
-# CHECK_INTERVAL apart so the cycle keeps reading temperatures -- and a cycle that spends 40 seconds
-# inside the errand is not reading them either. Lowering this number is not the fix : an iDRAC's Redfish
-# stack is genuinely slow, and a timeout short enough to bound the cycle would turn a working server into
-# an unreachable one. Bounding the ERRAND rather than the request is (#430), and until that is decided
-# tests/cases/46_redfish_cooling_response.sh pins the request count so it cannot grow unnoticed
+# The exit figure is per REQUEST. The monitoring one is the whole ERRAND's, which is the difference #430
+# settled : one cycle's errand makes up to FOUR requests -- the probe's two URIs, then the write path's
+# read and its PATCH -- and four times ten seconds inside a cycle whose CHECK_INTERVAL defaults to five
+# is not what the paragraph on MAXIMUM_REDFISH_ATTEMPTS below promises. That paragraph says the attempts
+# are spaced a CHECK_INTERVAL apart so the cycle keeps reading temperatures ; a cycle spending forty
+# seconds in the errand is not reading them either, and the gap between two runs of
+# is_any_CPU_overheating() went from one interval to nine, on fans held at the static speed the user
+# asked for.
+#
+# So attempt_the_redfish_cooling_response() opens a deadline of this many seconds, redfish_request()
+# gives each request what is left of it, and the errand closes it again however it returned. Lowering the
+# number was the other way out and is the wrong one : an iDRAC's Redfish stack is genuinely slow, and a
+# per-request timeout short enough to bound the cycle would turn a working server into an unreachable
+# one. Sharing it costs a healthy iDRAC nothing -- it answers in well under a second -- lets a slow but
+# working one fit its four requests inside the budget, and cuts only one that hangs, which is what should
+# be cut, the whole errand being attempted again on the next cycle.
+#
+# The floor is one second per request, because zero is not "no time left" to HTTP::Tiny but no timeout at
+# all : the true bound is this figure plus a second for each request still to be made, which is 13 rather
+# than 40 in the worst case that exists. tests/cases/46_redfish_cooling_response.sh pins the count, the
+# sharing and the floor
 #
 # The exit figure is per REQUEST and the hand-back makes two of them -- it reads the slots back, then
 # writes them -- so what has to fit inside a deadline is twice this number, not this number. At 3 it did
