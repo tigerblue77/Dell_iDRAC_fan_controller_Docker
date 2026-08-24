@@ -189,3 +189,75 @@ function test_every_pre_approved_command_is_one_the_repository_still_runs() {
     esac
   done < <(pre_approved_permission_rules)
 }
+
+# The hook half of the same file. The list above is what a session may run without
+# asking ; this is what runs before it can ask anything at all, and nothing looked
+# at it : the entry could be pointed at a path that does not exist, or dropped
+# altogether, and every test here would still pass while every web session opened
+# on this repository quietly lost its linter.
+readonly SESSION_START_HOOK_SCRIPT=".claude/hooks/session-start.sh"
+
+# Usage : FIELD=$(session_start_hook_field <jq-field>)
+function session_start_hook_field() {
+  jq -r ".hooks.SessionStart[0].hooks[0].$1 // empty" \
+    "$REPO_ROOT/$CLAUDE_CODE_SETTINGS_FILE" 2> /dev/null
+}
+
+function test_the_session_start_hook_still_points_at_a_script_that_exists() {
+  if ! claude_code_settings_can_be_read; then
+    skip_test "no .claude next to the scripts, or no jq to read it with"
+    return 0
+  fi
+
+  local COMMAND
+  COMMAND="$(session_start_hook_field command)"
+
+  assert_not_empty "$COMMAND" \
+    "the SessionStart hook is what puts shellcheck in a web session ; an entry that is gone takes it with it" || return 1
+
+  # The platform expands $CLAUDE_PROJECT_DIR to the repository root, which is
+  # exactly what REPO_ROOT is here
+  local -r RESOLVED_PATH="${COMMAND/\$CLAUDE_PROJECT_DIR/$REPO_ROOT}"
+
+  assert_command_succeeds "the hook command should name a file that exists" test -f "$RESOLVED_PATH"
+  assert_command_succeeds "a hook the platform cannot execute is a hook that does not run" test -x "$RESOLVED_PATH"
+}
+
+function test_the_session_start_hook_budget_outlasts_what_the_script_allows_itself() {
+  if ! claude_code_settings_can_be_read; then
+    skip_test "no .claude next to the scripts, or no jq to read it with"
+    return 0
+  fi
+
+  if [ ! -f "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT" ]; then
+    skip_test "no hook script next to the settings"
+    return 0
+  fi
+
+  local HOOK_TIMEOUT
+  HOOK_TIMEOUT="$(session_start_hook_field timeout)"
+
+  assert_not_empty "$HOOK_TIMEOUT" \
+    "without a timeout of its own the entry takes the platform's default, which is not written down anywhere near it" || return 1
+
+  # The script bounds each of its two apt calls with the same deadline, so its own
+  # worst case is twice that. The platform's kill has to land after the script has
+  # given up on its own terms : one landing inside dpkg leaves a container refusing
+  # every later apt operation until "dpkg --configure -a" is run by hand, and the
+  # container state is cached, so that state would outlive the session that caused it
+  local SCRIPT_DEADLINE
+  SCRIPT_DEADLINE="$(sed -n 's/^readonly APT_DEADLINE_SECONDS=\([0-9]\{1,\}\)$/\1/p' \
+    "$REPO_ROOT/$SESSION_START_HOOK_SCRIPT")"
+
+  assert_not_empty "$SCRIPT_DEADLINE" \
+    "the hook should still bound its apt calls ; unbounded, a mirror that goes quiet holds the session open" || return 1
+
+  local -r SCRIPT_WORST_CASE=$((SCRIPT_DEADLINE * 2))
+
+  if [ "$HOOK_TIMEOUT" -gt "$SCRIPT_WORST_CASE" ]; then
+    pass
+  else
+    fail "the hook's budget ($HOOK_TIMEOUT s) does not outlast what the script allows itself (${SCRIPT_WORST_CASE} s)" \
+      "the platform would kill it mid-apt rather than let it report what went wrong"
+  fi
+}
