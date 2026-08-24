@@ -65,6 +65,29 @@ function commit_unsigned() {
   git commit --quiet -m "$1" --no-verify
 }
 
+# Commit under a chosen author, with a chosen Signed-off-by, which is what the two
+# identities #441 settled are made of : the author says who wrote it, the trailer
+# says who certifies it
+# Usage : commit_authored_by "<name>" "<email>" "<subject>" ["<sign-off value>"]
+function commit_authored_by() {
+  local -r AUTHOR_NAME="$1"
+  local -r AUTHOR_EMAIL="$2"
+  local -r SUBJECT="$3"
+  local -r SIGN_OFF="${4:-}"
+
+  printf '%s\n' "$SUBJECT" >> file.txt
+  git add file.txt
+
+  if [ -n "$SIGN_OFF" ]; then
+    git -c "user.name=$AUTHOR_NAME" -c "user.email=$AUTHOR_EMAIL" \
+      commit --quiet -m "$SUBJECT" --trailer "Signed-off-by: $SIGN_OFF" --no-verify
+    return
+  fi
+
+  git -c "user.name=$AUTHOR_NAME" -c "user.email=$AUTHOR_EMAIL" \
+    commit --quiet -m "$SUBJECT" --no-verify
+}
+
 # Usage : OUTPUT=$(run_sign_off_check <base> <head>) ; STATUS=$?
 function run_sign_off_check() {
   "$REPO_ROOT/$SIGN_OFF_SCRIPT" "$1" "$2" 2>&1
@@ -333,4 +356,161 @@ function test_the_sign_off_workflow_runs_the_script_that_holds_the_decision() {
   assert_contains "$WORKFLOW" "pull_request" "the branch's commits are the last place the trailer exists"
   assert_not_contains "$WORKFLOW" "branches: [master]" \
     "running this on master would gate a history that cannot be repaired"
+}
+
+# The identities #441 settled, and the one direction a workflow can check : a commit
+# the agent AUTHORED must not also certify under it. See issue #446
+readonly AGENT_SIGN_OFF="Claude <noreply@anthropic.com>"
+readonly MAINTAINER_SIGN_OFF="Tigerblue77 <37409593+tigerblue77@users.noreply.github.com>"
+
+function test_a_commit_the_agent_authored_and_certified_under_is_refused() {
+  # The accident this exists for, measured on the first head of #442 : a session that
+  # started before the hook did, or ran an older one, produces a commit whose trailer
+  # names a tool. It carried a well-formed sign-off and passed the gate green
+  sign_off_check_can_run || { skip_test "git or the sign-off script is missing"; return 0; }
+  setup_sign_off_sandbox || return 1
+
+  commit_authored_by "Claude" "noreply@anthropic.com" "Written and certified by the tool" "$AGENT_SIGN_OFF"
+
+  local HEAD
+  HEAD="$(git rev-parse HEAD)"
+
+  local OUTPUT
+  OUTPUT=$(run_sign_off_check "$BASE" "$HEAD")
+  local -r STATUS=$?
+
+  assert_not_equals 0 "$STATUS" "a tool certifying its own work should not pass"
+  assert_contains "$OUTPUT" "authored by the agent" "the error should say what it found"
+  assert_contains "$OUTPUT" "git signoff" "and name the command that repairs it"
+  assert_not_contains "$OUTPUT" "carries no Signed-off-by" \
+    "it carries one ; saying otherwise would send the reader to the wrong remedy"
+
+  teardown_sign_off_sandbox
+}
+
+function test_a_commit_the_agent_authored_and_the_maintainer_certified_is_accepted() {
+  # The arrangement #441 put in place, and the one "git signoff" produces
+  sign_off_check_can_run || { skip_test "git or the sign-off script is missing"; return 0; }
+  setup_sign_off_sandbox || return 1
+
+  commit_authored_by "Claude" "noreply@anthropic.com" "Written by the tool, certified by the maintainer" "$MAINTAINER_SIGN_OFF"
+
+  local HEAD
+  HEAD="$(git rev-parse HEAD)"
+
+  local OUTPUT
+  OUTPUT=$(run_sign_off_check "$BASE" "$HEAD")
+  local -r STATUS=$?
+
+  assert_equals 0 "$STATUS" "this is exactly what the hook sets up"
+  assert_contains "$OUTPUT" "carry a sign-off" "and it should be reported clean"
+
+  teardown_sign_off_sandbox
+}
+
+function test_a_contributor_certifying_their_own_work_is_left_alone() {
+  # The half that is NOT closable, and the reason the check is conditional on the
+  # agent identity rather than on "author equals sign-off" : that shape is the normal
+  # and correct one for everybody who is not a tool, and refusing it would turn this
+  # gate on the contributors it was never about
+  sign_off_check_can_run || { skip_test "git or the sign-off script is missing"; return 0; }
+  setup_sign_off_sandbox || return 1
+
+  commit_authored_by "Random J Developer" "random@developer.example.org" \
+    "Mine, and I certify it" "Random J Developer <random@developer.example.org>"
+
+  local HEAD
+  HEAD="$(git rev-parse HEAD)"
+
+  local OUTPUT
+  OUTPUT=$(run_sign_off_check "$BASE" "$HEAD")
+  local -r STATUS=$?
+
+  assert_equals 0 "$STATUS" "an outside contributor authors and certifies their own work"
+  assert_not_contains "$OUTPUT" "authored by the agent" "and is not the subject of this check"
+
+  teardown_sign_off_sandbox
+}
+
+function test_the_sign_off_gate_knows_the_identities_the_hook_sets() {
+  # The gate runs in a workflow that never sources the hook, so the two addresses are
+  # written in both files. Held together here rather than left to agree by hand : a
+  # change to either that missed the other would not fail, it would quietly stop
+  # matching, and the gate would go green on the very commits it exists to refuse
+  local -r HOOK="$REPO_ROOT/.claude/hooks/session-start.sh"
+
+  if [ ! -f "$HOOK" ] || [ ! -f "$REPO_ROOT/$SIGN_OFF_SCRIPT" ]; then
+    skip_test "no hook and sign-off script next to the scripts"
+    return 0
+  fi
+
+  local HOOK_AGENT_EMAIL GATE_AGENT_EMAIL
+  HOOK_AGENT_EMAIL=$(sed -n 's/^readonly AGENT_EMAIL="\(.*\)"$/\1/p' "$HOOK")
+  GATE_AGENT_EMAIL=$(sed -n 's/^readonly AGENT_EMAIL="\(.*\)"$/\1/p' "$REPO_ROOT/$SIGN_OFF_SCRIPT")
+
+  assert_not_empty "$HOOK_AGENT_EMAIL" "the hook should state the address it authors under" || return 1
+  assert_equals "$HOOK_AGENT_EMAIL" "$GATE_AGENT_EMAIL" \
+    "the gate has to look for the address the hook actually authors under"
+
+  local HOOK_SIGN_OFF_EMAIL GATE_SIGN_OFF_EMAIL
+  HOOK_SIGN_OFF_EMAIL=$(sed -n 's/^readonly SIGN_OFF_EMAIL="\(.*\)"$/\1/p' "$HOOK")
+  GATE_SIGN_OFF_EMAIL=$(sed -n 's/^readonly SIGN_OFF_EMAIL="\(.*\)"$/\1/p' "$REPO_ROOT/$SIGN_OFF_SCRIPT")
+
+  assert_not_empty "$HOOK_SIGN_OFF_EMAIL" "and the address it puts on the trailer" || return 1
+  assert_equals "$HOOK_SIGN_OFF_EMAIL" "$GATE_SIGN_OFF_EMAIL" \
+    "the gate has to accept the address the hook actually signs off under"
+}
+
+function test_the_shape_the_first_head_of_442_had_is_refused() {
+  # Reconstructed exactly : authored by the maintainer, certified by the maintainer,
+  # with the agent in Co-Authored-By. That is #421's arrangement, made after #441
+  # replaced it, and it passed this gate green -- which is what issue #446 is
+  sign_off_check_can_run || { skip_test "git or the sign-off script is missing"; return 0; }
+  setup_sign_off_sandbox || return 1
+
+  printf 'the shape 442 had\n' >> file.txt
+  git add file.txt
+  git -c "user.name=Tigerblue77" -c "user.email=37409593+tigerblue77@users.noreply.github.com" \
+    commit --quiet -m "Written by the tool, recorded as the maintainer's" \
+    --trailer "Co-Authored-By: $AGENT_SIGN_OFF" \
+    --trailer "Signed-off-by: $MAINTAINER_SIGN_OFF" --no-verify
+
+  local HEAD
+  HEAD="$(git rev-parse HEAD)"
+
+  local OUTPUT
+  OUTPUT=$(run_sign_off_check "$BASE" "$HEAD")
+  local -r STATUS=$?
+
+  assert_not_equals 0 "$STATUS" "the arrangement #441 replaced should not pass any more"
+  assert_contains "$OUTPUT" "names the agent as a co-author" "the error should say what it found"
+  assert_contains "$OUTPUT" "--reset-author" "and name what repairs it"
+
+  teardown_sign_off_sandbox
+}
+
+function test_a_redundant_co_author_on_a_commit_the_agent_authored_is_left_alone() {
+  # The author field already says it, so the trailer adds nothing -- but it contradicts
+  # nothing either, and refusing it would fail a commit whose two identities are both
+  # already right
+  sign_off_check_can_run || { skip_test "git or the sign-off script is missing"; return 0; }
+  setup_sign_off_sandbox || return 1
+
+  printf 'redundant\n' >> file.txt
+  git add file.txt
+  git -c "user.name=Claude" -c "user.email=noreply@anthropic.com" \
+    commit --quiet -m "Authored by the tool, and saying so twice" \
+    --trailer "Co-Authored-By: $AGENT_SIGN_OFF" \
+    --trailer "Signed-off-by: $MAINTAINER_SIGN_OFF" --no-verify
+
+  local HEAD
+  HEAD="$(git rev-parse HEAD)"
+
+  local OUTPUT
+  OUTPUT=$(run_sign_off_check "$BASE" "$HEAD")
+  local -r STATUS=$?
+
+  assert_equals 0 "$STATUS" "both identities are right ; the extra trailer is redundant, not wrong"
+
+  teardown_sign_off_sandbox
 }
