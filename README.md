@@ -404,31 +404,16 @@ Mind which way round the two modes are, because they read backwards from what yo
 
 So "quiet at night" is `false`, and "let the server look after itself during the day" is `true`.
 
-Two containers, one configuration each, only one of them running at a time:
+Two containers, one configuration each, only one of them running at a time. Take whichever [Usage](#usage) recipe you already run and create it twice, with `docker create` in place of `docker run` so that neither starts before it is asked to: the same parameters both times, two `--name`s, and the one value that differs — `MONITORING_ONLY_MODE=false` on the quiet one, `MONITORING_ONLY_MODE=true` on the other. Name them `fans_quiet` and `fans_loud`, and give both `--restart=unless-stopped`.
 
-```bash
-docker create --name fans_quiet --restart=unless-stopped \
-  -e IDRAC_HOST=local \
-  -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
-  -e MONITORING_ONLY_MODE=false \
-  --device=/dev/ipmi0:/dev/ipmi0:rw \
-  tigerblue77/dell_idrac_fan_controller:latest
-
-docker create --name fans_loud --restart=unless-stopped \
-  -e IDRAC_HOST=local \
-  -e MONITORING_ONLY_MODE=true \
-  --device=/dev/ipmi0:/dev/ipmi0:rw \
-  tigerblue77/dell_idrac_fan_controller:latest
-```
-
-then, from the host's cron:
+Then, from the host's cron:
 
 ```cron
 0 22 * * *  docker stop fans_loud  && docker start fans_quiet
 0  8 * * *  docker stop fans_quiet && docker start fans_loud
 ```
 
-`--restart=unless-stopped` on both is deliberate: after a host reboot only the one that was actually running comes back, a container that was explicitly stopped not being started again.
+That restart policy is deliberate: after a host reboot only the one that was actually running comes back, a container explicitly stopped not being started again.
 
 With `docker compose`, one service is enough. Interpolate the value in your `docker-compose.yml`:
 
