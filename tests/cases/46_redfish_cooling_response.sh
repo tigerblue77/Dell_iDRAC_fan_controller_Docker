@@ -543,6 +543,65 @@ function test_local_mode_says_the_transport_is_missing_rather_than_blaming_the_s
   assert_matches "$(cat "$TEST_TEMPORARY_DIRECTORY/local")" "Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD"
 }
 
+function test_local_mode_does_not_promise_nothing_else_changes_when_the_cpus_come_from_lm_sensors() {
+  # The sentence that cost issue #378's reporter a run. He read "Nothing else changes", followed the
+  # advice, and his container refused to start : his iDRAC publishes no CPU temperature, so his CPUs
+  # come from lm-sensors -- and that fallback exists only in local mode
+  export IDRAC_HOST="local"
+  CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > "$TEST_TEMPORARY_DIRECTORY/lm_sensors" 2>&1
+  local -r OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/lm_sensors")
+
+  assert_not_contains "$OUTPUT" "Nothing else changes" \
+    "on this server the switch would cost the only CPU reading it has"
+  assert_contains "$OUTPUT" "would refuse to start" \
+    "what the switch would actually do has to be said before it is suggested"
+  assert_contains "$OUTPUT" "Local mode is the right one for this server"
+}
+
+function test_local_mode_still_promises_nothing_else_changes_when_the_idrac_reports_the_cpus() {
+  # The negative control : a server whose iDRAC does report its CPUs loses nothing by switching, and
+  # must not be warned off a mode that would work for it
+  export IDRAC_HOST="local"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > "$TEST_TEMPORARY_DIRECTORY/ipmi" 2>&1
+  local -r OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/ipmi")
+
+  assert_contains "$OUTPUT" "Nothing else changes"
+  assert_not_contains "$OUTPUT" "would refuse to start"
+}
+
+function test_no_warning_or_error_ends_on_a_doubled_full_stop() {
+  # print_warning and print_error both append a period, so a message that ends with one prints two.
+  # Visible in the reporter's own log as "...logged every cycle.." -- small, but it is the kind of
+  # thing that makes a careful log look careless
+  local OUTPUT
+
+  export IDRAC_HOST="local"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" > "$TEST_TEMPORARY_DIRECTORY/stops" 2>&1
+  OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/stops")
+
+  assert_not_contains "$OUTPUT" ".." "a message must not supply the period print_warning already appends"
+}
+
+function test_the_manual_redfish_instructions_do_not_supply_their_own_full_stop() {
+  # The other half, which the case above cannot reach : four print_error call sites end on this shared
+  # constant, and print_error appends a period of its own, so a constant ending in one printed
+  # "...are unaffected..". Pinned on the constant rather than on any single caller, it being the tail
+  # all four share
+  assert_not_contains "${REDFISH_MANUAL_INSTRUCTIONS: -1}" "." \
+    "print_error supplies the terminal period, so this constant must not"
+}
+
 function test_the_controller_keeps_asking_a_briefly_unreachable_idrac_instead_of_naming_the_server() {
   export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
   simulate_server "PowerEdge R6515" --cpus 1

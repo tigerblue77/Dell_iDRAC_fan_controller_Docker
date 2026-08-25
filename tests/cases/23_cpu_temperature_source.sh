@@ -451,7 +451,7 @@ function test_the_detected_sensors_are_named_after_the_chips_they_are_read_from(
   SDR_TEMPERATURE_DATA=$(build_CPU_temperature_sdr_lines_from_lm_sensors)
   detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
 
-  assert_equals "2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 coretemp-isa-0001)" \
+  assert_equals "2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 and coretemp-isa-0001)" \
     "$(format_detected_CPU_temperature_sensors)"
 }
 
@@ -470,7 +470,7 @@ function test_the_ipmi_source_keeps_naming_the_entities() {
   SDR_TEMPERATURE_DATA=$(make_sdr_output --cpus 2)
   detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
 
-  assert_equals "2 CPU temperature sensors detected (entities 3.1 3.2)" \
+  assert_equals "2 CPU temperature sensors detected (entities 3.1 and 3.2)" \
     "$(format_detected_CPU_temperature_sensors)"
 }
 
@@ -490,7 +490,7 @@ function test_the_controller_supervises_a_server_whose_idrac_reports_no_cpu() {
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "reading the CPUs from lm-sensors instead"
-  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 coretemp-isa-0001)"
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 and coretemp-isa-0001)"
   assert_contains "$OUTPUT" "45°C" "the first CPU should be supervised"
   assert_contains "$OUTPUT" "47°C" "the second CPU should be supervised"
   assert_contains "$OUTPUT" "User static fan control profile" \
@@ -556,6 +556,10 @@ function test_the_controller_still_refuses_when_the_idrac_and_lm_sensors_both_re
   assert_contains "$OUTPUT" "No CPU temperature sensor could be read"
   assert_contains "$OUTPUT" "Dell default dynamic fan control profile applied for safety before exiting"
   assert_not_contains "$OUTPUT" "reading the CPUs from lm-sensors instead"
+  # The negative control of the network-mode remedy below : in local mode the fallback already ran and
+  # still found nothing, so naming the mode the user is already in would be noise
+  assert_not_contains "$OUTPUT" "set IDRAC_HOST=local" \
+    "a container already in local mode must not be told to switch to it"
   assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x00")" \
     "manual fan control must never be enabled on readings the controller never got"
 }
@@ -573,6 +577,37 @@ function test_a_network_mode_server_reporting_no_cpu_is_refused_rather_than_read
   assert_contains "$OUTPUT" "No CPU temperature sensor could be read"
 }
 
+function test_the_network_mode_refusal_names_the_one_remedy_that_server_has() {
+  # Issue #378's reporter met this refusal on a machine that WAS the server being cooled, and the
+  # message said nothing about the mode that would have worked. He had to work local mode out himself.
+  # The refusal is correct -- network mode cannot assume the two are the same machine -- but a refusal
+  # that names no remedy sends a user who has one away empty-handed
+  simulate_iDRAC_reporting_no_CPU
+  simulate_readable_CPUs_in_lm_sensors 45.000 47.000
+
+  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+
+  assert_contains "$OUTPUT" "set IDRAC_HOST=local" \
+    "the mode that reads this server's CPUs has to be named"
+  assert_contains "$OUTPUT" "every fan control command still goes to the very same BMC" \
+    "and the reason it costs nothing, since the fans are driven through the iDRAC either way"
+}
+
+function test_two_chips_standing_in_for_a_package_are_not_run_together() {
+  # What the reporter's own log read like : "lm-sensors chips coretemp-isa-0000 (hottest core)
+  # coretemp-isa-0001 (hottest core)" -- two names joined by a space, each already containing spaces,
+  # so the list read as one run-on string with no way to see where the first name ended
+  export MOCK_SENSORS_OUTPUT
+  MOCK_SENSORS_OUTPUT="$(coretemp_chip_without_a_package 0 32.000 26.000)$(coretemp_chip_without_a_package 1 22.000 31.000)"
+  CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
+  SDR_TEMPERATURE_DATA=$(build_CPU_temperature_sdr_lines_from_lm_sensors)
+  detect_CPU_temperature_sensors "$SDR_TEMPERATURE_DATA"
+
+  assert_equals "2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 (hottest core) and coretemp-isa-0001 (hottest core))" \
+    "$(format_detected_CPU_temperature_sensors)" \
+    "the two names have to be told apart, which a bare space cannot do here"
+}
+
 function test_a_healthy_idrac_is_never_second_guessed() {
   # The negative control of the whole feature : a server whose iDRAC reports its
   # CPUs must be supervised through it, and lm-sensors must never be consulted
@@ -587,7 +622,7 @@ function test_a_healthy_idrac_is_never_second_guessed() {
   local -r OUTPUT=$(run_controller)
 
   assert_not_contains "$OUTPUT" "reading the CPUs from lm-sensors instead"
-  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)"
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 and 3.2)"
   assert_contains "$OUTPUT" "42°C" "the temperatures must be the iDRAC's, not lm-sensors'"
   assert_contains "$OUTPUT" "44°C"
 }
