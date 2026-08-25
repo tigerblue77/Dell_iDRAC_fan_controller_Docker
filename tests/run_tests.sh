@@ -23,6 +23,34 @@ REPO_ROOT="$(cd "$TESTS_DIRECTORY/.." && pwd)"
 readonly TESTS_DIRECTORY REPO_ROOT
 export TESTS_DIRECTORY REPO_ROOT
 
+# The git the cases get answers for their own sandbox, and not for the machine the run
+# happens to be on. cases/11 and cases/18 each build a repository under a temporary
+# directory and configure an identity in it locally, which is not enough on its own :
+# git has THREE sources above that, and only two of them are files.
+#
+# The third is the environment. GIT_CONFIG_COUNT with its GIT_CONFIG_KEY_n /
+# GIT_CONFIG_VALUE_n pairs is read before either file and outranks a repository's local
+# config, so a single variable rewrites what those sandboxes answer. Measured, on this
+# tree, with nothing else changed :
+#
+#   ./tests/run_tests.sh -f sign_off                                  17 passed
+#   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email \
+#     GIT_CONFIG_VALUE_0=noreply@anthropic.com ./tests/run_tests.sh -f sign_off
+#                                                                     2 failed, 15 passed
+#
+# Not hypothetical : Claude Code on the web sets three such pairs, two of them
+# "url.https://github.com/.insteadOf", which is what made a case asserting the SSH form of
+# a remote pass without ever reaching the branch written for it -- and go on passing once
+# that branch was deleted (#461).
+#
+# Here rather than in the cases, because the runner is the one place every case goes
+# through, and it calls git nowhere itself : this costs the run nothing and covers the
+# cases not yet written. Dropping the count is what disables the pairs -- git reads
+# exactly that many and no more
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
+unset GIT_CONFIG_COUNT
+
 FILTER=""
 LIST_ONLY=false
 TAP_OUTPUT=false

@@ -383,31 +383,27 @@ function session_setup_block() {
 # them would be made and lost. The same boundary CLAUDE.md warns about, arrived at from the
 # test's side.
 #
-# The machine's own git configuration is taken out of the way while it runs. Not tidiness :
-# "url.<base>.insteadOf" rewrites a remote AT READ TIME, so a machine carrying one hands the
-# SSH case the HTTPS form -- the case then passes without ever reaching the branch written
-# for it, and goes on passing once that branch is deleted. Measured, on the first version of
-# these cases. THREE sources, and the third is the one that surprised this file : two are
-# files, silenced by pointing them at /dev/null, and the third is the environment, where
-# GIT_CONFIG_COUNT and its GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n pairs are read before
-# either file and are what carries the rewrite in Claude Code on the web. Dropping the count
-# disables them : git reads exactly that many pairs and no more.
+# No git configuration of its own is needed here : the runner takes the machine's out of the
+# way for the whole suite (#461). That is load-bearing rather than tidy, and this file is
+# where it shows first -- "url.<base>.insteadOf" rewrites a remote AT READ TIME, so a machine
+# carrying one hands the SSH case below the HTTPS form, and that case then passes without
+# ever reaching the branch written for it. It did, and it went on passing once that branch
+# was deleted. If the runner ever stops silencing it, this file is the canary.
 # Usage : run_session_setup_for_origin "https://github.com/owner/repository"
 #         -> sets SESSION_SETUP_OUTPUT and SANDBOX
 function run_session_setup_for_origin() {
   local -r ORIGIN="$1"
-  local -r HERMETIC=(env -u GIT_CONFIG_COUNT GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
 
   SANDBOX=$(mktemp -d)
-  "${HERMETIC[@]}" git init --quiet --initial-branch=master "$SANDBOX"
-  "${HERMETIC[@]}" git -C "$SANDBOX" config commit.gpgsign false
+  git init --quiet --initial-branch=master "$SANDBOX"
+  git -C "$SANDBOX" config commit.gpgsign false
 
   if [ -n "$ORIGIN" ]; then
-    "${HERMETIC[@]}" git -C "$SANDBOX" remote add origin "$ORIGIN"
+    git -C "$SANDBOX" remote add origin "$ORIGIN"
   fi
 
   local -r BLOCK=$(session_setup_block)
-  SESSION_SETUP_OUTPUT=$("${HERMETIC[@]}" CLAUDE_PROJECT_DIR="$SANDBOX" bash -c "$BLOCK" 2>&1)
+  SESSION_SETUP_OUTPUT=$(CLAUDE_PROJECT_DIR="$SANDBOX" bash -c "$BLOCK" 2>&1)
 }
 
 # Usage : if ! the_session_setup_can_be_run; then skip_test "..."; return 0; fi

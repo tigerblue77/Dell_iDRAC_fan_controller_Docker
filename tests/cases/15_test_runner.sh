@@ -205,3 +205,52 @@ PROBE
   assert_contains "$PROBE_OUTPUT" "meets_a_controller_that_will_not_stop" \
     "naming the case it happened in, which is what an unbounded wait could never do"
 }
+
+function test_a_hostile_git_environment_cannot_reach_a_test_case() {
+  if ! command -v git > /dev/null 2>&1; then
+    skip_test "git is not available, and it is what this case hands a hostile environment to"
+    return 0
+  fi
+
+  # cases/11 and cases/18 build a repository under a temporary directory and configure an
+  # identity in it locally, and cases/18 states the promise both rest on : "no test depends
+  # on how the machine running it is set up". A local configuration is not enough to keep
+  # it. GIT_CONFIG_COUNT with its GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n pairs is read
+  # before either configuration FILE and outranks a repository's own, so one variable
+  # rewrites what every sandbox in the suite answers -- measured, one key turning two
+  # sign-off cases red against a tree nobody had touched (#461).
+  #
+  # The runner drops the count for this reason. Guarded here end to end rather than by
+  # reading its text : the probe below is handed exactly the environment the promise has to
+  # survive, and asks git the one question a sandbox exists to control
+  local -r PROBE_BODY=$(cat << 'PROBE_CASE'
+() {
+  local SANDBOX
+  SANDBOX=$(mktemp -d)
+  git init --quiet "$SANDBOX"
+  git -C "$SANDBOX" config user.email "the.sandbox@example.org"
+
+  local IDENTITY
+  IDENTITY=$(git -C "$SANDBOX" config --get user.email)
+
+  rm -rf "$SANDBOX"
+
+  assert_equals "the.sandbox@example.org" "$IDENTITY" \
+    "a sandbox should answer with its own identity, whatever the run was started with"
+}
+PROBE_CASE
+  )
+
+  export GIT_CONFIG_COUNT=1
+  export GIT_CONFIG_KEY_0="user.email"
+  export GIT_CONFIG_VALUE_0="the.machine@example.org"
+
+  run_the_runner_on_a_probe_case_file "function ${PROBE_PREFIX}_reads_its_own_sandbox_identity$PROBE_BODY"
+
+  unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+
+  assert_equals 0 "$PROBE_EXIT_CODE" \
+    "a run started with git configuration in its environment should still answer for its own sandboxes"
+  assert_not_contains "$PROBE_OUTPUT" "the.machine@example.org" \
+    "the environment's value should not have reached the case at all"
+}
