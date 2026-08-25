@@ -957,6 +957,31 @@ function test_every_repository_path_claude_md_names_exists() {
   shopt -u nullglob
 }
 
+function test_the_workflow_claude_md_says_builds_the_image_still_builds_it() {
+  if [ ! -f "$REPO_ROOT/CLAUDE.md" ] || [ ! -f "$REPO_ROOT/.github/workflows/tests.yml" ]; then
+    skip_test "no CLAUDE.md and no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # CLAUDE.md lists three commands to run before pushing and says the third of them, the
+  # image build, needs a Docker daemon that Claude Code on the web does not have. What
+  # makes leaving it out safe there is the Tests workflow building the image on every pull
+  # request, so a broken Dockerfile is still caught before a merge (#463).
+  #
+  # Two documents, one fact, and the permission rests entirely on it. If that step ever
+  # goes, CLAUDE.md would be telling every session it may skip the only build there is --
+  # the quiet kind of wrong this file exists to refuse
+  local -r TESTS_WORKFLOW=$(cat "$REPO_ROOT/.github/workflows/tests.yml")
+
+  assert_contains "$(cat "$REPO_ROOT/CLAUDE.md")" "builds the image on every pull request" \
+    "CLAUDE.md should still say what covers the build a session cannot run" || return 1
+
+  # Not anchored at a line end : "[[ =~ ]]" matches against the whole file as one string,
+  # where "$" is its last character rather than the end of the line the command sits on
+  assert_matches "$TESTS_WORKFLOW" 'run: docker build ' \
+    "the Tests workflow should still build the image, which is what makes that true"
+}
+
 function test_the_workflow_claude_md_gives_as_its_reason_still_skips_drafts() {
   if [ ! -f "$REPO_ROOT/CLAUDE.md" ] || [ ! -f "$REPO_ROOT/.github/workflows/auto_update_pull_request_branches.yml" ]; then
     skip_test "no CLAUDE.md and no .github/workflows next to the scripts"
