@@ -91,7 +91,7 @@ function test_a_three_cpu_server_reports_its_three_cpus() {
   assert_equals "3.1 3.2 3.3" "${DETECTED_CPU_ENTITY_IDS[*]}"
   assert_equals "CPU 1 CPU 2 CPU 3" "${DETECTED_CPU_LABELS[*]}"
   assert_equals "41;40;39" "$CPUS_TEMPERATURES"
-  assert_equals "3 CPU temperature sensors detected (entities 3.1 3.2 3.3)" \
+  assert_equals "3 CPU temperature sensors detected (entities 3.1, 3.2 and 3.3)" \
     "$(format_detected_CPU_temperature_sensors)"
 }
 

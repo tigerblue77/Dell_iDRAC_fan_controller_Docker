@@ -201,8 +201,14 @@ function test_aiming_the_controller_at_the_enclosure_instead_of_a_blade_fails_sa
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge M1000e"
-  assert_contains "$OUTPUT" "Dell default dynamic fan control profile" \
-    "an unreadable CPU must fall back on Dell's own profile"
+  # Attempted, and then reported by what the server actually answered. This CMC refuses fan control
+  # outright, so the hand-back cannot land -- and the closing line used to claim it had anyway,
+  # contradicting the "Failed to apply Dell default fan control profile" printed three lines above it.
+  # The old assertion passed on that contradiction, matching a substring the lie happened to contain
+  assert_equals "1" "$(count_ipmitool_calls_matching "raw 0x30 0x30 0x01 0x01")" \
+    "an unreadable CPU must still put the fans back on Dell's own profile"
+  assert_contains "$OUTPUT" "refused to be put back on Dell's own dynamic fan control profile" \
+    "and a refused hand-back must be reported, not papered over"
   # No processor entity at all means there is nothing to build a temperatures
   # table around, so the controller says so and keeps waiting for one instead of
   # printing a table whose only CPU column would never hold a reading
@@ -288,7 +294,7 @@ function test_a_transiently_empty_sdr_read_is_waited_out_not_refused() {
     "an empty answer must never be taken for a server without a CPU"
   assert_contains "$OUTPUT" "No temperature sensor could be read at all" \
     "the container says what it is waiting on instead of going quiet"
-  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)." \
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 and 3.2)." \
     "and picks the CPUs up on the cycle they answer"
   assert_contains "$OUTPUT" "44°C" "then monitors them normally"
 }

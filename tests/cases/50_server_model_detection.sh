@@ -36,6 +36,32 @@ function test_the_server_model_falls_back_on_the_fru_board_fields() {
   assert_equals "PowerEdge R630" "$SERVER_MODEL"
 }
 
+function test_a_padded_fru_field_does_not_carry_its_padding_into_every_message() {
+  # A FRU field is fixed length and BMCs pad it. Issue #378's R510 did, and every message that printed
+  # the model carried the padding : its refusal read "...from DELL PowerEdge R510 , and every
+  # PowerEdge...", a space before a comma that no format string in the repository contains
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL   " --model "PowerEdge R510   ")
+
+  get_Dell_server_model
+
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R510" "$SERVER_MODEL" \
+    "the padding must be gone before the value reaches anything that prints it"
+}
+
+function test_a_padded_fru_board_field_is_trimmed_too() {
+  # The board fallback squeezed runs of spaces to one rather than removing them, so it left exactly one
+  # trailing space -- the harder half to notice, and the one a "Product *"-less server would hit
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --manufacturer "DELL  " --model "PowerEdge R510  " --board-fields-only)
+
+  get_Dell_server_model
+
+  assert_equals "DELL" "$SERVER_MANUFACTURER"
+  assert_equals "PowerEdge R510" "$SERVER_MODEL"
+}
+
 function test_a_populated_power_supply_is_not_mistaken_for_the_server_itself() {
   # "ipmitool fru" describes every FRU device on the bus, and a populated power supply
   # fills the same "Product Manufacturer" / "Product Name" fields as the server. Keeping

@@ -297,13 +297,20 @@ while true; do
     # server has. It belongs with "not answering yet" below, not with the verdict underneath : the
     # refusal is about a server that listed its sensors and had no CPU among them
     if [ -z "$SDR_TEMPERATURE_DATA" ]; then
-      apply_Dell_default_fan_control_profile
+      # Verified rather than announced, for the same reason as the refusal further down : this line was
+      # printed on every header interval for the life of a container whose BMC may well have refused it
+      WERE_THE_FANS_HANDED_BACK=true
+      apply_Dell_default_fan_control_profile || WERE_THE_FANS_HANDED_BACK=false
 
       # Repeated on the rhythm the monitoring loop reprints its table header rather than once, so a
       # container waiting on an iDRAC that never returns anything cannot be mistaken for a hung one
       if (( WAITING_FOR_TEMPERATURE_SENSORS_CYCLES % TABLE_HEADER_PRINT_INTERVAL == 0 )); then
         set_log_timestamp TIMESTAMP
-        printf "%19s  No temperature sensor could be read at all, Dell default dynamic fan control profile applied for safety while waiting...\n" "$TIMESTAMP"
+        if "$WERE_THE_FANS_HANDED_BACK"; then
+          printf "%19s  No temperature sensor could be read at all, Dell default dynamic fan control profile applied for safety while waiting...\n" "$TIMESTAMP"
+        else
+          printf "%19s  No temperature sensor could be read at all, and this server refused to be put back on Dell default dynamic fan control profile. Still waiting...\n" "$TIMESTAMP"
+        fi
       fi
       ((WAITING_FOR_TEMPERATURE_SENSORS_CYCLES++))
 
@@ -350,14 +357,34 @@ while true; do
     # run of this container may have left the BMC in manual mode, in which case they would stay pinned
     # at the user's low speed with nobody watching the temperatures. graceful_exit is not reached here,
     # the trap only covering the termination signals
-    apply_Dell_default_fan_control_profile
+    # Verified rather than announced. The closing line below used to state that Dell's profile had been
+    # applied whatever the BMC answered, so a server that refused the hand-back was told the opposite of
+    # what the line above it had just logged
+    WERE_THE_FANS_HANDED_BACK=true
+    apply_Dell_default_fan_control_profile || WERE_THE_FANS_HANDED_BACK=false
+
+    if "$WERE_THE_FANS_HANDED_BACK"; then
+      HAND_BACK_CLAUSE=" Dell default dynamic fan control profile applied for safety before exiting"
+    else
+      HAND_BACK_CLAUSE=" This server also refused to be put back on Dell's own dynamic fan control profile, so its fans are left wherever they were"
+    fi
+
+    # The one remedy this server actually has, said to the only people it applies to. An iDRAC that
+    # reports no CPU temperature is read from lm-sensors instead -- but only in local mode, because
+    # lm-sensors reads the machine this container runs on and network mode does not assume that is the
+    # server being controlled. Issue #378's reporter hit exactly this, on a machine that WAS the same
+    # one, and had to work out on his own that local mode was the answer
+    NETWORK_MODE_CLAUSE=""
+    if "$NETWORK_MODE"; then
+      NETWORK_MODE_CLAUSE="
+ This container is in network mode, where that fallback is unavailable : lm-sensors reads the machine this container runs on, and network mode does not assume it is the server being controlled. If this container DOES run on that server, set IDRAC_HOST=local and give it the host's /dev/ipmi0 -- the CPUs are then read locally while every fan control command still goes to the very same BMC."
+    fi
 
     print_error_and_exit "No CPU temperature sensor could be read from $SERVER_MANUFACTURER $SERVER_MODEL, and every PowerEdge has at least one CPU.
  If IDRAC_HOST points at a chassis management controller (VRTX, FX2, M1000e, MX7000), point it at a node's own iDRAC instead : the chassis hosts no CPU, and its CMC drives the enclosure fans rather than a node's.
- Otherwise, run \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type temperature\" (drop the connection options in local mode) and look for lines whose 4th column is an entity \"3.<something>\" and whose reading ends in \"degrees C\".
+ Otherwise, run \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type temperature\" (drop the connection options in local mode) and look for lines whose 4th column is an entity \"3.<something>\" and whose reading ends in \"degrees C\". An entity that is listed but reads \"Disabled\" or \"No Reading\" is an iDRAC publishing no CPU temperature, which is the case below.$NETWORK_MODE_CLAUSE
  If some are listed and the container still reports none, or if none is listed at all, please open an issue with your server model and that output : https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues
- Set MONITORING_ONLY_MODE=true to keep the container running and logging the temperatures it can read, without driving the fans.
- Dell default dynamic fan control profile applied for safety before exiting"
+ Set MONITORING_ONLY_MODE=true to keep the container running and logging the temperatures it can read, without driving the fans.$HAND_BACK_CLAUSE"
   fi
 
   # Worded and repeated exactly like the monitoring loop does for the same situation : this is the

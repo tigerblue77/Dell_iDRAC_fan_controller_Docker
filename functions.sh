@@ -1480,9 +1480,16 @@ function format_detected_CPU_temperature_sensors() {
 
   if (( NUMBER_OF_SENSORS == 1 )); then
     printf '1 CPU temperature sensor detected (%s %s)' "$SINGULAR_LABEL" "${SOURCES[0]}"
-  else
-    printf '%d CPU temperature sensors detected (%s %s)' "$NUMBER_OF_SENSORS" "$PLURAL_LABEL" "${SOURCES[*]}"
+    return
   fi
+
+  # Enumerated rather than joined with a bare space. An entity ID carries none, but a chip standing in
+  # for a package sensor it does not have is named "coretemp-isa-0000 (hottest core)" -- two of those
+  # joined by a space read as one run-on string, and a mixed pair leaves the suffix looking like it
+  # belongs to the whole list rather than to the one chip it qualifies (issue #378)
+  local JOINED_SOURCES
+  JOINED_SOURCES=$(join_with_and "${SOURCES[@]}")
+  printf '%d CPU temperature sensors detected (%s %s)' "$NUMBER_OF_SENSORS" "$PLURAL_LABEL" "$JOINED_SOURCES"
 }
 
 # Warns when more CPU temperature sensors are detected than any Dell server has sockets.
@@ -2063,7 +2070,7 @@ function apply_the_cooling_response_over_redfish() {
     print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, so it is being set over Redfish instead.
  Dell moved it at the 14th generation, from one command covering the whole server to one attribute per PCIe slot. This iDRAC exposes it on $REDFISH_COOLING_RESPONSE_SLOT_COUNT slots, of which $(printf '%s' "$REDFISH_THIRD_PARTY_SLOTS" | wc -w) hold a third-party card : $REDFISH_THIRD_PARTY_SLOTS.
  Those are the only ones written to, and $REDFISH_SLOTS_WRITTEN of them needed changing. A slot holding a Dell card or no card at all is left alone, its airflow being something Dell has real data for.
- Written once rather than on every cycle : a Redfish write creates a configuration job on the iDRAC, so re-sending it every CHECK_INTERVAL would fill that queue for nothing."
+ Written once rather than on every cycle : a Redfish write creates a configuration job on the iDRAC, so re-sending it every CHECK_INTERVAL would fill that queue for nothing"
     return 0
   fi
 
@@ -2198,7 +2205,7 @@ function run_the_redfish_cooling_response_errand() {
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="No third-party PCIe card to apply it to"
       print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response, but it does have the setting, on $REDFISH_COOLING_RESPONSE_SLOT_COUNT PCIe slots over Redfish.
  None of them currently holds a third-party card, so there is nothing to apply DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to. Dell's own airflow data covers the cards that are there.
- Nothing else changes : temperatures keep being read and logged every cycle."
+ Nothing else changes : temperatures keep being read and logged every cycle"
       return 0
     fi
 
@@ -2229,13 +2236,24 @@ function run_the_redfish_cooling_response_errand() {
   # configuration that is correct, while the real cause goes unnamed (#429)
   if [ -z "$REDFISH_LAST_PROBE_STATUS" ]; then
     REDFISH_COOLING_RESPONSE_SETTLED=true
-
     if [ "$IDRAC_HOST" == "local" ]; then
       # In local mode the controller reaches the BMC through /dev/ipmi0 and is given no iDRAC address and
       # no credentials, so this says what is true -- the transport is missing -- rather than blaming a
       # server that may well have the setting
       THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (Redfish needs network mode)"
-      print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server. Nothing else changes : temperatures keep being read and logged every cycle."
+
+      # What switching modes would cost, said before it is suggested rather than discovered afterwards.
+      #
+      # "Nothing else changes" was printed unconditionally, and on a server whose CPUs are read from
+      # lm-sensors it is false : that fallback exists only in local mode, so network mode would leave the
+      # container with no CPU temperature at all and it would refuse to start. The reporter of issue #378
+      # read this warning, followed it, and lost the only mode his R510 runs in
+      local WHAT_ELSE_CHANGES=" Nothing else changes : temperatures keep being read and logged every cycle"
+      if [ "${CPU_TEMPERATURE_SOURCE_IN_USE:-ipmi}" == "lm-sensors" ]; then
+        WHAT_ELSE_CHANGES=" Something else would change on this server, and it is the more important of the two : its iDRAC reports no readable CPU temperature, so the CPUs are being read from lm-sensors instead -- and that fallback exists only in local mode, because lm-sensors reads the machine this container runs on rather than the one IDRAC_HOST would name. In network mode this container would have no CPU temperature at all and would refuse to start. Local mode is the right one for this server ; leaving this parameter without effect is the cheaper of the two prices"
+      fi
+
+      print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server.$WHAT_ELSE_CHANGES"
       return 1
     fi
 
@@ -2453,17 +2471,21 @@ function get_Dell_server_model() {
 
   # First match only within that section too : one device cannot sensibly report the field twice, but a
   # whole-inventory fallback above would otherwise bring the parts back in
-  SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | grep "Product Manufacturer" | awk -F ': ' '{print $2; exit}')
-  SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | grep "Product Name" | awk -F ': ' '{print $2; exit}')
+  # Trimmed as it is read. A FRU field is fixed length and BMCs pad it, so an untrimmed value carries
+  # its padding into every message that prints it -- issue #378's R510 reported "PowerEdge R510   " and
+  # its refusal read "...from DELL PowerEdge R510 , and every PowerEdge...". awk does the trimming so
+  # that this stays one command substitution per statement
+  SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | grep "Product Manufacturer" | awk -F ': ' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}')
+  SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | grep "Product Name" | awk -F ': ' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}')
 
   # Check if SERVER_MANUFACTURER is empty, if yes, assign value based on "Board Mfg"
   if [ -z "$SERVER_MANUFACTURER" ]; then
-    SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{print $2; exit}')
+    SERVER_MANUFACTURER=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Mfg :" | awk -F ': ' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}')
   fi
 
   # Check if SERVER_MODEL is empty, if yes, assign value based on "Board Product"
   if [ -z "$SERVER_MODEL" ]; then
-    SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{print $2; exit}')
+    SERVER_MODEL=$(echo "$FRU_SERVER_SECTION" | tr -s ' ' | grep "Board Product :" | awk -F ': ' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}')
   fi
 
   # Whether the server could be identified is the reliable signal here, not ipmitool's

@@ -175,7 +175,7 @@ function test_the_controller_reports_a_quad_cpu_server() {
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "Server model: DELL PowerEdge R930"
-  assert_contains "$OUTPUT" "4 CPU temperature sensors detected (entities 3.1 3.2 3.3 3.4)."
+  assert_contains "$OUTPUT" "4 CPU temperature sensors detected (entities 3.1, 3.2, 3.3 and 3.4)."
   assert_contains "$OUTPUT" "CPU 1  CPU 2  CPU 3  CPU 4  Exhaust" "all four sockets get their own column"
   assert_contains "$OUTPUT" " 41°C   40°C   39°C   38°C" "the readings must not be shifted by the two-digit sensor IDs"
 }
@@ -540,7 +540,7 @@ function test_a_removed_cpu_is_reported_as_removed_and_not_merely_as_silent() {
     "the line must state the conclusion, with the labels the table was showing"
   assert_contains "$OUTPUT" "(entities 3.3 and 3.4)" \
     "and the entities, so the line can be matched against an ipmitool output"
-  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 3.2)."
+  assert_contains "$OUTPUT" "2 CPU temperature sensors detected (entities 3.1 and 3.2)."
 }
 
 function test_an_unreachable_idrac_does_not_open_the_cpu_removal_window() {
