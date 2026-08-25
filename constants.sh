@@ -48,6 +48,37 @@ readonly MAXIMUM_FAN_SPEED_PERCENTAGE=100
 # speed they had, which is the one failure this whole fallback exists to remove
 readonly MAXIMUM_FAN_IDENTIFIER_PROBES=32
 
+# The values a DMI table carries when nobody filled the serial number in. They are not identifiers : two
+# unrelated machines both reporting "To Be Filled By O.E.M." would compare equal, and comparing them is
+# the whole of what decides whether this container may read the host's CPUs for a server reached over the
+# network. Matched case-insensitively, with all whitespace already removed, so "Not Specified" is written
+# here as it compares (issue #465)
+readonly UNUSABLE_SERIAL_NUMBERS=(
+  "tobefilledbyo.e.m."
+  "tobefilledbyoem"
+  "notspecified"
+  "notavailable"
+  "none"
+  "null"
+  "unknown"
+  "default string"
+  "defaultstring"
+  "systemserialnumber"
+  "chassisserialnumber"
+  "baseboardserialnumber"
+  "0123456789"
+  "n/a"
+  "na"
+  "0"
+  "00000000"
+  "xxxxxxx"
+)
+
+# How short a serial number may be and still be worth comparing. A Dell service tag is seven characters ;
+# anything much shorter is a placeholder rather than an identifier, and a short string is exactly what two
+# different machines are most likely to share
+readonly MINIMUM_USABLE_SERIAL_NUMBER_LENGTH=4
+
 # Bounds the check interval is measured against, in seconds. The interval is the controller's reaction
 # time : between two checks the fans stay pinned at FAN_SPEED with Dell's own dynamic fan control
 # disabled, so it is also the longest the server can heat up before anything raises them again.

@@ -294,11 +294,16 @@ function test_the_automatic_source_starts_on_the_idrac() {
   assert_contains "$CPU_TEMPERATURE_SOURCE_DESCRIPTION" "falling back to lm-sensors"
 }
 
-function test_the_automatic_source_says_it_has_no_fallback_in_network_mode() {
+function test_the_automatic_source_states_the_network_mode_fallback_as_a_condition() {
+  # Whether the fallback is available cannot be known at this point : the iDRAC has not been contacted
+  # yet, and the answer now depends on whether this container turns out to be running on the server
+  # IDRAC_HOST names (issue #465). So the line states the condition rather than a verdict
   resolve_CPU_temperature_source "auto" "true"
 
   assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
-  assert_contains "$CPU_TEMPERATURE_SOURCE_DESCRIPTION" "only available in local mode"
+  assert_contains "$CPU_TEMPERATURE_SOURCE_DESCRIPTION" "proves to be running on the server itself"
+  assert_not_contains "$CPU_TEMPERATURE_SOURCE_DESCRIPTION" "only available in local mode" \
+    "network mode is no longer a blanket refusal, so the startup line must not say it is"
 }
 
 function test_the_explicit_lm_sensors_source_is_resolved_in_local_mode() {
@@ -320,8 +325,11 @@ function test_the_explicit_lm_sensors_source_is_refused_in_network_mode() {
   local -r EXIT_CODE=$?
 
   assert_equals 1 "$EXIT_CODE"
-  assert_contains "$OUTPUT" "would describe the wrong hardware"
-  assert_contains "$OUTPUT" 'Set IDRAC_HOST to "local"' "the error should say how to recover"
+  assert_contains "$OUTPUT" "without anything having checked that they do" \
+    "asking for it outright is asserting what auto checks"
+  assert_contains "$OUTPUT" 'Leave CPU_TEMPERATURE_SOURCE to its default "auto"' \
+    "the error should name the mode that can now reach the fallback in network mode"
+  assert_contains "$OUTPUT" 'Setting IDRAC_HOST to "local"' "and the other way to recover"
 }
 
 function test_the_explicit_lm_sensors_source_is_refused_when_it_reads_nothing() {
@@ -584,6 +592,11 @@ function test_the_network_mode_refusal_names_the_one_remedy_that_server_has() {
   # that names no remedy sends a user who has one away empty-handed
   simulate_iDRAC_reporting_no_CPU
   simulate_readable_CPUs_in_lm_sensors 45.000 47.000
+  # Pinned rather than inherited from whatever machine runs the suite. Left to the real
+  # /sys/class/dmi/id/product_serial this case reads an unreadable DMI on the CI runner and a readable
+  # one inside the Docker image, where the suite runs as root -- so it passed on one and failed on the
+  # other, on a difference that says nothing about the code (issue #465)
+  provide_a_host_serial_to_the_controller
 
   local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
 
@@ -591,6 +604,32 @@ function test_the_network_mode_refusal_names_the_one_remedy_that_server_has() {
     "the mode that reads this server's CPUs has to be named"
   assert_contains "$OUTPUT" "every fan control command still goes to the very same BMC" \
     "and the reason it costs nothing, since the fans are driven through the iDRAC either way"
+  # Since issue #465 the fallback is not refused in network mode, it is refused when the container could
+  # not be SHOWN to run on the controlled server -- so the refusal has to say which of those happened,
+  # and why. "Unavailable in network mode" is what it said before that check existed
+  assert_not_contains "$OUTPUT" "that fallback is unavailable" \
+    "network mode is no longer a blanket refusal, so the message must not describe it as one"
+  assert_contains "$OUTPUT" "It was not shown here : " \
+    "a refusal that rests on a check has to say what the check found"
+  assert_contains "$OUTPUT" "does not report a usable serial number of its own" \
+    "and here it is the host's own DMI that could not be read, which is the commonest reason by far"
+}
+
+function test_the_network_mode_refusal_names_the_two_machines_when_they_differ() {
+  # The other branch of the same refusal, and one CI proved reachable rather than theoretical : the suite
+  # running as root inside the Docker image reads the runner's own DMI, so a container CAN read this file.
+  # A user who mistyped IDRAC_HOST, or pointed it at another node of the same rack, gets both tags named
+  # rather than a verdict with nothing to check it against
+  simulate_iDRAC_reporting_no_CPU
+  simulate_readable_CPUs_in_lm_sensors 45.000 47.000
+  provide_a_host_serial_to_the_controller "JQ3TW42"
+
+  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+
+  assert_contains "$OUTPUT" "JQ3TW42" "the machine this container runs on has to be named"
+  assert_contains "$OUTPUT" "5N7XXX2" "and so does the server IDRAC_HOST points at"
+  assert_not_contains "$OUTPUT" "does not report a usable serial number" \
+    "both were read here, so the refusal must not blame an unreadable one"
 }
 
 function test_two_chips_standing_in_for_a_package_are_not_run_together() {
@@ -857,4 +896,164 @@ function test_such_a_server_still_reports_the_one_temperature_its_idrac_can_read
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "29°C" "the intake reading must survive the switch of CPU source"
+}
+
+# --- Network mode on the very server being cooled (issue #465) -----------------
+#
+# lm-sensors reads the machine this container runs on. Network mode used to refuse it outright, because
+# it could not tell whether that machine was the controlled server. It now compares the serial number the
+# host reports about itself with the one the iDRAC reports for the server it manages -- and ANYTHING
+# short of a positive match keeps the old refusal exactly as it was.
+
+# Point the DMI lookup at a file of this test's own, holding the given value.
+# Usage : simulate_host_reporting_its_own_serial "5N7XXX2"
+function simulate_host_reporting_its_own_serial() {
+  local -r SERIAL="$1"
+  local -r DMI_FILE="$TEST_TEMPORARY_DIRECTORY/host_product_serial"
+
+  printf '%s\n' "$SERIAL" > "$DMI_FILE"
+  HOST_DMI_SERIAL_PATHS=("$DMI_FILE")
+}
+
+# A host whose DMI cannot be read at all : /sys not mounted, or product_serial readable by root alone.
+# Usage : simulate_host_reporting_no_serial
+function simulate_host_reporting_no_serial() {
+  HOST_DMI_SERIAL_PATHS=("$TEST_TEMPORARY_DIRECTORY/there_is_no_dmi_here")
+}
+
+# Put the controller in the state engage_lm_sensors_CPU_temperature_fallback() is called from, against a
+# server whose iDRAC reports the given serial number.
+# Usage : arrange_a_network_mode_server_serialled "5N7XXX2"
+function arrange_a_network_mode_server_serialled() {
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --serial "$1")
+
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=""
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+}
+
+function test_network_mode_reads_lm_sensors_when_the_two_serial_numbers_match() {
+  # Issue #378's reporter : IDRAC_HOST pointed at the very box the container was running on, and the
+  # blanket refusal cost him the only CPU reading his iDRAC 6 leaves him
+  arrange_a_network_mode_server_serialled "5N7XXX2"
+  simulate_host_reporting_its_own_serial "5N7XXX2"
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+  local -r EXIT_CODE=$?
+
+  assert_equals "0" "$EXIT_CODE" "the two machines are the same, so the host's chips describe the right CPUs"
+  assert_equals "lm-sensors" "$CPU_TEMPERATURE_SOURCE_IN_USE"
+  assert_contains "$CAPTURED_OUTPUT" "running on that very server" \
+    "the switch rests on a proof, so the proof has to be in the log"
+  assert_contains "$CAPTURED_OUTPUT" "5N7XXX2" "and the reader must be able to check the match themselves"
+}
+
+function test_network_mode_still_refuses_when_the_serial_numbers_differ() {
+  # The case the refusal has always existed for : a container cooling a server it does not run on. Its
+  # own CPUs say nothing about that server, and driving its fans from them leaves it heating up
+  arrange_a_network_mode_server_serialled "5N7XXX2"
+  simulate_host_reporting_its_own_serial "JQ3TW42"
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+
+  assert_equals "1" "$?" "different machines must never be read for one another"
+  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
+}
+
+function test_a_host_that_reports_no_serial_number_is_not_proven_and_is_refused() {
+  # The ordinary case, not an exotic one : /sys/class/dmi/id/product_serial is readable by root alone on
+  # most distributions, and absent altogether when /sys is not mounted into the container. Unreadable is
+  # "not proven", and not proven keeps the refusal
+  arrange_a_network_mode_server_serialled "5N7XXX2"
+  simulate_host_reporting_no_serial
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+
+  assert_equals "1" "$?"
+  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
+}
+
+function test_an_idrac_that_reports_no_serial_number_is_not_proven_and_is_refused() {
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --no-serial)
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=""
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_its_own_serial "5N7XXX2"
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+
+  assert_equals "1" "$?" "one side missing is one comparison that proves nothing"
+  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
+}
+
+function test_two_machines_that_both_report_a_placeholder_are_never_called_the_same_one() {
+  # The failure this whole check would otherwise create. A DMI table nobody filled in reads "To Be Filled
+  # By O.E.M." -- on EVERY such machine -- so a bare string comparison would declare any two of them the
+  # same server and read one's CPUs for the other's fans. That is worse than the refusal it replaces, and
+  # it is why a value has to be an identifier before it is ever compared
+  arrange_a_network_mode_server_serialled "To Be Filled By O.E.M."
+  simulate_host_reporting_its_own_serial "To Be Filled By O.E.M."
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+
+  assert_equals "1" "$?" "equal placeholders are not a proven match, they are two unfilled fields"
+  assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
+}
+
+function test_a_serial_number_too_short_to_identify_anything_is_refused() {
+  # A short string is what two different machines are likeliest to share by accident
+  arrange_a_network_mode_server_serialled "0"
+  simulate_host_reporting_its_own_serial "0"
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+
+  assert_equals "1" "$?"
+}
+
+function test_the_match_survives_the_padding_and_the_case_the_two_sides_report_it_in() {
+  # One side is a kernel file, the other a fixed-length FRU field a BMC pads. Neither is worth trusting
+  # to match character for character on spacing, and a service tag is not case sensitive
+  arrange_a_network_mode_server_serialled "5n7xxx2  "
+  simulate_host_reporting_its_own_serial "  5N7XXX2"
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+
+  assert_equals "0" "$?" "the same tag reported two ways is still the same machine"
+}
+
+function test_local_mode_never_needs_the_host_to_prove_anything() {
+  # The negative control : in local mode the container reaches the BMC through /dev/ipmi0, so it is on
+  # that server by construction. A host whose DMI says nothing must not lose the fallback it always had
+  arrange_a_network_mode_server_serialled "5N7XXX2"
+  NETWORK_MODE=false
+  simulate_host_reporting_no_serial
+
+  capture_output engage_lm_sensors_CPU_temperature_fallback
+
+  assert_equals "0" "$?" "local mode needs no proof, and must not start demanding one"
+  assert_equals "lm-sensors" "$CPU_TEMPERATURE_SOURCE_IN_USE"
+  assert_not_contains "$CAPTURED_OUTPUT" "running on that very server" \
+    "and must not claim a proof it never made"
+}
+
+function test_the_verdict_is_settled_once_rather_than_on_every_check() {
+  arrange_a_network_mode_server_serialled "5N7XXX2"
+  simulate_host_reporting_its_own_serial "5N7XXX2"
+
+  assert_command_succeeds "the two machines are the same" is_this_container_running_on_the_controlled_server
+
+  # The host's DMI now says something else entirely. The answer must not change : neither serial number
+  # changes while a container runs, and re-deriving it on every check is work with no question behind it
+  simulate_host_reporting_its_own_serial "JQ3TW42"
+
+  assert_command_succeeds "the verdict was settled on the first check" \
+    is_this_container_running_on_the_controlled_server
 }

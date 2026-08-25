@@ -376,8 +376,14 @@ while true; do
     # one, and had to work out on his own that local mode was the answer
     NETWORK_MODE_CLAUSE=""
     if "$NETWORK_MODE"; then
+      # Network mode no longer refuses the fallback outright : it reads lm-sensors when the container is
+      # PROVEN to be running on the server IDRAC_HOST names (issue #465). Reaching this refusal in network
+      # mode therefore means the proof was not made, and the reason it was not is the useful half -- most
+      # often that /sys/class/dmi/id/product_serial is not readable from inside the container. Saying
+      # "unavailable in network mode" here would be what the message said before that check existed
       NETWORK_MODE_CLAUSE="
- This container is in network mode, where that fallback is unavailable : lm-sensors reads the machine this container runs on, and network mode does not assume it is the server being controlled. If this container DOES run on that server, set IDRAC_HOST=local and give it the host's /dev/ipmi0 -- the CPUs are then read locally while every fan control command still goes to the very same BMC."
+ This container is in network mode, where lm-sensors may only stand in for the iDRAC once this container is shown to be running on the very server IDRAC_HOST names -- it reads the machine it runs on, and reading the wrong machine's CPUs to drive this server's fans is the one failure that check exists to prevent. It was not shown here${SAME_MACHINE_VERDICT_REASON:+ : $SAME_MACHINE_VERDICT_REASON}.
+ If this container DOES run on that server, either make /sys/class/dmi/id/product_serial readable from inside it, or set IDRAC_HOST=local and give it the host's /dev/ipmi0 -- the CPUs are then read locally while every fan control command still goes to the very same BMC."
     fi
 
     print_error_and_exit "No CPU temperature sensor could be read from $SERVER_MANUFACTURER $SERVER_MODEL, and every PowerEdge has at least one CPU.

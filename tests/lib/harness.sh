@@ -48,6 +48,13 @@ function setup_test_context() {
   HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
   # Same, for the fan identifiers a refused broadcast selector makes the controller discover : a test
   # starts against a server nothing has been probed on yet
+  # Same, for the same-machine verdict and the two values it rests on : a test starts against a container
+  # that has not yet worked out whether it runs on the server it is cooling, and with the DMI lookup
+  # pointing where production points it rather than at whatever file the previous case wrote (issue #465)
+  HOST_DMI_SERIAL_PATHS=("/sys/class/dmi/id/product_serial" "/sys/class/dmi/id/board_serial")
+  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=""
+  SAME_MACHINE_VERDICT_REASON=""
+  FRU_SERVER_SECTION=""
   DISCOVERED_FAN_IDENTIFIERS=()
   WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
   HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=false
@@ -182,6 +189,31 @@ function provide_local_ipmi_device() {
   build_throwaway_controller_repository "IPMI_DEVICE_PATHS=(\"$FAKE_IPMI_DEVICE\")"
 
   touch "$FAKE_IPMI_DEVICE"
+}
+
+# Decide what the machine running the controller reports as its own serial number, for a case that goes
+# through run_controller() rather than calling the function directly.
+#
+# Same seam and same reason as provide_local_ipmi_device() above : HOST_DMI_SERIAL_PATHS is an array, so
+# it cannot cross the process boundary through the environment, and it must not be made to -- it is the
+# value that decides whether the host's CPUs may answer for a server reached over the network.
+#
+# Without this, such a case reads the REAL /sys/class/dmi/id/product_serial of whatever machine the suite
+# is running on, and its verdict changes with that machine. That is not hypothetical : the suite is run
+# twice on every pull request, once on the runner and once inside the Docker image, and only the second
+# runs as root -- so the same case saw an unreadable DMI on one and a readable one on the other, and
+# passed on the runner while failing in the image (issue #465).
+#
+# Usage : provide_a_host_serial_to_the_controller "5N7XXX2"   # or with no argument, an unreadable one
+function provide_a_host_serial_to_the_controller() {
+  local -r DMI_FILE="$TEST_TEMPORARY_DIRECTORY/controller_host_dmi_serial"
+
+  rm -f "$DMI_FILE"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$1" > "$DMI_FILE"
+  fi
+
+  build_throwaway_controller_repository "HOST_DMI_SERIAL_PATHS=(\"$DMI_FILE\")"
 }
 
 # A COMPLETE line of the temperature table. The controller prints a line with

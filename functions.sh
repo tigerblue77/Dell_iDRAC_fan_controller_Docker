@@ -714,6 +714,20 @@ function convert_fan_speed_parameter() {
 # Not readonly, that being the whole point
 IPMI_DEVICE_PATHS=("/dev/ipmi0" "/dev/ipmi/0" "/dev/ipmidev/0")
 
+# Where the kernel exposes what the machine running this container says about itself. Read to answer one
+# question and one only : is that machine the very server whose iDRAC is being addressed (issue #465) ?
+#
+# Kept in an array for both of the reasons the one above is. The test suite points the lookup at files of
+# its own, /sys being machine-global and unwritable ; and bash cannot export an array, so
+# "docker run -e HOST_DMI_SERIAL_PATHS=..." cannot reach it. That second half matters more here than it
+# does above : this is the value that decides whether the CPUs of the machine running the container may
+# answer for a server reached over the network, and a user able to set it could point it at a file
+# holding the controlled server's tag and defeat the check entirely.
+#
+# product_serial first : on a Dell it is the service tag, which is what the iDRAC's FRU reports back.
+# Not readonly, that being the whole point
+HOST_DMI_SERIAL_PATHS=("/sys/class/dmi/id/product_serial" "/sys/class/dmi/id/board_serial")
+
 # Where the monitoring loop records that it completed a cycle, and how stale that record may get before
 # the healthcheck calls the container unhealthy.
 #
@@ -1082,7 +1096,10 @@ function resolve_CPU_temperature_source() {
   case "$CPU_TEMPERATURE_SOURCE" in
     auto)
       if [ "$IS_NETWORK_MODE" == "true" ]; then
-        CPU_TEMPERATURE_SOURCE_DESCRIPTION="iDRAC (IPMI), the lm-sensors fallback being only available in local mode"
+        # Said as a condition rather than as a refusal : whether the fallback is available cannot be
+        # known here, the iDRAC not having been contacted yet at this point in the startup, and it now
+        # depends on whether this container turns out to be running on the server IDRAC_HOST names
+        CPU_TEMPERATURE_SOURCE_DESCRIPTION="iDRAC (IPMI), falling back to lm-sensors only if it reports no CPU temperature AND this container proves to be running on the server itself"
       else
         CPU_TEMPERATURE_SOURCE_DESCRIPTION="iDRAC (IPMI), falling back to lm-sensors if it turns out to report no CPU temperature at all"
       fi
@@ -1095,7 +1112,7 @@ function resolve_CPU_temperature_source() {
       # container that silently supervises the wrong CPUs is the failure this whole parameter exists
       # to make impossible
       if [ "$IS_NETWORK_MODE" == "true" ]; then
-        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that can describe the controlled server. lm-sensors reads the CPUs of the machine this container runs on, and in network mode that machine is not the server whose fans are being controlled, so those readings would describe the wrong hardware. Set IDRAC_HOST to \"local\", or leave CPU_TEMPERATURE_SOURCE to its default"
+        print_configuration_error_and_exit "CPU_TEMPERATURE_SOURCE" "$REQUESTED_SOURCE" "a source that can describe the controlled server. lm-sensors reads the CPUs of the machine this container runs on, and asking for it outright in network mode says those readings describe the controlled server without anything having checked that they do. Leave CPU_TEMPERATURE_SOURCE to its default \"auto\" instead : it reads the iDRAC, and falls back on lm-sensors only if the iDRAC reports no CPU temperature at all and this container is found to be running on the very server IDRAC_HOST names, which is checked rather than assumed. Setting IDRAC_HOST to \"local\" also works where the container runs on that server"
       fi
 
       # Checked now rather than discovered in the monitoring loop : with no reading at all, every cycle
@@ -1116,6 +1133,134 @@ function resolve_CPU_temperature_source() {
   esac
 }
 
+# Whether a serial number is an identifier at all, as opposed to a field nobody filled in
+# Usage : is_this_serial_number_usable "$SERIAL_NUMBER"
+# Returns : 0 if it can be compared, 1 if it must be treated as unreadable
+#
+# The whole safety of the same-machine check rests here rather than on the comparison itself. Two
+# unrelated machines whose DMI both reads "To Be Filled By O.E.M." compare EQUAL, and an equal comparison
+# is what allows the host's CPU temperatures to answer for a server reached over the network. So a value
+# that is not an identifier has to be rejected before it is ever compared, not after (issue #465)
+function is_this_serial_number_usable() {
+  local -r SERIAL_NUMBER="$1"
+
+  [ -n "$SERIAL_NUMBER" ] || return 1
+  [ "${#SERIAL_NUMBER}" -ge "$MINIMUM_USABLE_SERIAL_NUMBER_LENGTH" ] || return 1
+
+  local LOWERCASED
+  LOWERCASED=$(printf '%s' "$SERIAL_NUMBER" | tr '[:upper:]' '[:lower:]')
+
+  local PLACEHOLDER
+  for PLACEHOLDER in "${UNUSABLE_SERIAL_NUMBERS[@]}"; do
+    [ "$LOWERCASED" == "$PLACEHOLDER" ] && return 1
+  done
+
+  return 0
+}
+
+# The serial number the machine running this container reports about itself
+# Usage : retrieve_host_serial_number
+# Returns : 0 having printed it, 1 having printed nothing
+#
+# Prints nothing on every way this can fail, and they are all ordinary : /sys not mounted into the
+# container, product_serial readable by root alone on most distributions, a DMI table with the field
+# left empty. Each of them means "not proven", which the caller turns into today's refusal
+function retrieve_host_serial_number() {
+  local DMI_PATH SERIAL_NUMBER
+  for DMI_PATH in "${HOST_DMI_SERIAL_PATHS[@]}"; do
+    [ -r "$DMI_PATH" ] || continue
+
+    # Every kind of whitespace removed rather than only the ends : the two sides of the comparison come
+    # from a kernel file and from a padded FRU field, and neither is worth trusting to match character
+    # for character on spacing alone
+    SERIAL_NUMBER=$(tr -d '[:space:]' < "$DMI_PATH" 2>/dev/null | tr '[:lower:]' '[:upper:]')
+
+    if is_this_serial_number_usable "$SERIAL_NUMBER"; then
+      printf '%s' "$SERIAL_NUMBER"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+# The serial number the controlled server's iDRAC reports over IPMI
+# Usage : retrieve_controlled_server_serial_number
+# Returns : 0 having printed it, 1 having printed nothing
+#
+# Read from the FRU section get_Dell_server_model() already retrieved, so this costs no extra round trip
+# -- and so that it describes the same device the model came from, the builtin FRU device rather than a
+# power supply that fills these very same fields with its own
+function retrieve_controlled_server_serial_number() {
+  [ -n "${FRU_SERVER_SECTION:-}" ] || return 1
+
+  local SERIAL_NUMBER
+  SERIAL_NUMBER=$(printf '%s\n' "$FRU_SERVER_SECTION" | grep "Product Serial" | awk -F ':' '{gsub(/[[:space:]]/, "", $2); print toupper($2); exit}')
+
+  if ! is_this_serial_number_usable "$SERIAL_NUMBER"; then
+    SERIAL_NUMBER=$(printf '%s\n' "$FRU_SERVER_SECTION" | grep "Board Serial" | awk -F ':' '{gsub(/[[:space:]]/, "", $2); print toupper($2); exit}')
+  fi
+
+  is_this_serial_number_usable "$SERIAL_NUMBER" || return 1
+
+  printf '%s' "$SERIAL_NUMBER"
+}
+
+# Whether this container is PROVABLY running on the very server whose iDRAC it is addressing
+# Usage : is_this_container_running_on_the_controlled_server
+# Returns : 0 only when both serial numbers were read, are identifiers, and are equal. 1 otherwise
+#
+# Network mode does not mean "another machine" -- it means "an iDRAC reached over the network", and
+# issue #378's reporter pointed his at the very box the container was running on. But the container had
+# no way to tell, so it assumed the worst, which is the right assumption to make blind : lm-sensors reads
+# the machine the container runs on, and reading the wrong machine's CPUs to drive a server's fans leaves
+# that server heating up while the fans sit low. This function is what replaces the assumption with an
+# answer.
+#
+# ANYTHING other than a positive match is "not proven", and "not proven" keeps the old refusal exactly as
+# it was -- not a warning, not a guess, not a degraded mode. There are five ways to reach it and all five
+# are ordinary, so this must never be read as "the machines differ" : it says only that they were not
+# shown to be the same.
+#
+# Both sides are canonicalised as they are read -- all whitespace removed, folded to upper case -- because
+# one comes from a kernel file and the other from a fixed-length FRU field a BMC pads. Folding cannot
+# invent a match between two real service tags ; not folding can only lose a true one, and losing one
+# costs nothing but the refusal that was there before.
+#
+# Settled once. Neither serial number changes while the container runs, and the answer is read on a path
+# that would otherwise re-derive it on every check
+function is_this_container_running_on_the_controlled_server() {
+  if [ -n "${IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER:-}" ]; then
+    "$IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER"
+    return
+  fi
+
+  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=false
+
+  local HOST_SERIAL_NUMBER
+  HOST_SERIAL_NUMBER=$(retrieve_host_serial_number)
+  if [ -z "$HOST_SERIAL_NUMBER" ]; then
+    SAME_MACHINE_VERDICT_REASON="the machine running this container does not report a usable serial number of its own (${HOST_DMI_SERIAL_PATHS[0]} is typically readable by root alone, and is absent altogether when /sys is not mounted into the container)"
+    return 1
+  fi
+
+  local CONTROLLED_SERVER_SERIAL_NUMBER
+  CONTROLLED_SERVER_SERIAL_NUMBER=$(retrieve_controlled_server_serial_number)
+  if [ -z "$CONTROLLED_SERVER_SERIAL_NUMBER" ]; then
+    SAME_MACHINE_VERDICT_REASON="this iDRAC reports no usable serial number for the server it manages"
+    return 1
+  fi
+
+  if [ "$HOST_SERIAL_NUMBER" != "$CONTROLLED_SERVER_SERIAL_NUMBER" ]; then
+    SAME_MACHINE_VERDICT_REASON="the machine running this container ($HOST_SERIAL_NUMBER) is not the server IDRAC_HOST names ($CONTROLLED_SERVER_SERIAL_NUMBER)"
+    return 1
+  fi
+
+  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=true
+  SAME_MACHINE_VERDICT_REASON="both report serial number $HOST_SERIAL_NUMBER"
+  return 0
+}
+
 # Switch the controller over to reading its CPUs from lm-sensors, if that is allowed and possible
 # Usage : engage_lm_sensors_CPU_temperature_fallback
 # Returns : 0 (true) if the source was switched, 1 if it was not and the caller must give up on the
@@ -1133,9 +1278,11 @@ function engage_lm_sensors_CPU_temperature_fallback() {
     return 1
   fi
 
-  # In network mode lm-sensors describes the machine running the container, not the controlled server,
-  # so there is nothing to fall back on. The same constraint already applies to threshold detection
-  if [ "$NETWORK_MODE" == "true" ]; then
+  # In network mode lm-sensors describes the machine running the container, which is not the controlled
+  # server -- unless it provably is. Issue #378's reporter pointed IDRAC_HOST at the very box the
+  # container was running on, and the blanket refusal cost him the only CPU reading his iDRAC 6 leaves
+  # him. Anything short of a proven match keeps that refusal exactly as it was (issue #465)
+  if [ "$NETWORK_MODE" == "true" ] && ! is_this_container_running_on_the_controlled_server; then
     return 1
   fi
 
@@ -1148,7 +1295,16 @@ function engage_lm_sensors_CPU_temperature_fallback() {
   CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
   local TIMESTAMP
   set_log_timestamp TIMESTAMP
-  printf "%19s  The iDRAC reports no readable CPU temperature sensor, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.\n" "$TIMESTAMP"
+
+  # In network mode the switch rests on a proof rather than on the mode, so the proof is named. A reader
+  # has to be able to check that the container matched the right two machines -- "it decided they were
+  # the same" is not something to take on trust when what follows is which CPUs drive the fans
+  local PROVENANCE=""
+  if [ "$NETWORK_MODE" == "true" ]; then
+    PROVENANCE=" This container is running on that very server, so its own chips describe the right CPUs : ${SAME_MACHINE_VERDICT_REASON}."
+  fi
+
+  printf "%19s  The iDRAC reports no readable CPU temperature sensor, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.%s\n" "$TIMESTAMP" "$PROVENANCE"
   return 0
 }
 
@@ -2461,7 +2617,10 @@ function get_Dell_server_model() {
   # that is not Dell. Narrowing the search to the builtin device's own section closes that.
   #
   # An inventory that labels no builtin device is read whole, exactly as before, rather than not at all
-  local FRU_SERVER_SECTION
+  # Deliberately NOT local : is_this_container_running_on_the_controlled_server() reads the serial number
+  # out of this very section afterwards, rather than spending a second "ipmitool fru" round trip on the
+  # same answer -- and reading it from here is what makes it describe the builtin FRU device, the same one
+  # the model came from, instead of a power supply that fills these fields with its own (issue #465)
   FRU_SERVER_SECTION=$(echo "$IPMI_FRU_content" | awk '
     /^FRU Device Description/ { inside = ($0 ~ /Builtin FRU Device/); next }
     inside')
