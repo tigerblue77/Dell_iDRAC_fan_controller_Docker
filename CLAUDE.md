@@ -57,6 +57,16 @@ second one silences are the suite's own shape rather than defects, and they are 
 in `.github/workflows/shellcheck.yml` beside the step that carries them ; they never
 reach `.shellcheckrc`, so the scripts above keep the full lint (issue #432).
 
+**The last of the three needs a Docker daemon, and Claude Code on the web has none** —
+the binary is on the PATH, so it looks runnable until it answers "cannot connect to the
+Docker daemon". Say so rather than reporting a build that did not happen : piped into
+`tail` or `head` it exits 0 whatever docker did, the status being the pipe's last command
+(#463). Nothing is lost by leaving it out where it cannot run — `.github/workflows/tests.yml`
+builds the image on every pull request, in the job that then runs the suite inside it — but
+it costs a CI round trip, which is the cost the SessionStart hook installs `shellcheck` to
+avoid. So the first two are what a session owes on any change ; the build is worth finding
+a daemon for when the change touches the `Dockerfile` or a script the image ships.
+
 ## Conventions
 
 - **Sign off every commit** with **`git signoff`**, never `git commit -s`. A commit without
