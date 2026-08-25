@@ -47,11 +47,15 @@ function make_fru_output() {
   local WITH_MANUFACTURER=true
   local WITH_UNREADABLE_DEVICES=false
   local WITH_READABLE_PSU=false
+  local SERIAL="5N7XXX2"
+  local WITH_SERIAL=true
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --manufacturer) MANUFACTURER="$2"; shift 2 ;;
       --model) MODEL="$2"; shift 2 ;;
+      --serial) SERIAL="$2"; shift 2 ;;
+      --no-serial) WITH_SERIAL=false; shift ;;
       --board-fields-only) BOARD_FIELDS_ONLY=true; shift ;;
       --no-manufacturer) WITH_MANUFACTURER=false; shift ;;
       --with-unreadable-devices) WITH_UNREADABLE_DEVICES=true; shift ;;
@@ -66,7 +70,9 @@ function make_fru_output() {
     printf ' Board Mfg             : %s\n' "$MANUFACTURER"
   fi
   printf ' Board Product         : %s\n' "$MODEL"
-  printf ' Board Serial          : CN7016360I0026\n'
+  if $WITH_SERIAL; then
+    printf ' Board Serial          : %s\n' "$SERIAL"
+  fi
   printf ' Board Part Number     : 0599V5A05\n'
 
   if $BOARD_FIELDS_ONLY; then
@@ -85,7 +91,9 @@ function make_fru_output() {
   printf ' Product Name          : %s\n' "$MODEL"
   printf ' Product Part Number   : 0599V5A05\n'
   printf ' Product Version       : A05\n'
-  printf ' Product Serial        : 5N7XXX2\n'
+  if $WITH_SERIAL; then
+    printf ' Product Serial        : %s\n' "$SERIAL"
+  fi
   printf ' Product Asset Tag     :\n'
 
   if $WITH_READABLE_PSU; then
