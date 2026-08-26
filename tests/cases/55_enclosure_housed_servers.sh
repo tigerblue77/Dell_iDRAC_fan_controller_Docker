@@ -238,8 +238,9 @@ function test_the_controller_refuses_to_run_on_a_server_reporting_no_cpu_sensor(
   assert_contains "$OUTPUT" "github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues" \
     "and where to report it"
   # The likeliest cause by far, and the only one the user can fix themselves :
-  # lm-sensors cannot rescue this one either, the fallback being local mode only
-  # and the enclosure rejecting the fan control commands anyway
+  # lm-sensors cannot rescue this one either, a blade carrying no fan of its own
+  # for the container to drive even where a host reading is to be had, and the
+  # enclosure rejecting the fan control commands anyway
   assert_contains "$OUTPUT" "chassis management controller" \
     "the chassis mistake is named first, being the likeliest cause"
   assert_contains "$OUTPUT" "point it at a node's own iDRAC instead" \
