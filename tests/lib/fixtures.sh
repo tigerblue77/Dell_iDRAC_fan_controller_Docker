@@ -49,6 +49,11 @@ function make_fru_output() {
   local WITH_READABLE_PSU=false
   local SERIAL="5N7XXX2"
   local WITH_SERIAL=true
+  # Written into Board Serial when it differs from the Product one. They are the same by default, which
+  # is convenient and is also exactly what hid a defect : the R510 of issue #378 carries NO Product
+  # Serial at all and a Board Serial that is a different identifier entirely (issue #469)
+  local BOARD_SERIAL=""
+  local WITH_PRODUCT_SERIAL=true
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -56,6 +61,8 @@ function make_fru_output() {
       --model) MODEL="$2"; shift 2 ;;
       --serial) SERIAL="$2"; shift 2 ;;
       --no-serial) WITH_SERIAL=false; shift ;;
+      --board-serial) BOARD_SERIAL="$2"; shift 2 ;;
+      --no-product-serial) WITH_PRODUCT_SERIAL=false; shift ;;
       --board-fields-only) BOARD_FIELDS_ONLY=true; shift ;;
       --no-manufacturer) WITH_MANUFACTURER=false; shift ;;
       --with-unreadable-devices) WITH_UNREADABLE_DEVICES=true; shift ;;
@@ -71,7 +78,7 @@ function make_fru_output() {
   fi
   printf ' Board Product         : %s\n' "$MODEL"
   if $WITH_SERIAL; then
-    printf ' Board Serial          : %s\n' "$SERIAL"
+    printf ' Board Serial          : %s\n' "${BOARD_SERIAL:-$SERIAL}"
   fi
   printf ' Board Part Number     : 0599V5A05\n'
 
@@ -91,7 +98,7 @@ function make_fru_output() {
   printf ' Product Name          : %s\n' "$MODEL"
   printf ' Product Part Number   : 0599V5A05\n'
   printf ' Product Version       : A05\n'
-  if $WITH_SERIAL; then
+  if $WITH_SERIAL && $WITH_PRODUCT_SERIAL; then
     printf ' Product Serial        : %s\n' "$SERIAL"
   fi
   printf ' Product Asset Tag     :\n'

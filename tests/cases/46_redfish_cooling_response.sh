@@ -559,7 +559,13 @@ function test_local_mode_does_not_promise_nothing_else_changes_when_the_cpus_com
     "on this server the switch would cost the only CPU reading it has"
   assert_contains "$OUTPUT" "would refuse to start" \
     "what the switch would actually do has to be said before it is suggested"
-  assert_contains "$OUTPUT" "Local mode is the right one for this server"
+  assert_contains "$OUTPUT" "Local mode needs no such proof"
+  # Since issue #465 the fallback is not local-mode-only, so this warning must not say it is -- it was
+  # still claiming "that fallback exists only in local mode" after #468 landed everywhere else (#469)
+  assert_not_contains "$OUTPUT" "exists only in local mode" \
+    "network mode keeps the reading when the container is shown to be on the server itself"
+  assert_contains "$OUTPUT" "can be SHOWN to be running on the very server" \
+    "and what it now depends on has to be named"
 }
 
 function test_local_mode_still_promises_nothing_else_changes_when_the_idrac_reports_the_cpus() {
