@@ -163,13 +163,67 @@ function test_auto_is_resolved_from_lm_sensors_in_local_mode() {
   assert_startup_reports 'CPU temperature threshold: 62°C (automatically detected'
 }
 
-function test_auto_falls_back_in_network_mode() {
-  # lm-sensors reads the machine the container runs on. In network mode that isn't
-  # the server whose fans are being controlled, so its CPUs describe other hardware
+function test_auto_falls_back_in_network_mode_when_the_machine_cannot_be_shown_to_be_the_server() {
+  # lm-sensors reads the machine the container runs on. In network mode that is the controlled server
+  # only if it can be SHOWN to be (issue #465), and here it cannot : the host reports no serial number,
+  # so the fallback stands exactly as it did before that proof existed
   export CPU_TEMPERATURE_THRESHOLD="auto"
   export MOCK_SENSORS_OUTPUT="$(coretemp_chip 0 62 72)"
+  provide_a_host_serial_to_the_controller
 
-  assert_startup_reports 'CPU temperature threshold: 50°C (fallback value, automatic detection is only available in local mode)'
+  assert_startup_reports 'CPU temperature threshold: 50°C (fallback value, automatic detection needs this container to be running on the server itself, which could not be shown'
+}
+
+function test_auto_detects_the_threshold_in_network_mode_on_the_server_itself() {
+  # The asymmetry issue #473 removes : since #465 the CPU READINGS fall back to lm-sensors in network
+  # mode on a proven same machine, while the threshold they are compared against kept the 50°C default.
+  # Reading real CPUs against a guessed limit is the half-measure this closes
+  export CPU_TEMPERATURE_THRESHOLD="auto"
+  export MOCK_SENSORS_OUTPUT="$(coretemp_chip 0 62 72)"
+  provide_a_host_serial_to_the_controller "5N7XXX2"
+
+  # After simulate_server, which writes its own FRU output : the serial is what this case turns on
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "42 44"
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "PowerEdge R730xd" --serial "5N7XXX2")
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" 'CPU temperature threshold: 62°C (automatically detected, "high" temperature reported by lm-sensors on this very server)' \
+    "the CPUs this container can read are the controlled server's, so their own limit is the right one"
+}
+
+function test_the_deferred_threshold_never_loosens_what_was_already_decided() {
+  # The deferral must only ever refine. A host that IS the server but whose lm-sensors says nothing keeps
+  # the fallback rather than ending up with an empty threshold, which every comparison would fail against
+  export CPU_TEMPERATURE_THRESHOLD="auto"
+  export MOCK_SENSORS_OUTPUT=""
+  export MOCK_SENSORS_EXIT_CODE=1
+  provide_a_host_serial_to_the_controller "5N7XXX2"
+
+  # After simulate_server, which writes its own FRU output : the serial is what this case turns on
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "42 44"
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --model "PowerEdge R730xd" --serial "5N7XXX2")
+
+  local -r OUTPUT=$(run_controller)
+
+  assert_contains "$OUTPUT" 'CPU temperature threshold: 50°C (fallback value, no CPU "high" temperature could be read from lm-sensors)' \
+    "a proven machine with nothing to say keeps the fallback, and says which of the two failed"
+}
+
+function test_an_explicit_threshold_is_still_refused_before_any_hardware_is_touched() {
+  # The deferral moved only the "auto" half. A typo must still be refused where it always was, before a
+  # single IPMI command goes out -- a configuration error the user waits on an iDRAC connection to hear
+  # about is a worse error message than the same one printed immediately
+  export CPU_TEMPERATURE_THRESHOLD="500"
+
+  simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "42 44"
+  local -r OUTPUT=$(run_controller 2>&1)
+
+  assert_contains "$OUTPUT" "Invalid configuration, the container will not start"
+  assert_equals "0" "$(count_ipmitool_calls_matching "raw 0x30 0x30")" \
+    "not one fan control command may be sent before a bad threshold is refused"
 }
 
 function test_an_explicit_value_is_used_as_is() {
