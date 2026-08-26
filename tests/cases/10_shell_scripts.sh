@@ -1690,3 +1690,26 @@ function test_no_case_reaches_the_healthcheck_through_the_repository_root() {
   assert_empty "$OFFENDERS" \
     "a case must reach the healthcheck through CONTROLLER_WORKING_DIRECTORY, or it reads the machine's own heartbeat"
 }
+
+function test_nothing_still_calls_the_lm_sensors_fallback_local_mode_only() {
+  # Three pull requests in a row corrected prose that had quietly stopped being true, and each time the
+  # code around it was already right. #465 made the lm-sensors CPU fallback reachable in network mode on
+  # a container shown to be running on the controlled server, and #473 did the same for the threshold --
+  # but a comment written to explain the OLD behaviour, and a placeholder string nothing prints today,
+  # both went on asserting "only in local mode" long after that stopped being the rule (issue #475).
+  #
+  # Prose is what a reader trusts when the code is too subtle to re-derive, so a claim this load-bearing
+  # is worth a guard. Deliberately narrow : it forbids the absolute, not the words. Saying that local
+  # mode needs no proof, or that a given path is local-only, stays perfectly sayable
+  local -r FORBIDDEN='only (be )?(available |reachable |kept |read )?in ("local"|.local.|local) mode|local[- ]mode only|exists only in local'
+
+  local FILE OFFENDING
+  for FILE in "$REPO_ROOT"/*.sh "$REPO_ROOT/README.md" "$REPO_ROOT/CLAUDE.md"; do
+    [ -f "$FILE" ] || continue
+
+    OFFENDING=$(grep -nEi "$FORBIDDEN" "$FILE" || true)
+
+    assert_empty "$OFFENDING" \
+      "${FILE#"$REPO_ROOT"/} still calls the lm-sensors fallback local-mode-only, which #465 and #473 made untrue"
+  done
+}
