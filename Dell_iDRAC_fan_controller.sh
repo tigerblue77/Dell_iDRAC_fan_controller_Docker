@@ -151,7 +151,16 @@ if [[ "${CPU_TEMPERATURE_THRESHOLD,,}" == "auto" ]]; then
     # Deferred rather than moved wholesale : an explicitly configured threshold is still validated right
     # here, so a typo is refused before this container touches any hardware (issue #473)
     CPU_TEMPERATURE_THRESHOLD=$FALLBACK_CPU_TEMPERATURE_THRESHOLD
-    CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, automatic detection is only available in local mode)"
+    # Says that the question is still open rather than answering it. The block below overwrites this in
+    # all three of its branches before the banner prints, so nothing here reaches a user today -- but it
+    # used to name local mode as the only place automatic detection happens, which #465 stopped making
+    # true. A placeholder that is false the moment anything makes it visible is a trap for whoever next
+    # adds an early exit between here and there, so it states what is actually known at this point.
+    #
+    # test_nothing_still_calls_the_lm_sensors_fallback_local_mode_only() guards the whole class, and it
+    # is why this comment describes the old wording instead of quoting it : a false sentence reproduced
+    # verbatim in a comment is exactly how it survives the next search for it (issue #475)
+    CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, pending the check that decides whether lm-sensors describes this server)"
     IS_THE_AUTOMATIC_THRESHOLD_STILL_TO_BE_RESOLVED=true
   else
     DETECTED_CPU_TEMPERATURE_THRESHOLD=$(retrieve_CPU_high_temperature_from_lm_sensors)
@@ -400,10 +409,10 @@ while true; do
     fi
 
     # The one remedy this server actually has, said to the only people it applies to. An iDRAC that
-    # reports no CPU temperature is read from lm-sensors instead -- but only in local mode, because
-    # lm-sensors reads the machine this container runs on and network mode does not assume that is the
-    # server being controlled. Issue #378's reporter hit exactly this, on a machine that WAS the same
-    # one, and had to work out on his own that local mode was the answer
+    # reports no CPU temperature is read from lm-sensors instead -- in local mode always, and in network
+    # mode only where this container can be SHOWN to be running on the server IDRAC_HOST names, since
+    # lm-sensors reads the machine it runs on (issue #465). Issue #378's reporter hit exactly this, on a
+    # machine that WAS the same one, and had to work out on his own that local mode was the answer
     NETWORK_MODE_CLAUSE=""
     # Only when the proof is what failed. The two machines matching and lm-sensors then reporting nothing
     # reaches this same refusal, and saying "It was not shown here : both report serial number 5N7XXX2"

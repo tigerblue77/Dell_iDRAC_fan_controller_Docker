@@ -2447,9 +2447,11 @@ function run_the_redfish_cooling_response_errand() {
       # What switching modes would cost, said before it is suggested rather than discovered afterwards.
       #
       # "Nothing else changes" was printed unconditionally, and on a server whose CPUs are read from
-      # lm-sensors it is false : that fallback exists only in local mode, so network mode would leave the
-      # container with no CPU temperature at all and it would refuse to start. The reporter of issue #378
-      # read this warning, followed it, and lost the only mode his R510 runs in
+      # lm-sensors it is false : in network mode that fallback is kept only where this container can be
+      # SHOWN to be running on the server IDRAC_HOST names (issue #465), and where it cannot -- most often
+      # because /sys/class/dmi/id/product_serial is unreadable from inside the container -- there would be
+      # no CPU temperature at all and it would refuse to start. The reporter of issue #378 read this
+      # warning, followed it, and lost the only mode his R510 runs in
       local WHAT_ELSE_CHANGES=" Nothing else changes : temperatures keep being read and logged every cycle"
       if [ "${CPU_TEMPERATURE_SOURCE_IN_USE:-ipmi}" == "lm-sensors" ]; then
         WHAT_ELSE_CHANGES=" Something else would change on this server, and it is the more important of the two : its iDRAC reports no readable CPU temperature, so the CPUs are being read from lm-sensors instead -- and in network mode that reading is kept only if this container can be SHOWN to be running on the very server IDRAC_HOST names, by its service tag matching the one the iDRAC reports. Where it cannot be shown -- most often because /sys/class/dmi/id/product_serial is not readable from inside the container -- this container would have no CPU temperature at all and would refuse to start. Local mode needs no such proof, and is the safer choice for this server ; leaving this parameter without effect is the cheaper of the two prices"
