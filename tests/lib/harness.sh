@@ -49,9 +49,22 @@ function setup_test_context() {
   # Same, for the fan identifiers a refused broadcast selector makes the controller discover : a test
   # starts against a server nothing has been probed on yet
   # Same, for the same-machine verdict and the two values it rests on : a test starts against a container
-  # that has not yet worked out whether it runs on the server it is cooling, and with the DMI lookup
-  # pointing where production points it rather than at whatever file the previous case wrote (issue #465)
-  HOST_DMI_SERIAL_PATHS=("/sys/class/dmi/id/product_serial" "/sys/class/dmi/id/board_serial")
+  # that has not yet worked out whether it runs on the server it is cooling (issue #465).
+  #
+  # The lookup is reset to files that DO NOT EXIST rather than to where production points it. Pointing it
+  # at the real /sys made every case that reaches the check read the machine the suite happens to be
+  # running on, and that machine differs : the suite runs twice on every pull request, and only the run
+  # inside the Docker image is root, so only that one can read product_serial. A case written without a
+  # deliberate override therefore passed on the runner and failed in the image -- which is exactly what
+  # happened, and what this default removes rather than leaving for the next case to rediscover.
+  #
+  # "Not readable" is also the honest default : it is what a container gets on most hosts, and it makes
+  # the same-machine check refuse, which is the behaviour every case that does not care about it expects.
+  # A case that DOES care says so with simulate_host_reporting_* or provide_a_host_serial_to_the_controller.
+  #
+  # The shipped value is not left untested by this : test_the_shipped_dmi_lookup_is_the_one_the_kernel_uses
+  # pins it, reading it out of functions.sh rather than out of this reset (issue #471)
+  HOST_DMI_SERIAL_PATHS=("$TEST_TEMPORARY_DIRECTORY/no_host_product_serial" "$TEST_TEMPORARY_DIRECTORY/no_host_board_serial")
   SAME_MACHINE_VERDICT=()
   SAME_MACHINE_VERDICT_REASON=""
   FRU_SERVER_SECTION=""
@@ -204,16 +217,25 @@ function provide_local_ipmi_device() {
 # runs as root -- so the same case saw an unreadable DMI on one and a readable one on the other, and
 # passed on the runner while failing in the image (issue #465).
 #
-# Usage : provide_a_host_serial_to_the_controller "5N7XXX2"   # or with no argument, an unreadable one
+# Usage : provide_a_host_serial_to_the_controller "5N7XXX2"              # a product serial only
+#         provide_a_host_serial_to_the_controller "" "CN7016360I0026"    # a board serial only
+#         provide_a_host_serial_to_the_controller                        # neither, i.e. an unreadable DMI
 function provide_a_host_serial_to_the_controller() {
-  local -r DMI_FILE="$TEST_TEMPORARY_DIRECTORY/controller_host_dmi_serial"
+  local -r PRODUCT_FILE="$TEST_TEMPORARY_DIRECTORY/controller_host_product_serial"
+  local -r BOARD_FILE="$TEST_TEMPORARY_DIRECTORY/controller_host_board_serial"
 
-  rm -f "$DMI_FILE"
-  if [ $# -gt 0 ]; then
-    printf '%s\n' "$1" > "$DMI_FILE"
+  # Both files, always, so the array the controller gets has the same length as the FRU field list it is
+  # walked against. A shorter one would leave the board pair unreachable through run_controller(), which
+  # is the pair the only real hardware this has ever run on actually needs (issue #471)
+  rm -f "$PRODUCT_FILE" "$BOARD_FILE"
+  if [ $# -gt 0 ] && [ -n "$1" ]; then
+    printf '%s\n' "$1" > "$PRODUCT_FILE"
+  fi
+  if [ $# -gt 1 ] && [ -n "$2" ]; then
+    printf '%s\n' "$2" > "$BOARD_FILE"
   fi
 
-  build_throwaway_controller_repository "HOST_DMI_SERIAL_PATHS=(\"$DMI_FILE\")"
+  build_throwaway_controller_repository "HOST_DMI_SERIAL_PATHS=(\"$PRODUCT_FILE\" \"$BOARD_FILE\")"
 }
 
 # A COMPLETE line of the temperature table. The controller prints a line with

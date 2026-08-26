@@ -1243,3 +1243,54 @@ function test_a_board_serial_that_differs_is_still_a_refusal() {
   assert_contains "$SAME_MACHINE_VERDICT_REASON" "CN9999999Z9999" "both values have to be named"
   assert_contains "$SAME_MACHINE_VERDICT_REASON" "CN7016360I0026"
 }
+
+# --- The shipped lookup itself, which the harness no longer stands in for (issue #471) ---------------
+
+function test_the_shipped_dmi_lookup_is_the_one_the_kernel_uses() {
+  # Read out of functions.sh rather than out of the running shell : the harness resets the array to files
+  # that do not exist, precisely so no case reads the machine the suite runs on -- which leaves the value
+  # production actually ships watched by nothing. A typo here costs no test and no error, only a feature
+  # that silently always refuses
+  local -r SHIPPED=$(grep -E '^HOST_DMI_SERIAL_PATHS=' "$REPO_ROOT/functions.sh")
+
+  assert_contains "$SHIPPED" '"/sys/class/dmi/id/product_serial"' \
+    "the chassis service tag is where the kernel puts it"
+  assert_contains "$SHIPPED" '"/sys/class/dmi/id/board_serial"' \
+    "and so is the board serial the second pair needs"
+}
+
+function test_every_host_dmi_path_has_a_fru_field_to_be_compared_against() {
+  # The two arrays are walked by index, so a value added to one and forgotten in the other is either an
+  # unreachable path or an out-of-range read that compares against nothing. Neither fails loudly.
+  #
+  # Counted from the SHIPPED declarations, not from the running shell : the harness resets the paths to
+  # files of its own, so comparing what it set against the field list would only ever test the harness
+  local -r SHIPPED_PATH_COUNT=$(grep -cE '"/sys/class/dmi/id/[a-z_]+"' <<< "$(grep -E '^HOST_DMI_SERIAL_PATHS=' "$REPO_ROOT/functions.sh" | tr ' ' '\n')")
+  local -r SHIPPED_FIELD_COUNT=$(grep -cE '"[A-Za-z]+ Serial"' <<< "$(grep -E '^CONTROLLED_SERVER_SERIAL_FRU_FIELDS=' "$REPO_ROOT/functions.sh" | sed 's/" "/"\n"/g')")
+
+  assert_equals "$SHIPPED_PATH_COUNT" "$SHIPPED_FIELD_COUNT" \
+    "one FRU field per host path, or the pairing means nothing"
+  assert_not_equals "0" "$SHIPPED_PATH_COUNT" "and the count has to be read, not silently zero on both sides"
+}
+
+function test_the_shipped_pairing_matches_like_with_like() {
+  # The defect issue #469 found, pinned on the shipped order rather than on behaviour : a product serial
+  # answers a Product Serial and a board serial answers a Board Serial. Crossed, they can only refuse
+  local -r SHIPPED_FIELDS=$(grep -E '^CONTROLLED_SERVER_SERIAL_FRU_FIELDS=' "$REPO_ROOT/functions.sh")
+
+  assert_matches "$SHIPPED_FIELDS" '"Product Serial".*"Board Serial"' \
+    "the FRU fields must be in the same order as the host paths they answer"
+}
+
+function test_a_controller_can_be_given_either_side_of_the_pairing() {
+  # The board pair is the one the R510 of issue #378 needs, its FRU carrying no Product Serial at all.
+  # Before this the controller helper handed over a one-element array, so that pair could not be reached
+  # through run_controller() and only the direct-call cases could exercise it
+  provide_a_host_serial_to_the_controller "" "CN7016360I0026"
+
+  local -r THROWAWAY=$(cat "$CONTROLLER_WORKING_DIRECTORY/functions.sh")
+
+  assert_contains "$THROWAWAY" "controller_host_board_serial" "the board file has to reach the controller"
+  assert_contains "$THROWAWAY" "controller_host_product_serial" \
+    "and the product one has to be there too, so the two arrays stay the same length"
+}
