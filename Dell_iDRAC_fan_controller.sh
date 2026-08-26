@@ -143,10 +143,16 @@ CPU_TEMPERATURE_THRESHOLD="${CPU_TEMPERATURE_THRESHOLD:-auto}"
 CPU_TEMPERATURE_THRESHOLD_SOURCE=""
 if [[ "${CPU_TEMPERATURE_THRESHOLD,,}" == "auto" ]]; then
   if $NETWORK_MODE; then
-    # lm-sensors can only read the CPUs of the machine this container runs on. In network mode that machine
-    # isn't the server whose fans are controlled, so its "high" temperature would describe the wrong hardware
+    # Not settled here. lm-sensors reads the CPUs of the machine this container runs on, and since issue
+    # #465 that machine may be the controlled server -- but only if it can be SHOWN to be, and showing it
+    # needs the iDRAC's FRU, which set_iDRAC_login_string() has not made reachable at this point in the
+    # startup. The fallback stands in until the proof can be attempted, just before the banner is printed.
+    #
+    # Deferred rather than moved wholesale : an explicitly configured threshold is still validated right
+    # here, so a typo is refused before this container touches any hardware (issue #473)
     CPU_TEMPERATURE_THRESHOLD=$FALLBACK_CPU_TEMPERATURE_THRESHOLD
     CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, automatic detection is only available in local mode)"
+    IS_THE_AUTOMATIC_THRESHOLD_STILL_TO_BE_RESOLVED=true
   else
     DETECTED_CPU_TEMPERATURE_THRESHOLD=$(retrieve_CPU_high_temperature_from_lm_sensors)
     if [ -n "$DETECTED_CPU_TEMPERATURE_THRESHOLD" ]; then
@@ -181,7 +187,6 @@ else
   # silently keeps the user's (low) fan speed applied instead of ever triggering the Dell default profile
   print_configuration_error_and_exit "CPU_TEMPERATURE_THRESHOLD" "$CPU_TEMPERATURE_THRESHOLD" "a positive integer number of degrees Celsius, or \"auto\" to take the CPUs' own \"high\" temperature as reported by lm-sensors"
 fi
-readonly CPU_TEMPERATURE_THRESHOLD
 
 set_iDRAC_login_string "$IDRAC_HOST" "$IDRAC_USERNAME" "$IDRAC_PASSWORD"
 
@@ -194,6 +199,31 @@ fi
 # Asked once the server is known to be a Dell, next to the model it belongs with, and never treated as a
 # reason not to start : an iDRAC that will not say which firmware it runs still drives fans
 get_iDRAC_firmware_version
+
+# The half of the automatic threshold that could not be settled before the iDRAC was reachable.
+#
+# lm-sensors describes the machine this container runs on. In network mode that is only the controlled
+# server if it can be shown to be, and the same proof the CPU readings rest on decides it here : the
+# service tag the host reports about itself against the one this iDRAC reports for the server it manages
+# (issue #465). Anything short of a match keeps the fallback that was already standing, so this can only
+# ever make the threshold more accurate, never less safe.
+#
+# The proof is settled once and remembered, so asking it here costs nothing the CPU source does not
+# already pay for
+if "${IS_THE_AUTOMATIC_THRESHOLD_STILL_TO_BE_RESOLVED:-false}"; then
+  if is_this_container_running_on_the_controlled_server; then
+    DETECTED_CPU_TEMPERATURE_THRESHOLD=$(retrieve_CPU_high_temperature_from_lm_sensors)
+    if [ -n "$DETECTED_CPU_TEMPERATURE_THRESHOLD" ]; then
+      CPU_TEMPERATURE_THRESHOLD=$DETECTED_CPU_TEMPERATURE_THRESHOLD
+      CPU_TEMPERATURE_THRESHOLD_SOURCE=" (automatically detected, \"high\" temperature reported by lm-sensors on this very server)"
+    else
+      CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, no CPU \"high\" temperature could be read from lm-sensors)"
+    fi
+  else
+    CPU_TEMPERATURE_THRESHOLD_SOURCE=" (fallback value, automatic detection needs this container to be running on the server itself, which could not be shown : $SAME_MACHINE_VERDICT_REASON)"
+  fi
+fi
+readonly CPU_TEMPERATURE_THRESHOLD
 
 # CPU temperature indexes are gone: retrieve_temperatures() now locates each CPU by its IPMI entity ID
 # instead of counting values, which no longer depends on the server generation
