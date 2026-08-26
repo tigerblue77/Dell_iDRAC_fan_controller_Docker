@@ -728,6 +728,26 @@ IPMI_DEVICE_PATHS=("/dev/ipmi0" "/dev/ipmi/0" "/dev/ipmidev/0")
 # Not readonly, that being the whole point
 HOST_DMI_SERIAL_PATHS=("/sys/class/dmi/id/product_serial" "/sys/class/dmi/id/board_serial")
 
+# What each of those paths is compared against, BY THE SAME INDEX. The pairing is the whole point : a
+# chassis service tag and a motherboard serial are two different identifiers of the same machine, and
+# comparing one against the other can only ever refuse.
+#
+# That is not hypothetical. The R510 of issue #378 -- the only real hardware this has ever run on --
+# carries NO "Product Serial" in its FRU at all. With the two sides falling back independently, the host
+# kept product_serial while the iDRAC fell through to Board Serial, so the check compared a seven
+# character service tag against a fourteen character board serial and refused a machine that was the
+# right one (issue #469). Same index on both arrays, or no comparison at all
+CONTROLLED_SERVER_SERIAL_FRU_FIELDS=("Product Serial" "Board Serial")
+
+# Whether this container was found to be running on the controlled server, settled once and remembered.
+# Empty until the question has been asked.
+#
+# An array rather than a boolean for the reason the paths above are one : bash cannot export an array, and
+# this value decides whether the host's CPU temperatures may drive a remote server's fans. A scalar here
+# let "docker run -e IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=true" reach a proven verdict with nothing
+# read (issue #469). Not readonly, that being the whole point
+SAME_MACHINE_VERDICT=()
+
 # Where the monitoring loop records that it completed a cycle, and how stale that record may get before
 # the healthcheck calls the container unhealthy.
 #
@@ -1155,6 +1175,21 @@ function is_this_serial_number_usable() {
     [ "$LOWERCASED" == "$PLACEHOLDER" ] && return 1
   done
 
+  # A curated list can only ever chase values someone has already seen, and its own near neighbours walk
+  # straight through it : ten zeros against the eight listed, eight X against the seven, a row of dots
+  # against nothing at all. Each one is two unrelated machines being called the same server. These two
+  # shape rules catch the family rather than the instance (issue #469).
+  #
+  # One character repeated is not an identifier
+  local FIRST_CHARACTER="${LOWERCASED:0:1}"
+  local REPEATED
+  printf -v REPEATED '%*s' "${#LOWERCASED}" ''
+  REPEATED="${REPEATED// /$FIRST_CHARACTER}"
+  [ "$LOWERCASED" == "$REPEATED" ] && return 1
+
+  # Nor is anything carrying no letter and no digit
+  [[ "$LOWERCASED" == *[a-z0-9]* ]] || return 1
+
   return 0
 }
 
@@ -1166,22 +1201,19 @@ function is_this_serial_number_usable() {
 # container, product_serial readable by root alone on most distributions, a DMI table with the field
 # left empty. Each of them means "not proven", which the caller turns into today's refusal
 function retrieve_host_serial_number() {
-  local DMI_PATH SERIAL_NUMBER
-  for DMI_PATH in "${HOST_DMI_SERIAL_PATHS[@]}"; do
-    [ -r "$DMI_PATH" ] || continue
+  local -r DMI_PATH="$1"
 
-    # Every kind of whitespace removed rather than only the ends : the two sides of the comparison come
-    # from a kernel file and from a padded FRU field, and neither is worth trusting to match character
-    # for character on spacing alone
-    SERIAL_NUMBER=$(tr -d '[:space:]' < "$DMI_PATH" 2>/dev/null | tr '[:lower:]' '[:upper:]')
+  [ -r "$DMI_PATH" ] || return 1
 
-    if is_this_serial_number_usable "$SERIAL_NUMBER"; then
-      printf '%s' "$SERIAL_NUMBER"
-      return 0
-    fi
-  done
+  # Every kind of whitespace removed rather than only the ends : the two sides of the comparison come
+  # from a kernel file and from a padded FRU field, and neither is worth trusting to match character
+  # for character on spacing alone
+  local SERIAL_NUMBER
+  SERIAL_NUMBER=$(tr -d '[:space:]' < "$DMI_PATH" 2>/dev/null | tr '[:lower:]' '[:upper:]')
 
-  return 1
+  is_this_serial_number_usable "$SERIAL_NUMBER" || return 1
+
+  printf '%s' "$SERIAL_NUMBER"
 }
 
 # The serial number the controlled server's iDRAC reports over IPMI
@@ -1194,12 +1226,10 @@ function retrieve_host_serial_number() {
 function retrieve_controlled_server_serial_number() {
   [ -n "${FRU_SERVER_SECTION:-}" ] || return 1
 
-  local SERIAL_NUMBER
-  SERIAL_NUMBER=$(printf '%s\n' "$FRU_SERVER_SECTION" | grep "Product Serial" | awk -F ':' '{gsub(/[[:space:]]/, "", $2); print toupper($2); exit}')
+  local -r FRU_FIELD="$1"
 
-  if ! is_this_serial_number_usable "$SERIAL_NUMBER"; then
-    SERIAL_NUMBER=$(printf '%s\n' "$FRU_SERVER_SECTION" | grep "Board Serial" | awk -F ':' '{gsub(/[[:space:]]/, "", $2); print toupper($2); exit}')
-  fi
+  local SERIAL_NUMBER
+  SERIAL_NUMBER=$(printf '%s\n' "$FRU_SERVER_SECTION" | grep "$FRU_FIELD" | awk -F ':' '{gsub(/[[:space:]]/, "", $2); print toupper($2); exit}')
 
   is_this_serial_number_usable "$SERIAL_NUMBER" || return 1
 
@@ -1230,35 +1260,51 @@ function retrieve_controlled_server_serial_number() {
 # Settled once. Neither serial number changes while the container runs, and the answer is read on a path
 # that would otherwise re-derive it on every check
 function is_this_container_running_on_the_controlled_server() {
-  if [ -n "${IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER:-}" ]; then
-    "$IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER"
+  # Held in an ARRAY, for the same reason and by the same mechanism as HOST_DMI_SERIAL_PATHS above : bash
+  # cannot export one, so "docker run -e ..." cannot reach it.
+  #
+  # As a plain scalar this memo was a way to reach a "proven" verdict without either serial number being
+  # read at all -- the whole check turned off from the command line, three lines below the comment
+  # explaining why the paths themselves could not be. Reproduced, and the reason issue #469 exists
+  if [ ${#SAME_MACHINE_VERDICT[@]} -gt 0 ]; then
+    "${SAME_MACHINE_VERDICT[0]}"
     return
   fi
 
-  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=false
+  SAME_MACHINE_VERDICT=(false)
+  # The reason no pair answered, refined by the loop below as soon as one of them gets further. This is
+  # what stands when not one host-side file could be read, which is the commonest outcome by far
+  SAME_MACHINE_VERDICT_REASON="the machine running this container does not report a usable serial number of its own (${HOST_DMI_SERIAL_PATHS[0]} is typically readable by root alone, and is absent altogether when /sys is not mounted into the container)"
 
-  local HOST_SERIAL_NUMBER
-  HOST_SERIAL_NUMBER=$(retrieve_host_serial_number)
-  if [ -z "$HOST_SERIAL_NUMBER" ]; then
-    SAME_MACHINE_VERDICT_REASON="the machine running this container does not report a usable serial number of its own (${HOST_DMI_SERIAL_PATHS[0]} is typically readable by root alone, and is absent altogether when /sys is not mounted into the container)"
-    return 1
-  fi
+  # Each pair on its own, never crossed. A pair where either side is missing or unusable is skipped
+  # rather than compared against the other pair's value : that crossing is what made this refuse the one
+  # real machine it has ever run on (issue #469)
+  local INDEX HOST_SERIAL_NUMBER CONTROLLED_SERVER_SERIAL_NUMBER
+  for INDEX in "${!HOST_DMI_SERIAL_PATHS[@]}"; do
+    HOST_SERIAL_NUMBER=$(retrieve_host_serial_number "${HOST_DMI_SERIAL_PATHS[INDEX]}")
+    [ -n "$HOST_SERIAL_NUMBER" ] || continue
 
-  local CONTROLLED_SERVER_SERIAL_NUMBER
-  CONTROLLED_SERVER_SERIAL_NUMBER=$(retrieve_controlled_server_serial_number)
-  if [ -z "$CONTROLLED_SERVER_SERIAL_NUMBER" ]; then
-    SAME_MACHINE_VERDICT_REASON="this iDRAC reports no usable serial number for the server it manages"
-    return 1
-  fi
+    CONTROLLED_SERVER_SERIAL_NUMBER=$(retrieve_controlled_server_serial_number "${CONTROLLED_SERVER_SERIAL_FRU_FIELDS[INDEX]}")
+    if [ -z "$CONTROLLED_SERVER_SERIAL_NUMBER" ]; then
+      # The host answered and the iDRAC did not, which is a different thing from neither answering and
+      # is what the R510 of issue #378 does : it reports no "Product Serial" in its FRU at all. Saying
+      # "neither reports one" there would send its owner looking at the wrong side
+      SAME_MACHINE_VERDICT_REASON="the machine running this container reports ${CONTROLLED_SERVER_SERIAL_FRU_FIELDS[INDEX]} $HOST_SERIAL_NUMBER, but this iDRAC reports no ${CONTROLLED_SERVER_SERIAL_FRU_FIELDS[INDEX]} for the server it manages"
+      continue
+    fi
 
-  if [ "$HOST_SERIAL_NUMBER" != "$CONTROLLED_SERVER_SERIAL_NUMBER" ]; then
-    SAME_MACHINE_VERDICT_REASON="the machine running this container ($HOST_SERIAL_NUMBER) is not the server IDRAC_HOST names ($CONTROLLED_SERVER_SERIAL_NUMBER)"
-    return 1
-  fi
+    if [ "$HOST_SERIAL_NUMBER" == "$CONTROLLED_SERVER_SERIAL_NUMBER" ]; then
+      SAME_MACHINE_VERDICT=(true)
+      SAME_MACHINE_VERDICT_REASON="both report ${CONTROLLED_SERVER_SERIAL_FRU_FIELDS[INDEX]} $HOST_SERIAL_NUMBER"
+      return 0
+    fi
 
-  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=true
-  SAME_MACHINE_VERDICT_REASON="both report serial number $HOST_SERIAL_NUMBER"
-  return 0
+    # Read on both sides and different. That is an answer rather than a gap, so it is what the refusal
+    # names -- but a later pair may still match, so the search carries on
+    SAME_MACHINE_VERDICT_REASON="the machine running this container reports ${CONTROLLED_SERVER_SERIAL_FRU_FIELDS[INDEX]} $HOST_SERIAL_NUMBER while this iDRAC reports $CONTROLLED_SERVER_SERIAL_NUMBER for the server it manages"
+  done
+
+  return 1
 }
 
 # Switch the controller over to reading its CPUs from lm-sensors, if that is allowed and possible
@@ -2406,7 +2452,7 @@ function run_the_redfish_cooling_response_errand() {
       # read this warning, followed it, and lost the only mode his R510 runs in
       local WHAT_ELSE_CHANGES=" Nothing else changes : temperatures keep being read and logged every cycle"
       if [ "${CPU_TEMPERATURE_SOURCE_IN_USE:-ipmi}" == "lm-sensors" ]; then
-        WHAT_ELSE_CHANGES=" Something else would change on this server, and it is the more important of the two : its iDRAC reports no readable CPU temperature, so the CPUs are being read from lm-sensors instead -- and that fallback exists only in local mode, because lm-sensors reads the machine this container runs on rather than the one IDRAC_HOST would name. In network mode this container would have no CPU temperature at all and would refuse to start. Local mode is the right one for this server ; leaving this parameter without effect is the cheaper of the two prices"
+        WHAT_ELSE_CHANGES=" Something else would change on this server, and it is the more important of the two : its iDRAC reports no readable CPU temperature, so the CPUs are being read from lm-sensors instead -- and in network mode that reading is kept only if this container can be SHOWN to be running on the very server IDRAC_HOST names, by its service tag matching the one the iDRAC reports. Where it cannot be shown -- most often because /sys/class/dmi/id/product_serial is not readable from inside the container -- this container would have no CPU temperature at all and would refuse to start. Local mode needs no such proof, and is the safer choice for this server ; leaving this parameter without effect is the cheaper of the two prices"
       fi
 
       print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server.$WHAT_ELSE_CHANGES"
@@ -2418,7 +2464,7 @@ function run_the_redfish_cooling_response_errand() {
     # image ; run from a plain checkout, it means the host has no perl or no IO::Socket::SSL. Either way
     # it is about this machine rather than about the server, and no cycle will clear it
     THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS="Not over IPMI (no HTTPS client to ask with)"
-    print_error "This server does not have the IPMI command for the third-party PCIe card cooling response, and the Redfish request that would have replaced it could not be made at all : the HTTPS client did not run. That is perl with IO::Socket::SSL, which the image installs -- so in the published image this means a stripped or half-built one, and outside it, a host missing either. The iDRAC was never asked, so this says nothing about whether the server has the setting. Fan control and temperature monitoring are unaffected. $REDFISH_MANUAL_INSTRUCTIONS"
+    print_error "This server does not have the IPMI command for the third-party PCIe card cooling response, and the Redfish request that would have replaced it could not be made at all : the HTTPS client did not run. That is perl with IO::Socket::SSL, which the image installs -- so in the published image this means a stripped or half-built one, and outside it, a host missing either. The iDRAC was never asked, so this says nothing about whether the server has the setting. $REDFISH_MANUAL_INSTRUCTIONS"
     return 1
   fi
 

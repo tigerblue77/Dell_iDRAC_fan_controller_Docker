@@ -52,7 +52,7 @@ function setup_test_context() {
   # that has not yet worked out whether it runs on the server it is cooling, and with the DMI lookup
   # pointing where production points it rather than at whatever file the previous case wrote (issue #465)
   HOST_DMI_SERIAL_PATHS=("/sys/class/dmi/id/product_serial" "/sys/class/dmi/id/board_serial")
-  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=""
+  SAME_MACHINE_VERDICT=()
   SAME_MACHINE_VERDICT_REASON=""
   FRU_SERVER_SECTION=""
   DISCOVERED_FAN_IDENTIFIERS=()

@@ -921,6 +921,27 @@ function simulate_host_reporting_no_serial() {
   HOST_DMI_SERIAL_PATHS=("$TEST_TEMPORARY_DIRECTORY/there_is_no_dmi_here")
 }
 
+# A host that reports a board serial but no chassis service tag, which is what makes the pairing matter.
+# The two arrays are walked by index, so the board file has to sit at index 1 -- where "Board Serial" is.
+# Usage : simulate_host_reporting_only_a_board_serial "CN7016360I0026"
+function simulate_host_reporting_only_a_board_serial() {
+  local -r BOARD_FILE="$TEST_TEMPORARY_DIRECTORY/host_board_serial"
+
+  printf '%s\n' "$1" > "$BOARD_FILE"
+  HOST_DMI_SERIAL_PATHS=("$TEST_TEMPORARY_DIRECTORY/there_is_no_product_serial_here" "$BOARD_FILE")
+}
+
+# A host that reports both, so that each pair has something on its side.
+# Usage : simulate_host_reporting_both_serials "90ABCDE" "CN7016360I0026"
+function simulate_host_reporting_both_serials() {
+  local -r PRODUCT_FILE="$TEST_TEMPORARY_DIRECTORY/host_product_serial"
+  local -r BOARD_FILE="$TEST_TEMPORARY_DIRECTORY/host_board_serial"
+
+  printf '%s\n' "$1" > "$PRODUCT_FILE"
+  printf '%s\n' "$2" > "$BOARD_FILE"
+  HOST_DMI_SERIAL_PATHS=("$PRODUCT_FILE" "$BOARD_FILE")
+}
+
 # Put the controller in the state engage_lm_sensors_CPU_temperature_fallback() is called from, against a
 # server whose iDRAC reports the given serial number.
 # Usage : arrange_a_network_mode_server_serialled "5N7XXX2"
@@ -931,7 +952,7 @@ function arrange_a_network_mode_server_serialled() {
   NETWORK_MODE=true
   CPU_TEMPERATURE_SOURCE="auto"
   CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
-  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=""
+  SAME_MACHINE_VERDICT=()
   simulate_readable_CPUs_in_lm_sensors
   get_Dell_server_model
 }
@@ -983,7 +1004,7 @@ function test_an_idrac_that_reports_no_serial_number_is_not_proven_and_is_refuse
   NETWORK_MODE=true
   CPU_TEMPERATURE_SOURCE="auto"
   CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
-  IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=""
+  SAME_MACHINE_VERDICT=()
   simulate_readable_CPUs_in_lm_sensors
   get_Dell_server_model
   simulate_host_reporting_its_own_serial "5N7XXX2"
@@ -1056,4 +1077,169 @@ function test_the_verdict_is_settled_once_rather_than_on_every_check() {
 
   assert_command_succeeds "the verdict was settled on the first check" \
     is_this_container_running_on_the_controlled_server
+}
+
+# --- What the same-machine check must not be talked out of (issue #469) -------
+
+function test_the_same_machine_verdict_cannot_be_handed_in_from_the_environment() {
+  # The hole this closes. The verdict was memoised in a plain scalar, so
+  # "docker run -e IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER=true" reached a "proven" answer with neither
+  # serial number read -- the whole check turned off from the command line, three lines below the comment
+  # explaining why HOST_DMI_SERIAL_PATHS had to be an array for exactly that reason
+  arrange_a_network_mode_server_serialled "5N7XXX2"
+  simulate_host_reporting_no_serial
+
+  local NAME
+  for NAME in IS_THE_CONTAINER_ON_THE_CONTROLLED_SERVER SAME_MACHINE_VERDICT; do
+    SAME_MACHINE_VERDICT=()
+    assert_command_fails "no environment variable named $NAME may stand in for reading a serial number" \
+      env "$NAME=true" bash -c '
+        cd "$1" || exit 2
+        source constants.sh
+        source functions.sh
+        NETWORK_MODE=true
+        FRU_SERVER_SECTION=""
+        HOST_DMI_SERIAL_PATHS=("/there/is/no/dmi/here")
+        is_this_container_running_on_the_controlled_server' _ "$REPO_ROOT"
+  done
+}
+
+function test_a_serial_number_that_is_one_character_repeated_is_not_an_identifier() {
+  # The curated list can only chase values someone has already seen, and its own near neighbours walk
+  # through it : it holds eight zeros and seven x's, so ten zeros and eight x's were accepted and two
+  # unrelated machines reporting either were called the same server
+  local VALUE
+  for VALUE in "0000000000" "XXXXXXXX" "00000000000000" "aaaa"; do
+    assert_command_fails "\"$VALUE\" is a field nobody filled in, not a service tag" \
+      is_this_serial_number_usable "$VALUE"
+  done
+}
+
+function test_a_serial_number_carrying_no_letter_and_no_digit_is_not_an_identifier() {
+  local VALUE
+  for VALUE in "........" "--------" "-.-.-.-." "________"; do
+    assert_command_fails "\"$VALUE\" carries nothing that could identify a machine" \
+      is_this_serial_number_usable "$VALUE"
+  done
+}
+
+function test_a_real_service_tag_still_passes_every_shape_rule() {
+  # The negative control the two cases above need : rules that reject junk must not reject the thing they
+  # exist to let through. A Dell service tag is seven alphanumeric characters
+  local VALUE
+  for VALUE in "5N7XXX2" "JQ3TW42" "1A2B3C4" "CN7016360I0026"; do
+    assert_command_succeeds "\"$VALUE\" is a service tag and must be compared, not discarded" \
+      is_this_serial_number_usable "$VALUE"
+  done
+}
+
+function test_two_machines_reporting_the_same_unfilled_field_are_never_called_the_same_one() {
+  # End to end, on the values that used to get through. Each of these is two unrelated servers being
+  # declared one, and the container then driving a remote server's fans from its own CPU temperatures
+  local VALUE
+  for VALUE in "0000000000" "XXXXXXXX" "........"; do
+    arrange_a_network_mode_server_serialled "$VALUE"
+    simulate_host_reporting_its_own_serial "$VALUE"
+
+    capture_output engage_lm_sensors_CPU_temperature_fallback
+
+    assert_equals "1" "$?" "two machines both reporting \"$VALUE\" are two unfilled fields, not one server"
+    assert_equals "ipmi" "$CPU_TEMPERATURE_SOURCE_IN_USE"
+  done
+}
+
+function test_the_refusal_does_not_blame_the_proof_when_the_proof_succeeded() {
+  # The two machines match, and lm-sensors then reports nothing. That reaches the same fatal refusal, and
+  # it used to print "It was not shown here : both report serial number 5N7XXX2" -- a sentence whose
+  # second half contradicts its first
+  simulate_iDRAC_reporting_no_CPU
+  export MOCK_SENSORS_OUTPUT=""
+  export MOCK_SENSORS_EXIT_CODE=1
+  provide_a_host_serial_to_the_controller "5N7XXX2"
+
+  local -r OUTPUT=$(run_controller "No CPU temperature sensor could be read")
+
+  assert_not_contains "$OUTPUT" "It was not shown here" \
+    "the proof was made here : it is lm-sensors that had nothing to say"
+}
+
+# --- Each side compared against its own counterpart, never the other one (issue #469) ----------------
+
+function test_a_service_tag_is_never_compared_against_a_board_serial() {
+  # The R510 of issue #378, exactly as its owner dumped it : no "Product Serial" in the FRU at all, and a
+  # "Board Serial" that is a different identifier. With the two sides falling back independently, the
+  # host kept product_serial while the iDRAC fell through to Board Serial, and the check compared
+  # 90ABCDE against CN7016360I0026 -- refusing the one machine it has ever run on, for good
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --no-product-serial --board-serial "CN7016360I0026")
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  SAME_MACHINE_VERDICT=()
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_both_serials "90ABCDE" "CN7016360I0026"
+
+  assert_command_succeeds "the board serials match, so this IS the controlled server" \
+    is_this_container_running_on_the_controlled_server
+  assert_contains "$SAME_MACHINE_VERDICT_REASON" "Board Serial CN7016360I0026" \
+    "and the pair that answered has to be named, not just the value"
+}
+
+function test_a_matching_service_tag_is_taken_before_the_board_serial() {
+  # The first pair wins when it answers : a chassis service tag identifies the machine more directly than
+  # a motherboard serial, which survives the board being swapped into another chassis
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --serial "5N7XXX2" --board-serial "CN7016360I0026")
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  SAME_MACHINE_VERDICT=()
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_both_serials "5N7XXX2" "CN7016360I0026"
+
+  assert_command_succeeds "both pairs match here" is_this_container_running_on_the_controlled_server
+  assert_contains "$SAME_MACHINE_VERDICT_REASON" "Product Serial 5N7XXX2" \
+    "the service tag is the more direct identifier and answers first"
+}
+
+function test_a_host_serial_with_no_counterpart_says_which_side_is_missing() {
+  # What the R510 of #378 gets when its host reports no board serial either : its product_serial WAS
+  # read, so "neither reports one" would send its owner looking at the wrong side of the comparison
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --no-product-serial --board-serial "CN7016360I0026")
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  SAME_MACHINE_VERDICT=()
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_its_own_serial "90ABCDE"
+
+  assert_command_fails "nothing pairs up here, so nothing is proven" \
+    is_this_container_running_on_the_controlled_server
+  assert_contains "$SAME_MACHINE_VERDICT_REASON" "reports no Product Serial" \
+    "the iDRAC is the side that has nothing, and the message must say so"
+  assert_contains "$SAME_MACHINE_VERDICT_REASON" "90ABCDE" \
+    "while naming what the host did report, so the reader can check it"
+}
+
+function test_a_board_serial_that_differs_is_still_a_refusal() {
+  # The negative control of the pairing : pairing like with like must not make matches easier to reach,
+  # only accurate. Two different boards stay two different machines
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --no-product-serial --board-serial "CN7016360I0026")
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  SAME_MACHINE_VERDICT=()
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_only_a_board_serial "CN9999999Z9999"
+
+  assert_command_fails "different boards are different machines" \
+    is_this_container_running_on_the_controlled_server
+  assert_contains "$SAME_MACHINE_VERDICT_REASON" "CN9999999Z9999" "both values have to be named"
+  assert_contains "$SAME_MACHINE_VERDICT_REASON" "CN7016360I0026"
 }

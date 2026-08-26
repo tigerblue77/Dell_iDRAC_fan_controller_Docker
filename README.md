@@ -251,7 +251,7 @@ Every parameter has a default value except `IDRAC_USERNAME` and `IDRAC_PASSWORD`
     ```
 
     "high" is the temperature at which your CPU expects cooling to be at full, and it always sits below "crit", the temperature at which the CPU throttles itself — so it is the one that leaves the fans time to act. How far below varies a lot by CPU model : 10°C on the example above, but only 2°C on a PowerEdge T630 reporting `high = +83.0°C, crit = +85.0°C`. On a multi-socket server, the lowest "high" value of all detected CPUs is used as the threshold, and every detected CPU is compared against it.
-  - Automatic detection is only available in "local" mode : `lm-sensors` reads the CPUs of the machine the container runs on, which is the controlled server itself only in that mode. It also requires your Docker host's kernel to expose CPU temperatures through `/sys` (the `coretemp` module).
+  - Automatic detection is only available in "local" mode. `lm-sensors` reads the CPUs of the machine the container runs on, and in "local" mode that machine is the controlled server by construction. Note that the CPU *readings* go further than this since [#465](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/465) — in network mode they fall back to `lm-sensors` when the container can be shown to be running on the server itself — but the *threshold* detection has not been extended that way, and stays local-only. It also requires your Docker host's kernel to expose CPU temperatures through `/sys` (the `coretemp` module).
   - Automatic detection only works on **Intel** CPUs. AMD's `k10temp` driver publishes no "high" value at all on Zen parts (every EPYC server), and on older parts it publishes a fixed 70°C that is a Linux driver constant rather than an AMD specification, so it is deliberately ignored. AMD servers use the fallback value below.
   - Whenever the threshold can't be detected, the container falls back to 50(°C) and logs why at startup.
   - :warning: **This default changed in v1.28.** Versions up to v1.27 used a fixed 50°C. On Intel servers in "local" mode, "auto" typically resolves to a **higher** value (roughly 62 to 96°C depending on the CPU model — read the exact one from the startup log), so the fans stay at `FAN_SPEED` longer than they used to before Dell's profile takes over. This matches what your CPU actually asks for, but it also means the whole chassis runs at `FAN_SPEED` for longer, and the CPU is the only component this container watches. If you were relying on the old behaviour, set `CPU_TEMPERATURE_THRESHOLD=50` explicitly.
@@ -445,7 +445,7 @@ If what you want is two *speeds* rather than "this container or Dell's algorithm
 
 ### Not all of your CPUs appear in the temperatures table
 
-At startup, the container logs the CPU temperature sensors it found, with the IPMI entities they were read from (`4 CPU temperature sensors detected (entities 3.1 3.2 3.3 3.4).`), and prints one column per detected CPU. There is no built-in limit on that number, so 4-socket servers (R930, R830, R920, R940...) get all of their CPUs monitored.
+At startup, the container logs the CPU temperature sensors it found, with the IPMI entities they were read from (`4 CPU temperature sensors detected (entities 3.1, 3.2, 3.3 and 3.4).`), and prints one column per detected CPU. There is no built-in limit on that number, so 4-socket servers (R930, R830, R920, R940...) get all of their CPUs monitored.
 
 If fewer sensors are listed than the number of CPUs installed, your iDRAC isn't reporting the missing sockets as readable IPMI processor entities. Check what it does report with :
 ```bash
@@ -485,13 +485,13 @@ Some older iDRACs are in that state permanently: they accept Dell's raw fan cont
 
 ```
 08-08-2026 15:04:31  The iDRAC reports no readable CPU temperature sensor, reading the CPUs from lm-sensors instead. Fan control keeps going through the iDRAC.
-2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 coretemp-isa-0001).
+2 CPU temperature sensors detected (lm-sensors chips coretemp-isa-0000 and coretemp-isa-0001).
 ```
 
 If that line never appears, the fallback couldn't engage. In order:
 
 1. **You're in network mode and the container could not prove it runs on the controlled server.** `lm-sensors` reads the machine the container runs on, so it may only answer for a server it can show is that same machine. The check compares your host's service tag with the one your iDRAC reports, and anything short of a match refuses. The likeliest reason is that `/sys/class/dmi/id/product_serial` is not readable from inside the container — it is root-only on most distributions, and absent altogether when `/sys` is not mounted. Setting `IDRAC_HOST=local` and exposing `/dev/ipmi0` sidesteps the question entirely, and is the simpler answer when the container runs on the server anyway: the CPUs are then read locally while every fan control command still goes to the very same BMC.
-2. **Your Docker host doesn't expose its CPU temperatures.** Check with `docker exec <container name> sensors -u`, which must print a `Package id 0:` block. If it prints nothing, load the `coretemp` kernel module on the host (`modprobe coretemp`) and make sure `/sys` is readable from the container.
+2. **Your Docker host doesn't expose its CPU temperatures.** Check with `docker exec <container name> sensors -u`, which must print a `coretemp-` chip carrying at least one `temp*_input:` line. A `Package id 0:` block is *not* required — a Xeon that publishes no package sensor is read from its hottest core instead, and a host whose `/etc/sensors.d` renames the feature is read by sub-feature number rather than by label ([#378](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/378)). If it prints nothing at all, load the `coretemp` kernel module on the host (`modprobe coretemp`) and make sure `/sys` is readable from the container.
 3. **Your CPUs are AMD.** `k10temp` reports `Tctl`, a control value that is not the physical temperature your iDRAC reports, so it is deliberately not read. Please [open an issue](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues) with your server model, `sensors -u` and `ipmitool -I open sdr elist all` if you have such a server: hardware output is what's missing to support it.
 
 Whatever the source, **fan control itself always goes through your iDRAC**. If the raw commands are rejected too:

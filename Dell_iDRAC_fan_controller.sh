@@ -375,7 +375,10 @@ while true; do
     # server being controlled. Issue #378's reporter hit exactly this, on a machine that WAS the same
     # one, and had to work out on his own that local mode was the answer
     NETWORK_MODE_CLAUSE=""
-    if "$NETWORK_MODE"; then
+    # Only when the proof is what failed. The two machines matching and lm-sensors then reporting nothing
+    # reaches this same refusal, and saying "It was not shown here : both report serial number 5N7XXX2"
+    # there is a sentence that contradicts itself in its own second half (issue #469)
+    if "$NETWORK_MODE" && ! is_this_container_running_on_the_controlled_server; then
       # Network mode no longer refuses the fallback outright : it reads lm-sensors when the container is
       # PROVEN to be running on the server IDRAC_HOST names (issue #465). Reaching this refusal in network
       # mode therefore means the proof was not made, and the reason it was not is the useful half -- most
