@@ -1153,6 +1153,39 @@ function resolve_CPU_temperature_source() {
   esac
 }
 
+# The comparable form of a serial number, whatever the firmware that printed it padded it with
+# Usage : canonicalise_serial_number "$RAW_SERIAL_NUMBER"
+# Returns : 0 having printed the canonical form, which is empty when nothing identifying was left
+#
+# The two sides of the same-machine check come from a kernel file and from a fixed-width FRU field, and
+# neither is a clean string. Whitespace removed and case folded is what the two readers each did inline ;
+# what neither did is the reason this now exists in one place. The R510 of issue #378 reports
+# "..CN1374XXXXXXXX." for the very board its iDRAC calls "CN1374XXXXXXXX" -- same board, same serial
+# number, three padding characters, and a comparison that refused. On the only real machine this feature
+# has ever run on, and the one it was built for (issue #479).
+#
+# Only the ENDS are trimmed. A separator inside a serial number is part of it, and two identifiers that
+# differ in the middle have to go on differing.
+#
+# Trimming before the usability rules rather than after is what makes this safe as well as correct.
+# "0000000" is one character repeated and is refused ; "..0000000." is not, so the shape rule walked
+# straight past it, and two unrelated Dell boxes padding an unfilled field the same way compared EQUAL --
+# which is the whole failure issue #465 exists to prevent. Trimmed first it is "0000000", which that rule
+# does catch
+function canonicalise_serial_number() {
+  local SERIAL_NUMBER="${1//[[:space:]]/}"
+  SERIAL_NUMBER="${SERIAL_NUMBER^^}"
+
+  # The leading run of non-alphanumerics, then the trailing one. "${VAR%%[[:alnum:]]*}" is everything
+  # before the first alphanumeric, which is exactly the prefix to remove ; "${VAR##*[[:alnum:]]}" is
+  # everything after the last. A value carrying no alphanumeric at all leaves nothing, and
+  # is_this_serial_number_usable refuses it on emptiness rather than on shape
+  SERIAL_NUMBER="${SERIAL_NUMBER#"${SERIAL_NUMBER%%[[:alnum:]]*}"}"
+  SERIAL_NUMBER="${SERIAL_NUMBER%"${SERIAL_NUMBER##*[[:alnum:]]}"}"
+
+  printf '%s' "$SERIAL_NUMBER"
+}
+
 # Whether a serial number is an identifier at all, as opposed to a field nobody filled in
 # Usage : is_this_serial_number_usable "$SERIAL_NUMBER"
 # Returns : 0 if it can be compared, 1 if it must be treated as unreadable
@@ -1162,17 +1195,24 @@ function resolve_CPU_temperature_source() {
 # is what allows the host's CPU temperatures to answer for a server reached over the network. So a value
 # that is not an identifier has to be rejected before it is ever compared, not after (issue #465)
 function is_this_serial_number_usable() {
-  local -r SERIAL_NUMBER="$1"
+  # Canonicalised here as well as by the two readers. Everything below describes the identifier rather
+  # than the padding a firmware wrapped it in, so a caller reaching this function directly has to get the
+  # verdict the readers would get -- and the length rule in particular has to measure the identifier,
+  # not three characters of padding around a two-character stub (issue #479)
+  local SERIAL_NUMBER
+  SERIAL_NUMBER=$(canonicalise_serial_number "$1")
 
   [ -n "$SERIAL_NUMBER" ] || return 1
   [ "${#SERIAL_NUMBER}" -ge "$MINIMUM_USABLE_SERIAL_NUMBER_LENGTH" ] || return 1
 
-  local LOWERCASED
-  LOWERCASED=$(printf '%s' "$SERIAL_NUMBER" | tr '[:upper:]' '[:lower:]')
-
-  local PLACEHOLDER
+  # Each entry goes through the canonicaliser too, so that the list stays written the way a human reads
+  # these fields while being compared the way the machine reads them. Both sides or neither : trimming
+  # only the value is what made "To Be Filled By O.E.M." stop matching "tobefilledbyo.e.m." the moment
+  # its trailing full stop was taken off one side of the comparison alone
+  local PLACEHOLDER CANONICAL_PLACEHOLDER
   for PLACEHOLDER in "${UNUSABLE_SERIAL_NUMBERS[@]}"; do
-    [ "$LOWERCASED" == "$PLACEHOLDER" ] && return 1
+    CANONICAL_PLACEHOLDER=$(canonicalise_serial_number "$PLACEHOLDER")
+    [ "$SERIAL_NUMBER" == "$CANONICAL_PLACEHOLDER" ] && return 1
   done
 
   # A curated list can only ever chase values someone has already seen, and its own near neighbours walk
@@ -1181,14 +1221,16 @@ function is_this_serial_number_usable() {
   # shape rules catch the family rather than the instance (issue #469).
   #
   # One character repeated is not an identifier
-  local FIRST_CHARACTER="${LOWERCASED:0:1}"
+  local FIRST_CHARACTER="${SERIAL_NUMBER:0:1}"
   local REPEATED
-  printf -v REPEATED '%*s' "${#LOWERCASED}" ''
+  printf -v REPEATED '%*s' "${#SERIAL_NUMBER}" ''
   REPEATED="${REPEATED// /$FIRST_CHARACTER}"
-  [ "$LOWERCASED" == "$REPEATED" ] && return 1
+  [ "$SERIAL_NUMBER" == "$REPEATED" ] && return 1
 
-  # Nor is anything carrying no letter and no digit
-  [[ "$LOWERCASED" == *[a-z0-9]* ]] || return 1
+  # Nor is anything carrying no letter and no digit. Nothing reaches this that could fail it -- the
+  # canonicaliser leaves an alphanumeric at each end or leaves nothing at all -- so it stands as the
+  # statement of the rule rather than as the only thing enforcing it
+  [[ "$SERIAL_NUMBER" == *[[:alnum:]]* ]] || return 1
 
   return 0
 }
@@ -1205,11 +1247,14 @@ function retrieve_host_serial_number() {
 
   [ -r "$DMI_PATH" ] || return 1
 
-  # Every kind of whitespace removed rather than only the ends : the two sides of the comparison come
-  # from a kernel file and from a padded FRU field, and neither is worth trusting to match character
-  # for character on spacing alone
+  local RAW_SERIAL_NUMBER
+  RAW_SERIAL_NUMBER=$(cat "$DMI_PATH" 2>/dev/null)
+
+  # Whitespace, case and end padding all handled in the one place the other side goes through too : the
+  # two normalisations diverging is what would put a serial number on one side of the comparison in a
+  # shape the other can never take
   local SERIAL_NUMBER
-  SERIAL_NUMBER=$(tr -d '[:space:]' < "$DMI_PATH" 2>/dev/null | tr '[:lower:]' '[:upper:]')
+  SERIAL_NUMBER=$(canonicalise_serial_number "$RAW_SERIAL_NUMBER")
 
   is_this_serial_number_usable "$SERIAL_NUMBER" || return 1
 
@@ -1228,8 +1273,12 @@ function retrieve_controlled_server_serial_number() {
 
   local -r FRU_FIELD="$1"
 
+  local RAW_SERIAL_NUMBER
+  RAW_SERIAL_NUMBER=$(printf '%s\n' "$FRU_SERVER_SECTION" | grep "$FRU_FIELD" | awk -F ':' '{print $2; exit}')
+
+  # Through the same canonicaliser as the host side, for the same reason
   local SERIAL_NUMBER
-  SERIAL_NUMBER=$(printf '%s\n' "$FRU_SERVER_SECTION" | grep "$FRU_FIELD" | awk -F ':' '{gsub(/[[:space:]]/, "", $2); print toupper($2); exit}')
+  SERIAL_NUMBER=$(canonicalise_serial_number "$RAW_SERIAL_NUMBER")
 
   is_this_serial_number_usable "$SERIAL_NUMBER" || return 1
 

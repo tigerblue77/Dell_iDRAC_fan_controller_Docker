@@ -1244,6 +1244,98 @@ function test_a_board_serial_that_differs_is_still_a_refusal() {
   assert_contains "$SAME_MACHINE_VERDICT_REASON" "CN7016360I0026"
 }
 
+# --- What the firmware pads the two sides with, which is not part of either (issue #479) -------------
+#
+# The reporter of issue #378 ran the one comparison nobody could make without a PowerEdge : his host's
+# DMI reports "..CN1374XXXXXXXX." for the very board his iDRAC calls "CN1374XXXXXXXX". Same board, same
+# serial number, three padding characters -- and until the canonicaliser, a refusal.
+
+function test_a_dmi_serial_number_padded_by_the_firmware_still_matches_the_fru_one() {
+  # The R510 of issue #378, at the shapes its owner measured. This is the machine the whole feature was
+  # built for, and an exact comparison refused it
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --no-product-serial --board-serial "CN1374ABCDEFGH")
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  SAME_MACHINE_VERDICT=()
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_only_a_board_serial "..CN1374ABCDEFGH."
+
+  assert_command_succeeds "the padding is the firmware's, not the serial number's" \
+    is_this_container_running_on_the_controlled_server
+  assert_contains "$SAME_MACHINE_VERDICT_REASON" "Board Serial CN1374ABCDEFGH" \
+    "and the value named back has to be the canonical one, not one side's padded copy"
+}
+
+function test_padding_does_not_carry_a_placeholder_past_the_shape_rules() {
+  # The dangerous half. "0000000" is one character repeated and is refused ; "..0000000." is not, so it
+  # walked through -- and two unrelated Dell boxes padding an unfilled field the same way compared EQUAL,
+  # which is one machine's CPU temperatures driving another machine's fans
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --no-product-serial --board-serial "..0000000.")
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  SAME_MACHINE_VERDICT=()
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_only_a_board_serial "..0000000."
+
+  assert_command_fails "an unfilled field is not an identifier, however it is padded" \
+    is_this_container_running_on_the_controlled_server
+}
+
+function test_a_separator_inside_a_serial_number_is_part_of_the_serial_number() {
+  # The negative control of the trim : only the ends are the firmware's. Two identifiers differing in the
+  # middle are two identifiers, and trimming must not reach in far enough to make them one
+  export MOCK_IPMITOOL_FRU_OUTPUT
+  MOCK_IPMITOOL_FRU_OUTPUT=$(make_fru_output --no-product-serial --board-serial "CN1374ABCDEFGH")
+  NETWORK_MODE=true
+  CPU_TEMPERATURE_SOURCE="auto"
+  CPU_TEMPERATURE_SOURCE_IN_USE="ipmi"
+  SAME_MACHINE_VERDICT=()
+  simulate_readable_CPUs_in_lm_sensors
+  get_Dell_server_model
+  simulate_host_reporting_only_a_board_serial "CN.1374ABCDEFGH"
+
+  assert_command_fails "these are two different strings and must stay two different machines" \
+    is_this_container_running_on_the_controlled_server
+}
+
+function test_every_listed_placeholder_is_still_refused_once_canonicalised() {
+  # Trimming the value alone silently retires half the list : "tobefilledbyo.e.m." keeps its full stop
+  # while the value read off a real DMI table loses it, and the two stop matching. Both sides go through
+  # the canonicaliser for that reason, and this walks the whole list rather than the one entry that
+  # exposed it -- assertions do not stop a case, so every offender is reported in one run
+  local PLACEHOLDER
+  for PLACEHOLDER in "${UNUSABLE_SERIAL_NUMBERS[@]}"; do
+    assert_command_fails "\"$PLACEHOLDER\" is a field nobody filled in, not an identifier" \
+      is_this_serial_number_usable "$PLACEHOLDER"
+
+    # And the same entry inside the padding a firmware wraps it in, which is how "..0000000." used to
+    # walk past the repeated-character rule
+    assert_command_fails "\"..$PLACEHOLDER.\" is that same field, padded" \
+      is_this_serial_number_usable "..$PLACEHOLDER."
+  done
+}
+
+function test_the_canonical_form_of_a_serial_number_is_the_identifier_alone() {
+  # The canonicaliser on its own, so that what the two readers share is pinned once rather than inferred
+  # from the comparisons above
+  assert_equals "CN1374ABCDEFGH" "$(canonicalise_serial_number "..CN1374ABCDEFGH.")" \
+    "the ends are the firmware's padding"
+  assert_equals "CN1374ABCDEFGH" "$(canonicalise_serial_number "  cn1374abcdefgh  ")" \
+    "whitespace goes and case is folded, as they always did"
+  assert_equals "CN.1374" "$(canonicalise_serial_number ".CN.1374.")" \
+    "a separator inside survives, only the ends are trimmed"
+  assert_equals "" "$(canonicalise_serial_number "....")" \
+    "a value that is nothing but padding leaves nothing to compare"
+  assert_command_fails "and nothing is not an identifier" \
+    is_this_serial_number_usable "$(canonicalise_serial_number "....")"
+}
+
 # --- The shipped lookup itself, which the harness no longer stands in for (issue #471) ---------------
 
 function test_the_shipped_dmi_lookup_is_the_one_the_kernel_uses() {
