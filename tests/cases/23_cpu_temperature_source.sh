@@ -1365,6 +1365,44 @@ function test_every_host_dmi_path_has_a_fru_field_to_be_compared_against() {
   assert_not_equals "0" "$SHIPPED_PATH_COUNT" "and the count has to be read, not silently zero on both sides"
 }
 
+function test_the_readme_names_every_serial_number_pair_the_check_compares() {
+  # #470 made this check walk TWO pairs, and #480 taught it to see through the padding a firmware wraps
+  # the values in. The README went on naming one file and calling the whole thing "the service tag
+  # comparison" -- and the paragraph that did it is the troubleshooting entry for a refused fallback, so
+  # a user asking why it refused was sent to look at product_serial. On the only real machine this has
+  # ever run on that is the wrong file : the R510 of issue #378 carries no Product Serial in its FRU at
+  # all, so the product pair is skipped and the board pair is what answers (issue #483).
+  #
+  # Read out of functions.sh for the reason test_the_shipped_dmi_lookup_is_the_one_the_kernel_uses gives :
+  # the harness resets both arrays, so the running shell holds the suite's own values and not the shipped
+  # ones the README has to match
+  if [ ! -f "$REPO_ROOT/README.md" ]; then
+    # The suite is running inside the built image, which .dockerignore keeps the README out of
+    skip_test "no README next to the scripts"
+    return 0
+  fi
+
+  local -r SHIPPED_PATHS=$(grep -E '^HOST_DMI_SERIAL_PATHS=' "$REPO_ROOT/functions.sh")
+  local -r SHIPPED_FIELDS=$(grep -E '^CONTROLLED_SERVER_SERIAL_FRU_FIELDS=' "$REPO_ROOT/functions.sh")
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  local DMI_FILE
+  while read -r DMI_FILE; do
+    [ -n "$DMI_FILE" ] || continue
+
+    assert_contains "$README_CONTENT" "$DMI_FILE" \
+      "the README has to name every host file the check reads, or half of a refusal is undebuggable"
+  done <<< "$(grep -oE '/sys/class/dmi/id/[a-z_]+' <<< "$SHIPPED_PATHS")"
+
+  local FRU_FIELD
+  while read -r FRU_FIELD; do
+    [ -n "$FRU_FIELD" ] || continue
+
+    assert_contains "$README_CONTENT" "$FRU_FIELD" \
+      "and every FRU field those files are compared against, that being the other half of the pair"
+  done <<< "$(grep -oE '[A-Za-z]+ Serial' <<< "$SHIPPED_FIELDS")"
+}
+
 function test_the_shipped_pairing_matches_like_with_like() {
   # The defect issue #469 found, pinned on the shipped order rather than on behaviour : a product serial
   # answers a Product Serial and a board serial answers a Board Serial. Crossed, they can only refuse
