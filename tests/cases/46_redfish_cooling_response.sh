@@ -546,7 +546,9 @@ function test_local_mode_says_the_transport_is_missing_rather_than_blaming_the_s
 function test_local_mode_does_not_promise_nothing_else_changes_when_the_cpus_come_from_lm_sensors() {
   # The sentence that cost issue #378's reporter a run. He read "Nothing else changes", followed the
   # advice, and his container refused to start : his iDRAC publishes no CPU temperature, so his CPUs
-  # come from lm-sensors -- and that fallback exists only in local mode
+  # come from lm-sensors, and network mode refused that fallback outright at the time. Issue #465 has
+  # since made it survive the switch on a container that can be shown to be running on the controlled
+  # server, which is what the warning below now says instead of a flat promise
   export IDRAC_HOST="local"
   CPU_TEMPERATURE_SOURCE_IN_USE="lm-sensors"
   REDFISH_ATTEMPTS=0
@@ -560,8 +562,9 @@ function test_local_mode_does_not_promise_nothing_else_changes_when_the_cpus_com
   assert_contains "$OUTPUT" "would refuse to start" \
     "what the switch would actually do has to be said before it is suggested"
   assert_contains "$OUTPUT" "Local mode needs no such proof"
-  # Since issue #465 the fallback is not local-mode-only, so this warning must not say it is -- it was
-  # still claiming "that fallback exists only in local mode" after #468 landed everywhere else (#469)
+  # Since issue #465 the fallback survives the switch on a container that proves where it runs, so this
+  # warning must not go on presenting local mode as the only place it exists -- it still did after #468
+  # had landed everywhere else (#469)
   assert_not_contains "$OUTPUT" "exists only in local mode" \
     "network mode keeps the reading when the container is shown to be on the server itself"
   assert_contains "$OUTPUT" "can be SHOWN to be running on the very server" \

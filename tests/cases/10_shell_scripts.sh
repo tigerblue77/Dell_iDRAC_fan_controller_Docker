@@ -1696,18 +1696,34 @@ function test_nothing_still_calls_the_lm_sensors_fallback_local_mode_only() {
   # code around it was already right. #465 made the lm-sensors CPU fallback reachable in network mode on
   # a container shown to be running on the controlled server, and #473 did the same for the threshold --
   # but a comment written to explain the OLD behaviour, and a placeholder string nothing prints today,
-  # both went on asserting "only in local mode" long after that stopped being the rule (issue #475).
+  # both went on presenting local mode as that fallback's only home long after it had stopped being
+  # (issue #475).
+  #
+  # The guard written for that swept the scripts and two documents and stopped there, which left out
+  # tests/ -- where the largest share of this project's prose lives, and where three more of the same
+  # claim were still standing the day after it landed (issue #477). A guard covering the smaller half
+  # of the prose reads, from a green run, exactly like one covering all of it, so it sweeps everything
+  # now.
   #
   # Prose is what a reader trusts when the code is too subtle to re-derive, so a claim this load-bearing
   # is worth a guard. Deliberately narrow : it forbids the absolute, not the words. Saying that local
   # mode needs no proof, or that a given path is local-only, stays perfectly sayable
   local -r FORBIDDEN='only (be )?(available |reachable |kept |read )?in ("local"|.local.|local) mode|local[- ]mode only|exists only in local'
 
+  # Two kinds of line have to spell the claim out to do their job : an assertion that it is ABSENT from
+  # what the controller printed, and the pattern above itself. Naming a claim in order to forbid it is
+  # not making it. Nothing else gets the pass -- a comment can always describe the claim instead of
+  # quoting it, and every comment that used to quote it was reworded rather than exempted. The line
+  # number grep -n prefixes is what the anchor steps over
+  local -r NAMING_IT_IN_ORDER_TO_FORBID_IT='assert_not_(contains|matches)|^[0-9]+:[[:space:]]*local -r FORBIDDEN='
+
   local FILE OFFENDING
-  for FILE in "$REPO_ROOT"/*.sh "$REPO_ROOT/README.md" "$REPO_ROOT/CLAUDE.md"; do
+  for FILE in "$REPO_ROOT"/*.sh "$REPO_ROOT"/*.md "$REPO_ROOT"/.github/*.sh \
+              "$TESTS_DIRECTORY"/*.sh "$TESTS_DIRECTORY"/*.md "$TESTS_DIRECTORY"/lib/*.sh \
+              "$TESTS_DIRECTORY"/cases/*.sh "$TESTS_DIRECTORY"/mocks/*; do
     [ -f "$FILE" ] || continue
 
-    OFFENDING=$(grep -nEi "$FORBIDDEN" "$FILE" || true)
+    OFFENDING=$(grep -nEi "$FORBIDDEN" "$FILE" | grep -Ev "$NAMING_IT_IN_ORDER_TO_FORBID_IT" || true)
 
     assert_empty "$OFFENDING" \
       "${FILE#"$REPO_ROOT"/} still calls the lm-sensors fallback local-mode-only, which #465 and #473 made untrue"
