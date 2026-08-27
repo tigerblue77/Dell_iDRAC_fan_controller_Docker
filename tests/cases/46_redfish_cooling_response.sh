@@ -543,6 +543,27 @@ function test_local_mode_says_the_transport_is_missing_rather_than_blaming_the_s
   assert_matches "$(cat "$TEST_TEMPORARY_DIRECTORY/local")" "Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD"
 }
 
+function test_the_readme_names_both_causes_of_the_refusal_the_warning_names() {
+  # #482 stopped the warning asserting a cause the container cannot know. The README went on explaining
+  # the same refusal with the 14th generation alone -- nothing false, but the only explanation on offer,
+  # so a reader whose log shows the refusal places themselves in that bucket by elimination. Which is the
+  # inference #481 was opened to stop the container inviting, and the README is where the log sends people.
+  #
+  # Same shape as issue #483, one pull request later : the code moved and the document did not (issue #485)
+  if [ ! -f "$REPO_ROOT/README.md" ]; then
+    # The suite is running inside the built image, which .dockerignore keeps the README out of
+    skip_test "no README next to the scripts"
+    return 0
+  fi
+
+  local -r README_CONTENT=$(cat "$REPO_ROOT/README.md")
+
+  assert_contains "$README_CONTENT" "older** than the generations that ever had the setting" \
+    "the README has to offer the second cause too, or the first one is reached by elimination"
+  assert_contains "$README_CONTENT" "the completion code does not tell the two apart" \
+    "and say why the container cannot decide it for the reader"
+}
+
 function test_local_mode_names_both_causes_of_the_refusal_rather_than_asserting_one() {
   # The refusal of "raw 0x30 0xce" has two opposite causes and does not say which : a server NEWER than
   # the 13th generation, where Dell moved the setting to a per-slot Redfish attribute, and one OLDER than
