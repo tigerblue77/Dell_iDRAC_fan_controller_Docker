@@ -543,6 +543,32 @@ function test_local_mode_says_the_transport_is_missing_rather_than_blaming_the_s
   assert_matches "$(cat "$TEST_TEMPORARY_DIRECTORY/local")" "Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD"
 }
 
+function test_local_mode_names_both_causes_of_the_refusal_rather_than_asserting_one() {
+  # The refusal of "raw 0x30 0xce" has two opposite causes and does not say which : a server NEWER than
+  # the 13th generation, where Dell moved the setting to a per-slot Redfish attribute, and one OLDER than
+  # any that ever had it, where network mode would find nothing at all. The warning asserted the first
+  # and suggested acting on it -- which is how the R510 of issue #378, 11th generation and no Redfish
+  # anywhere on it, was sent to a mode that had nothing in it for him. #173 deliberately retired guessing
+  # the generation from the model name, so the container genuinely cannot tell which case it is in and
+  # has to name both (issue #481)
+  export IDRAC_HOST="local"
+  REDFISH_ATTEMPTS=0
+  REDFISH_COOLING_RESPONSE_SETTLED=false
+
+  attempt_the_redfish_cooling_response "Disabled" "Disabled" \
+    > "$TEST_TEMPORARY_DIRECTORY/both_causes" 2>&1
+  local -r OUTPUT=$(cat "$TEST_TEMPORARY_DIRECTORY/both_causes")
+
+  assert_contains "$OUTPUT" "the refusal does not say which" \
+    "the container does not know the cause, and must not read as though it did"
+  assert_contains "$OUTPUT" "older than the generations that ever had the setting" \
+    "the second cause has to be named, not only the one that makes the switch worth making"
+  assert_contains "$OUTPUT" "nothing for network mode to reach either" \
+    "and what that cause means for the reader has to be spelt out"
+  assert_not_contains "$OUTPUT" "to have an effect on this server" \
+    "an effect on THIS server cannot be promised when its generation is exactly what is unknown"
+}
+
 function test_local_mode_does_not_promise_nothing_else_changes_when_the_cpus_come_from_lm_sensors() {
   # The sentence that cost issue #378's reporter a run. He read "Nothing else changes", followed the
   # advice, and his container refused to start : his iDRAC publishes no CPU temperature, so his CPUs

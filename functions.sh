@@ -2506,7 +2506,17 @@ function run_the_redfish_cooling_response_errand() {
         WHAT_ELSE_CHANGES=" Something else would change on this server, and it is the more important of the two : its iDRAC reports no readable CPU temperature, so the CPUs are being read from lm-sensors instead -- and in network mode that reading is kept only if this container can be SHOWN to be running on the very server IDRAC_HOST names, by its service tag matching the one the iDRAC reports. Where it cannot be shown -- most often because /sys/class/dmi/id/product_serial is not readable from inside the container -- this container would have no CPU temperature at all and would refuse to start. Local mode needs no such proof, and is the safer choice for this server ; leaving this parameter without effect is the cheaper of the two prices"
       fi
 
-      print_warning "This server does not have the IPMI command for the third-party PCIe card cooling response. Dell moved it at the 14th generation to a per-slot setting reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on this server.$WHAT_ELSE_CHANGES"
+      # And what switching modes could WIN, which is the half #467 and #468 left behind. This line is
+      # reached because the BMC refused "raw 0x30 0xce", and that refusal has two opposite causes it does
+      # not tell apart : a server NEWER than the 13th generation, where Dell moved the setting to a
+      # per-slot Redfish attribute, and a server OLDER than the ones that ever had it, where there is
+      # nothing to reach over any transport. Saying only the first sends the second's owner to a mode
+      # that has nothing for them -- which is what the R510 of issue #378 was told, twice, while its
+      # iDRAC 6 has no Redfish at all. #173 deliberately retired guessing the generation from the model
+      # name, so the container genuinely does not know which case this is : it must name both rather than
+      # assert one, and REDFISH_MANUAL_INSTRUCTIONS has said the honest version on the network path all
+      # along (issue #481)
+      print_warning "This server refused the IPMI command for the third-party PCIe card cooling response. Two different things look like that from local mode, and the refusal does not say which. Dell moved this setting at the 14th generation to a per-slot attribute reachable over Redfish, which is HTTPS and therefore needs an iDRAC address and credentials -- and local mode has neither, reaching the BMC through /dev/ipmi0 instead. But a server older than the generations that ever had the setting refuses the very same command in the very same way, and on one of those there is nothing for network mode to reach either. Set IDRAC_HOST, IDRAC_USERNAME and IDRAC_PASSWORD to run this container in network mode if you want DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE to have an effect on a 14th generation server or newer ; on an older one the switch changes nothing here.$WHAT_ELSE_CHANGES"
       return 1
     fi
 
