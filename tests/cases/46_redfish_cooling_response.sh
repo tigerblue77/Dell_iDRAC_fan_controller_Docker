@@ -1205,3 +1205,66 @@ function test_a_fast_errand_that_straddles_a_second_is_not_split() {
     "crossing a second is not spending one : a server answering in milliseconds is finished with in one cycle"
   assert_equals "1" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" "and the setting is applied in it"
 }
+
+# The cases below drive the controller with a document no one here wrote : the System attributes of a
+# real PowerEdge R740xd2, posted on #360. Everything above builds its own body to the shape the code
+# expects, which is the shape whoever wrote the code had in mind ; these run against what an iDRAC
+# actually answered, in the order it answered it (#489).
+
+function test_a_captured_document_is_read_as_the_machine_it_came_from() {
+  # The conformant URI answered 404 on this machine, so the capture is served where it really came
+  # from : the legacy one, reached only after that 404. Its status is left at the mock's default
+  export MOCK_REDFISH_LEGACY_STATUS="200"
+  export MOCK_REDFISH_LEGACY_BODY
+  MOCK_REDFISH_LEGACY_BODY=$(make_captured_r740xd2_attributes_body)
+
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  assert_equals "15" "$REDFISH_COOLING_RESPONSE_SLOT_COUNT" \
+    "the capture carries fifteen slot instances, ordered 1, 10, 11 ... 15, 2, 3 ... 9"
+  assert_empty "$REDFISH_THIRD_PARTY_SLOTS" \
+    "fourteen of its slots are empty and the fifteenth holds an AHCI controller reading \"No\""
+  assert_equals "Automatic" "$(read_the_lfm_mode_of_slot "$MOCK_REDFISH_LEGACY_BODY" 1)" \
+    "slot 1's mode is the first slot of the document, read from its real text"
+  assert_equals "Automatic" "$(read_the_lfm_mode_of_slot "$MOCK_REDFISH_LEGACY_BODY" 15)" \
+    "and slot 15 is the one a lexicographic order puts fifth, not last"
+}
+
+function test_the_attribute_a_real_document_opens_on_is_not_dropped() {
+  # Dell orders these alphabetically, so a real answer opens on PCIeSlotLFM.1.3rdPartyCard -- the exact
+  # position an anchored pattern could not reach, which cost the machine's FIRST PCIe slot until #412.
+  # That fix was proved against a body written to have the shape ; this proves it against one that has
+  # the shape because an iDRAC produced it. One value is changed, and only one : slot 1's card flag
+  export MOCK_REDFISH_LEGACY_STATUS="200"
+  export MOCK_REDFISH_LEGACY_BODY
+  MOCK_REDFISH_LEGACY_BODY=$(make_captured_r740xd2_attributes_body "1=3rdPartyCard=Yes")
+
+  does_this_server_expose_the_cooling_response_over_redfish
+
+  assert_equals "1 " "$REDFISH_THIRD_PARTY_SLOTS" \
+    "the card in the document's opening attribute is a card like any other"
+  assert_equals "15" "$REDFISH_COOLING_RESPONSE_SLOT_COUNT" "and the slot count is unchanged by it"
+}
+
+function test_the_controller_tells_a_captured_r740xd2_owner_there_is_nothing_to_apply_it_to() {
+  # End to end, on the machine the capture came from : a 14th generation iDRAC that answers the raw
+  # command with rsp=0xc1, has the setting on fifteen slots, and holds no third-party card anywhere.
+  # The column must say that rather than name the server unable or claim something was applied
+  export DISABLE_THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE=true
+  export MOCK_REDFISH_PATCH_LOG="$TEST_TEMPORARY_DIRECTORY/patches"
+  : > "$MOCK_REDFISH_PATCH_LOG"
+  simulate_server "PowerEdge R740xd2" --cpus 2
+  export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0xce"
+  export MOCK_IPMITOOL_RAW_FAIL_STDERR="Unable to send RAW command (channel=0x0 netfn=0x30 lun=0x0 cmd=0xce rsp=0xc1): Invalid command"
+  export MOCK_REDFISH_LEGACY_STATUS="200"
+  export MOCK_REDFISH_LEGACY_BODY
+  MOCK_REDFISH_LEGACY_BODY=$(make_captured_r740xd2_attributes_body)
+
+  local -r OUTPUT=$(run_controller "" 3)
+
+  assert_matches "$OUTPUT" "fan control profile.*No third-party PCIe card to apply it to" \
+    "the table must report what was found rather than what the command answered"
+  assert_equals "0" "$(grep -c "" "$MOCK_REDFISH_PATCH_LOG")" \
+    "and nothing may be written to a slot holding a Dell card or no card at all"
+  assert_matches "$OUTPUT" "15 PCIe slots over Redfish" "the reader is told how many were found"
+}

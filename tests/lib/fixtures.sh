@@ -394,3 +394,208 @@ function simulate_enclosure_management_controller() {
   export MOCK_IPMITOOL_RAW_FAIL_PATTERN="0x30 0x30"
   export MOCK_IPMITOOL_RAW_FAIL_STDERR="$ENCLOSURE_REJECTED_FAN_CONTROL_STDERR"
 }
+
+# The System attributes of a real PowerEdge R740xd2, as @bitspill posted them on issue #360 on
+# 2026-08-29 : iDRAC 9 firmware 3.30.30.30, Enterprise licence, host running.
+#
+# Every other Redfish body this suite feeds the controller is one make_redfish_attributes_body() built
+# to the shape the code expects, which is the shape whoever wrote the code had in mind. This one is not
+# invented, and four things in it are only true because an iDRAC produced them :
+#
+#   - it came from the LEGACY URI. The conformant one answered 404 on this machine, which is why the
+#     cases below set MOCK_REDFISH_LEGACY_BODY and leave the conformant status at its 404 default : the
+#     fallback is not a defensive branch here, it is the only way this server ever answers ;
+#   - it is ordered ALPHABETICALLY, which is how Dell returns these documents. That puts PCIeSlotLFM
+#     before ThermalSettings and 3rdPartyCard before LFMMode, so the very first attribute of the object
+#     is "PCIeSlotLFM.1.3rdPartyCard" -- the position an anchored pattern used to drop silently (#412) ;
+#   - its slots run 1, 10, 11 ... 15, 2, 3 ... 9, because that ordering is lexicographic and not
+#     numeric. Nothing here should care, and this is what says so ;
+#   - it is the first capture of a server that HAS the setting on 15 slots and holds no third-party
+#     card at all : fourteen slots empty and one AHCI controller reading "No". The branch that reports
+#     "No third-party PCIe card to apply it to" was written against a mock because no real machine had
+#     ever shown it.
+#
+# What is reproduced is his paste, not the whole document : he ran the capture through
+# "tr ',' '\n' | grep -Ei 'thermal|pcieslotlfm|...'", so it arrived one attribute per line and carries
+# the four families that filter kept -- PCIeSlotLFM, ThermalConfig, ThermalHistorical and
+# ThermalSettings. The two the controller reads are among them, so nothing it looks at is missing ; a
+# real body would also hold the several hundred attributes it ignores, and the other two families are
+# left in precisely because they are of that kind and the parsers have to walk past them. The
+# line-per-attribute form is kept here to stay readable and re-joined below into the single minified
+# line the iDRAC really answers with. Within what he posted nothing is added, reordered or corrected --
+# 150 attributes, byte for byte and in his order -- including MFSMinimumLimit at 63, the highest of the
+# eight machines reported on that issue and the clearest evidence that the floor is not a setpoint.
+# Usage : make_captured_r740xd2_attributes_body ["<slot>=<attribute>=<value>" ...]
+#         each optional argument replaces one attribute of the capture, for a case that needs a shape
+#         the machine did not happen to have
+function make_captured_r740xd2_attributes_body() {
+  local CAPTURED_ATTRIBUTES
+  CAPTURED_ATTRIBUTES=$(cat << 'CAPTURE'
+"PCIeSlotLFM.1.3rdPartyCard":"N/A"
+"PCIeSlotLFM.1.CardType":"Empty"
+"PCIeSlotLFM.1.CustomLFM":0
+"PCIeSlotLFM.1.LFMMode":"Automatic"
+"PCIeSlotLFM.1.MaxLFM":0
+"PCIeSlotLFM.1.PCIeInletTemperature":34
+"PCIeSlotLFM.1.SlotState":"Defined"
+"PCIeSlotLFM.1.TargetLFM":"-"
+"PCIeSlotLFM.10.3rdPartyCard":"N/A"
+"PCIeSlotLFM.10.CardType":"Empty"
+"PCIeSlotLFM.10.CustomLFM":0
+"PCIeSlotLFM.10.LFMMode":"Automatic"
+"PCIeSlotLFM.10.MaxLFM":0
+"PCIeSlotLFM.10.PCIeInletTemperature":0
+"PCIeSlotLFM.10.SlotState":"Not-Defined"
+"PCIeSlotLFM.10.TargetLFM":"-"
+"PCIeSlotLFM.11.3rdPartyCard":"N/A"
+"PCIeSlotLFM.11.CardType":"Empty"
+"PCIeSlotLFM.11.CustomLFM":0
+"PCIeSlotLFM.11.LFMMode":"Automatic"
+"PCIeSlotLFM.11.MaxLFM":0
+"PCIeSlotLFM.11.PCIeInletTemperature":0
+"PCIeSlotLFM.11.SlotState":"Not-Defined"
+"PCIeSlotLFM.11.TargetLFM":"-"
+"PCIeSlotLFM.12.3rdPartyCard":"N/A"
+"PCIeSlotLFM.12.CardType":"Empty"
+"PCIeSlotLFM.12.CustomLFM":0
+"PCIeSlotLFM.12.LFMMode":"Automatic"
+"PCIeSlotLFM.12.MaxLFM":0
+"PCIeSlotLFM.12.PCIeInletTemperature":0
+"PCIeSlotLFM.12.SlotState":"Not-Defined"
+"PCIeSlotLFM.12.TargetLFM":"-"
+"PCIeSlotLFM.13.3rdPartyCard":"N/A"
+"PCIeSlotLFM.13.CardType":"Empty"
+"PCIeSlotLFM.13.CustomLFM":0
+"PCIeSlotLFM.13.LFMMode":"Automatic"
+"PCIeSlotLFM.13.MaxLFM":0
+"PCIeSlotLFM.13.PCIeInletTemperature":0
+"PCIeSlotLFM.13.SlotState":"Not-Defined"
+"PCIeSlotLFM.13.TargetLFM":"-"
+"PCIeSlotLFM.14.3rdPartyCard":"N/A"
+"PCIeSlotLFM.14.CardType":"Empty"
+"PCIeSlotLFM.14.CustomLFM":0
+"PCIeSlotLFM.14.LFMMode":"Automatic"
+"PCIeSlotLFM.14.MaxLFM":0
+"PCIeSlotLFM.14.PCIeInletTemperature":0
+"PCIeSlotLFM.14.SlotState":"Not-Defined"
+"PCIeSlotLFM.14.TargetLFM":"-"
+"PCIeSlotLFM.15.3rdPartyCard":"N/A"
+"PCIeSlotLFM.15.CardType":"Empty"
+"PCIeSlotLFM.15.CustomLFM":0
+"PCIeSlotLFM.15.LFMMode":"Automatic"
+"PCIeSlotLFM.15.MaxLFM":0
+"PCIeSlotLFM.15.PCIeInletTemperature":0
+"PCIeSlotLFM.15.SlotState":"Not-Defined"
+"PCIeSlotLFM.15.TargetLFM":"-"
+"PCIeSlotLFM.2.3rdPartyCard":"No"
+"PCIeSlotLFM.2.CardType":"AHCI"
+"PCIeSlotLFM.2.CustomLFM":0
+"PCIeSlotLFM.2.LFMMode":"Automatic"
+"PCIeSlotLFM.2.MaxLFM":390
+"PCIeSlotLFM.2.PCIeInletTemperature":34
+"PCIeSlotLFM.2.SlotState":"Defined"
+"PCIeSlotLFM.2.TargetLFM":"Airflow Controlled"
+"PCIeSlotLFM.3.3rdPartyCard":"N/A"
+"PCIeSlotLFM.3.CardType":"Empty"
+"PCIeSlotLFM.3.CustomLFM":0
+"PCIeSlotLFM.3.LFMMode":"Automatic"
+"PCIeSlotLFM.3.MaxLFM":330
+"PCIeSlotLFM.3.PCIeInletTemperature":34
+"PCIeSlotLFM.3.SlotState":"Not-Defined"
+"PCIeSlotLFM.3.TargetLFM":"-"
+"PCIeSlotLFM.4.3rdPartyCard":"N/A"
+"PCIeSlotLFM.4.CardType":"Empty"
+"PCIeSlotLFM.4.CustomLFM":0
+"PCIeSlotLFM.4.LFMMode":"Automatic"
+"PCIeSlotLFM.4.MaxLFM":180
+"PCIeSlotLFM.4.PCIeInletTemperature":34
+"PCIeSlotLFM.4.SlotState":"Not-Defined"
+"PCIeSlotLFM.4.TargetLFM":"-"
+"PCIeSlotLFM.5.3rdPartyCard":"N/A"
+"PCIeSlotLFM.5.CardType":"Empty"
+"PCIeSlotLFM.5.CustomLFM":0
+"PCIeSlotLFM.5.LFMMode":"Automatic"
+"PCIeSlotLFM.5.MaxLFM":260
+"PCIeSlotLFM.5.PCIeInletTemperature":34
+"PCIeSlotLFM.5.SlotState":"Not-Defined"
+"PCIeSlotLFM.5.TargetLFM":"-"
+"PCIeSlotLFM.6.3rdPartyCard":"N/A"
+"PCIeSlotLFM.6.CardType":"Empty"
+"PCIeSlotLFM.6.CustomLFM":0
+"PCIeSlotLFM.6.LFMMode":"Automatic"
+"PCIeSlotLFM.6.MaxLFM":290
+"PCIeSlotLFM.6.PCIeInletTemperature":34
+"PCIeSlotLFM.6.SlotState":"Not-Defined"
+"PCIeSlotLFM.6.TargetLFM":"-"
+"PCIeSlotLFM.7.3rdPartyCard":"N/A"
+"PCIeSlotLFM.7.CardType":"Empty"
+"PCIeSlotLFM.7.CustomLFM":0
+"PCIeSlotLFM.7.LFMMode":"Automatic"
+"PCIeSlotLFM.7.MaxLFM":0
+"PCIeSlotLFM.7.PCIeInletTemperature":0
+"PCIeSlotLFM.7.SlotState":"Not-Defined"
+"PCIeSlotLFM.7.TargetLFM":"-"
+"PCIeSlotLFM.8.3rdPartyCard":"N/A"
+"PCIeSlotLFM.8.CardType":"Empty"
+"PCIeSlotLFM.8.CustomLFM":0
+"PCIeSlotLFM.8.LFMMode":"Automatic"
+"PCIeSlotLFM.8.MaxLFM":0
+"PCIeSlotLFM.8.PCIeInletTemperature":0
+"PCIeSlotLFM.8.SlotState":"Not-Defined"
+"PCIeSlotLFM.8.TargetLFM":"-"
+"PCIeSlotLFM.9.3rdPartyCard":"N/A"
+"PCIeSlotLFM.9.CardType":"Empty"
+"PCIeSlotLFM.9.CustomLFM":0
+"PCIeSlotLFM.9.LFMMode":"Automatic"
+"PCIeSlotLFM.9.MaxLFM":0
+"PCIeSlotLFM.9.PCIeInletTemperature":0
+"PCIeSlotLFM.9.SlotState":"Not-Defined"
+"PCIeSlotLFM.9.TargetLFM":"-"
+"ThermalConfig.1.CriticalEventGenerationInterval":30
+"ThermalConfig.1.EventGenerationInterval":30
+"ThermalConfig.1.FreshAirCompliantConfiguration":"Not Applicable"
+"ThermalConfig.1.MaxCFM":61
+"ThermalConfig.1.ValidFanConfiguration":"Yes"
+"ThermalHistorical.1.IntervalInSeconds":0
+"ThermalSettings.1.AirExhaustTemp":"70"
+"ThermalSettings.1.AirExhaustTempSupport":"Supported"
+"ThermalSettings.1.AirTemperatureRiseLimit":"NO LIMIT"
+"ThermalSettings.1.AirTemperatureRiseLimitSupport":"Not Supported"
+"ThermalSettings.1.CurrentSystemProfileValue":"Minimum Power"
+"ThermalSettings.1.FanSpeedHighOffsetVal":75
+"ThermalSettings.1.FanSpeedLowOffsetVal":25
+"ThermalSettings.1.FanSpeedMaxOffsetVal":100
+"ThermalSettings.1.FanSpeedMediumOffsetVal":50
+"ThermalSettings.1.FanSpeedOffset":"Off"
+"ThermalSettings.1.MFSMaximumLimit":100
+"ThermalSettings.1.MFSMinimumLimit":63
+"ThermalSettings.1.MaximumPCIeInletTemperatureLimit":"55"
+"ThermalSettings.1.MaximumPCIeInletTemperatureLimitSupport":"Not Supported"
+"ThermalSettings.1.MinimumFanSpeed":255
+"ThermalSettings.1.PCIeSlotLFMSupport":"Supported"
+"ThermalSettings.1.SetAirTemperatureRiseLimit":"Disabled"
+"ThermalSettings.1.SetMaximumExhaustTemperatureLimit":"Disabled"
+"ThermalSettings.1.SystemCFMSupport":"Supported"
+"ThermalSettings.1.SystemExhaustTemperature":38
+"ThermalSettings.1.SystemInletTemperature":23
+"ThermalSettings.1.SystemInletTemperatureSupportLimitPerConfiguration":30
+"ThermalSettings.1.TargetExhaustTemperatureLimit":70
+"ThermalSettings.1.ThermalProfile":"Sound Cap"
+CAPTURE
+  )
+
+  local REPLACEMENT SLOT ATTRIBUTE VALUE
+  for REPLACEMENT in "$@"; do
+    SLOT="${REPLACEMENT%%=*}"
+    ATTRIBUTE="${REPLACEMENT#*=}"
+    VALUE="${ATTRIBUTE#*=}"
+    ATTRIBUTE="${ATTRIBUTE%%=*}"
+    CAPTURED_ATTRIBUTES=$(printf '%s\n' "$CAPTURED_ATTRIBUTES" |
+      sed "s|^\"PCIeSlotLFM\.${SLOT}\.${ATTRIBUTE}\":.*$|\"PCIeSlotLFM.${SLOT}.${ATTRIBUTE}\":\"${VALUE}\"|")
+  done
+
+  local MINIFIED
+  MINIFIED=$(printf '%s\n' "$CAPTURED_ATTRIBUTES" | paste -sd ',' -)
+
+  printf '{"Attributes":{%s}}' "$MINIFIED"
+}
