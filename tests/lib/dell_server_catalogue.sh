@@ -137,6 +137,7 @@ readonly DELL_SERVER_CATALOGUE=(
   "14|PowerEdge R640|2|firmware-dependent|standalone"
   "14|PowerEdge R740|2|firmware-dependent|standalone"
   "14|PowerEdge R740xd|2|firmware-dependent|standalone"
+  "14|PowerEdge R740xd2|2|firmware-dependent|standalone"
   "14|PowerEdge T440|2|firmware-dependent|standalone"
   "14|PowerEdge T640|2|firmware-dependent|standalone"
   "14|PowerEdge R840|4|firmware-dependent|standalone"
