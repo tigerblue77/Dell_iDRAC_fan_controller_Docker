@@ -260,3 +260,126 @@ function test_every_shell_block_the_workflows_run_has_a_valid_syntax() {
     fail "no shell block was found across the workflows, and every one of them runs shell"
   fi
 }
+
+# The content of a "<key>: |" block scalar, indentation stripped, wherever it
+# appears in a workflow. Shared by the two tests below, which compare one block
+# against another.
+#
+# The block ends where the indentation returns to the key or above it, and a
+# blank line inside it is content rather than its end -- the same reading
+# test_no_docker_action_list_entry_ends_with_a_comment does, kept in one place
+# rather than copied into both callers. Character classes are spelled out rather
+# than [[:space:]] for the reason that test gives : the suite runs on mawk on the
+# runner and on GNU awk inside the image, and this form is read the same way by
+# both
+function extract_block_scalar() {
+  local -r KEY="$1"
+  local -r FILE="$2"
+
+  awk -v key="$KEY" '
+    $0 ~ "^[ \t]*" key ":[ \t]*[|>]" {
+      in_block = 1
+      key_indent = match($0, /[^ \t]/) - 1
+      next
+    }
+
+    in_block {
+      if ($0 ~ /^[ \t]*$/) next
+
+      if (match($0, /[^ \t]/) - 1 <= key_indent) {
+        in_block = 0
+        next
+      }
+
+      sub(/^[ \t]+/, "")
+      print
+    }
+  ' "$FILE"
+}
+
+function test_every_publishing_workflow_states_the_project_licence() {
+  # metadata-action fills org.opencontainers.image.licenses from GitHub's licence
+  # detection, and GitHub reports the plain "AGPL-3.0" for this repository rather
+  # than the "-only" the project actually chose. "Docker image CI" has always
+  # overridden it. "Base image refresh" did not -- and it republishes the SAME
+  # "latest" tag, so every night the base moved, the published image quietly
+  # stopped stating the project's own terms and started stating GitHub's guess at
+  # them (issue #493). In a dual-licensed project that is not cosmetic : see
+  # LICENSE, LICENSE-COMMERCIAL.md and what .github/check_sign_off.sh says the
+  # licence record is load-bearing for.
+  #
+  # Both blocks are read, not just the labels : getAnnotations() returns
+  # getOCIAnnotationsWithCustoms(inputs.annotations) and never looks at
+  # inputs.labels, so a licence stated once reaches the image config and stops
+  # there, leaving the index to carry the guess beside a config that disagrees.
+  #
+  # Swept over every publishing workflow rather than over a list of two, so that a
+  # third publisher added later fails here instead of quietly reopening this
+  if [ ! -d "$REPO_ROOT/.github/workflows" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  local WORKFLOW
+  for WORKFLOW in "$REPO_ROOT"/.github/workflows/*.yml; do
+    [ -f "$WORKFLOW" ] || continue
+    grep -q '^ *push: true$' "$WORKFLOW" || continue
+
+    local KEY
+    for KEY in labels annotations; do
+      local BLOCK
+      BLOCK=$(extract_block_scalar "$KEY" "$WORKFLOW")
+
+      assert_contains "$BLOCK" "org.opencontainers.image.licenses=AGPL-3.0-only" \
+        "${WORKFLOW#"$REPO_ROOT"/} publishes an image whose $KEY do not state the project's licence, so metadata-action fills in GitHub's guess"
+    done
+  done
+}
+
+function test_every_publishing_workflow_annotates_the_image_index() {
+  # Labels live in each per-platform image config ; annotations live on the
+  # manifests and on the index. The index is what "docker pull" and
+  # "imagetools inspect" resolve first, and until issue #493 neither publisher
+  # passed the annotations input at all -- measured on the published image, the
+  # index and both platform manifests carried none.
+  #
+  # Three things have to hold together, and each is inert without the others : the
+  # levels variable has to name "index", because metadata-action attaches to
+  # "manifest" alone by default ; every pushing build has to be handed the
+  # annotations output beside the labels one ; and the two block scalars have to
+  # agree, for the reason the licence test above gives. The third is the one that
+  # keeps this from drifting back : a custom entry added to one block and not the
+  # other is exactly how the licence went missing in the first place
+  if [ ! -d "$REPO_ROOT/.github/workflows" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  local WORKFLOW
+  for WORKFLOW in "$REPO_ROOT"/.github/workflows/*.yml; do
+    [ -f "$WORKFLOW" ] || continue
+    grep -q '^ *push: true$' "$WORKFLOW" || continue
+
+    local RELATIVE_PATH="${WORKFLOW#"$REPO_ROOT"/}"
+
+    local LEVELS
+    LEVELS=$(grep -c '^ *DOCKER_METADATA_ANNOTATIONS_LEVELS: .*\bindex\b' "$WORKFLOW")
+    assert_not_equals "$LEVELS" "0" \
+      "$RELATIVE_PATH publishes an image without naming \"index\" in DOCKER_METADATA_ANNOTATIONS_LEVELS, so its annotations never reach the index"
+
+    # One "annotations:" handed to a build for every "labels:" handed to one. The
+    # single-line output form only, which is what a build step takes ; the block
+    # scalars above are the action's inputs and are compared separately below
+    local LABELS_PASSED ANNOTATIONS_PASSED
+    LABELS_PASSED=$(grep -c '^ *labels: \${{ steps\.meta\.outputs\.labels }}$' "$WORKFLOW")
+    ANNOTATIONS_PASSED=$(grep -c '^ *annotations: \${{ steps\.meta\.outputs\.annotations }}$' "$WORKFLOW")
+    assert_equals "$ANNOTATIONS_PASSED" "$LABELS_PASSED" \
+      "$RELATIVE_PATH hands its builds $LABELS_PASSED labels output(s) and $ANNOTATIONS_PASSED annotations one(s) ; a build given one and not the other publishes an image that describes itself in one place only"
+
+    local LABELS_BLOCK ANNOTATIONS_BLOCK
+    LABELS_BLOCK=$(extract_block_scalar labels "$WORKFLOW")
+    ANNOTATIONS_BLOCK=$(extract_block_scalar annotations "$WORKFLOW")
+    assert_equals "$ANNOTATIONS_BLOCK" "$LABELS_BLOCK" \
+      "$RELATIVE_PATH states different custom entries as labels and as annotations ; getAnnotations() never reads the labels input, so whatever is missing here is missing from the index"
+  done
+}
