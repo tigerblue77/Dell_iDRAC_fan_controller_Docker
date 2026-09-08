@@ -545,6 +545,12 @@ Don't forget to give the project a star! Thanks again!
 
 Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before you do : it explains the sign-off in step 3, and the terms your contribution arrives under in a project that is [dual-licensed](#license).
 
+### Contributors
+
+<a href="https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tigerblue77/Dell_iDRAC_fan_controller_Docker" alt="Contributors to this repository" />
+</a>
+
 To test locally, use either :
 ```bash
 docker build -t tigerblue77/dell_idrac_fan_controller:dev .
