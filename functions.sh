@@ -41,7 +41,7 @@ function apply_Dell_default_fan_control_profile() {
 }
 
 # This function applies a user-specified fan control profile : FAN_SPEED by default, or any other speed
-# a caller passes in (compute_interpolated_fan_speed's result, when ENABLE_LINE_INTERPOLATION is on).
+# a caller passes in (compute_interpolated_fan_speed's result, when LINE_INTERPOLATION_ENABLED is true).
 # One function rather than a copy per speed source, so that every fan-control behaviour below -- the
 # refusal memory, the per-fan identifier walk, the hand-back to Dell -- is never at risk of drifting
 # between a "static" path and an "interpolated" one that duplicated it.
@@ -428,16 +428,17 @@ function validate_fan_speed_parameter() {
   fi
 }
 
-# Stop the container unless the given parameter is a usable CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION,
-# only ever called once ENABLE_LINE_INTERPOLATION is known to be "true"
-# Usage : validate_CPU_temperature_for_start_line_interpolation_parameter "$PARAMETER_NAME" "$VALUE"
+# Stop the container unless the given parameter is a usable CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION,
+# only ever called once LINE_INTERPOLATION_ENABLED is known to be true, i.e. once HIGH_FAN_SPEED is
+# known to be set
+# Usage : validate_CPU_temperature_to_start_line_interpolation_parameter "$PARAMETER_NAME" "$VALUE"
 #
 # Held to the same plausibility window as CPU_TEMPERATURE_THRESHOLD, for the same reason : a value
 # outside it can never be the temperature at which a real CPU starts the ramp, and letting the container
 # start on one would silently run the whole cycle unpaced by anything but a typo. It carries no "auto"
 # of its own -- unlike CPU_TEMPERATURE_THRESHOLD, this parameter has no lm-sensors equivalent to fall
 # back on -- so a bare decimal integer is the only accepted form
-function validate_CPU_temperature_for_start_line_interpolation_parameter() {
+function validate_CPU_temperature_to_start_line_interpolation_parameter() {
   local -r PARAMETER_NAME="$1"
   local -r VALUE="$2"
   local -r ACCEPTED_RANGE="a temperature in degrees Celsius between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD} and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}"
@@ -3093,7 +3094,7 @@ function is_any_CPU_overheating() {
 }
 
 # The highest reading among every detected CPU, whichever position it is at and however many CPUs the
-# server has -- unlike the two-CPU-only design ENABLE_LINE_INTERPOLATION was first proposed with, this
+# server has -- unlike the two-CPU-only design this feature was first proposed with, this
 # reduces over the whole DETECTED_CPU_TEMPERATURES array, the same one is_any_CPU_overheating() reads,
 # so a 4-socket server (R930, R830...) is driven by its hottest CPU and not only its first one.
 # An unreadable or non-numeric reading is skipped rather than treated as the hottest : is_any_CPU_overheating()
@@ -3115,8 +3116,8 @@ function hottest_detected_CPU_temperature() {
   echo "$HOTTEST"
 }
 
-# Computes the fan speed (%) ENABLE_LINE_INTERPOLATION applies below CPU_TEMPERATURE_THRESHOLD, ramping
-# linearly from DECIMAL_FAN_SPEED at CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION up to
+# Computes the fan speed (%) the ramp applies below CPU_TEMPERATURE_THRESHOLD when LINE_INTERPOLATION_ENABLED
+# is true, ramping linearly from DECIMAL_FAN_SPEED at CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION up to
 # DECIMAL_HIGH_FAN_SPEED at CPU_TEMPERATURE_THRESHOLD -- the shape #44 asked for : a step between the
 # user's usual speed and Dell's own fallback, instead of jumping straight from one to the other.
 #
@@ -3144,7 +3145,7 @@ function compute_interpolated_fan_speed() {
   # has already said every CPU is at or under CPU_TEMPERATURE_THRESHOLD, so the upper clamp is not
   # expected to fire in practice -- but a function this safety-relevant is right on its own terms, not
   # only by construction of the one place that currently calls it
-  if [ "$NORMALIZED_CPU_TEMPERATURE" -le "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" ]; then
+  if [ "$NORMALIZED_CPU_TEMPERATURE" -le "$CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION" ]; then
     echo "$DECIMAL_FAN_SPEED"
     return
   fi
@@ -3153,9 +3154,9 @@ function compute_interpolated_fan_speed() {
     return
   fi
 
-  local -r TEMPERATURE_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))
+  local -r TEMPERATURE_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION))
   local -r FAN_SPEED_RANGE=$((DECIMAL_HIGH_FAN_SPEED - DECIMAL_FAN_SPEED))
-  local -r TEMPERATURE_OFFSET=$((NORMALIZED_CPU_TEMPERATURE - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))
+  local -r TEMPERATURE_OFFSET=$((NORMALIZED_CPU_TEMPERATURE - CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION))
 
   echo $((DECIMAL_FAN_SPEED + FAN_SPEED_RANGE * TEMPERATURE_OFFSET / TEMPERATURE_RANGE))
 }

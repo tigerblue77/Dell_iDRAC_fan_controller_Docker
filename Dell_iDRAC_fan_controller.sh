@@ -234,20 +234,29 @@ if "${IS_THE_AUTOMATIC_THRESHOLD_STILL_TO_BE_RESOLVED:-false}"; then
 fi
 readonly CPU_TEMPERATURE_THRESHOLD
 
-# ENABLE_LINE_INTERPOLATION ramps the fan speed from FAN_SPEED up to HIGH_FAN_SPEED as the hottest
-# detected CPU rises from CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION towards CPU_TEMPERATURE_THRESHOLD,
-# instead of jumping straight from FAN_SPEED to Dell's default profile the moment the threshold is
-# crossed (issue #44). CPU_TEMPERATURE_THRESHOLD still applies unchanged as the final safety fallback.
+# HIGH_FAN_SPEED ramps the fan speed from FAN_SPEED up to itself as the hottest detected CPU rises
+# from CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION towards CPU_TEMPERATURE_THRESHOLD, instead of
+# jumping straight from FAN_SPEED to Dell's default profile the moment the threshold is crossed
+# (issue #44). CPU_TEMPERATURE_THRESHOLD still applies unchanged as the final safety fallback.
 #
-# Validated here rather than beside FAN_SPEED above : both HIGH_FAN_SPEED and
-# CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION are only meaningful measured against CPU_TEMPERATURE_THRESHOLD,
-# which "auto" leaves unresolved until the line just above this one. Validating them earlier -- as an
-# unmerged rework of this feature once did -- checks a coherence condition against the literal string
-# "auto" on every server that leaves CPU_TEMPERATURE_THRESHOLD at its default, refusing to start on the
-# very configuration the image ships
-validate_boolean_parameter "ENABLE_LINE_INTERPOLATION" "$ENABLE_LINE_INTERPOLATION"
+# HIGH_FAN_SPEED alone decides whether the ramp is on, the same way IDRAC_USERNAME has no default
+# above : a container that never mentions it behaves exactly as one that predates this feature.
+# CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION is free to carry a default safely, because it is only
+# ever read inside the "if" below -- shipping one changes nothing for a container that leaves
+# HIGH_FAN_SPEED unset
+if [ -z "$HIGH_FAN_SPEED" ]; then
+  readonly LINE_INTERPOLATION_ENABLED=false
+else
+  readonly LINE_INTERPOLATION_ENABLED=true
+fi
 
-if $ENABLE_LINE_INTERPOLATION; then
+# Validated here rather than beside FAN_SPEED above : both HIGH_FAN_SPEED and
+# CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION are only meaningful measured against CPU_TEMPERATURE_THRESHOLD,
+# which "auto" leaves unresolved until the line above this one resolves it. Validating them earlier --
+# as an unmerged rework of this feature once did -- checks a coherence condition against the literal
+# string "auto" on every server that leaves CPU_TEMPERATURE_THRESHOLD at its default, refusing to
+# start on the very configuration the image ships
+if $LINE_INTERPOLATION_ENABLED; then
   validate_fan_speed_parameter "HIGH_FAN_SPEED" "$HIGH_FAN_SPEED"
   # Only the decimal notation is kept : compute_interpolated_fan_speed() only ever computes a point
   # BETWEEN FAN_SPEED and HIGH_FAN_SPEED, converting the result to hexadecimal fresh on every cycle, so
@@ -255,16 +264,16 @@ if $ENABLE_LINE_INTERPOLATION; then
   convert_fan_speed_parameter "$HIGH_FAN_SPEED"
   readonly DECIMAL_HIGH_FAN_SPEED="$DECIMAL_SPEED"
 
-  validate_CPU_temperature_for_start_line_interpolation_parameter "CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION"
+  validate_CPU_temperature_to_start_line_interpolation_parameter "CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION" "$CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION"
   # Leading zeros dropped so a value such as "030" is not later read as octal 24, the same reason
   # CPU_TEMPERATURE_THRESHOLD's own resolution above does it
-  readonly CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION=$((10#$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))
+  readonly CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=$((10#$CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION))
 
   # Coherence between the two parameters and the two thresholds they ramp between, refused rather than
   # silently swapped or clamped : a container that started on the opposite of what was configured is
   # harder to notice than one that never started at all
-  if [ "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
-    print_configuration_error_and_exit "CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" "${CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION}°C" "lower than CPU_TEMPERATURE_THRESHOLD (currently ${CPU_TEMPERATURE_THRESHOLD}°C), the point the ramp climbs towards"
+  if [ "$CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    print_configuration_error_and_exit "CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION" "${CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION}°C" "lower than CPU_TEMPERATURE_THRESHOLD (currently ${CPU_TEMPERATURE_THRESHOLD}°C), the point the ramp climbs towards"
   fi
   if [ "$DECIMAL_HIGH_FAN_SPEED" -le "$DECIMAL_FAN_SPEED" ]; then
     print_configuration_error_and_exit "HIGH_FAN_SPEED" "${DECIMAL_HIGH_FAN_SPEED}%" "higher than FAN_SPEED (currently ${DECIMAL_FAN_SPEED}%), the point the ramp climbs from"
@@ -281,8 +290,8 @@ echo "iDRAC firmware version: $IDRAC_FIRMWARE_VERSION"
 
 # Log the fan speed objective, CPU temperature threshold and check interval
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-if $ENABLE_LINE_INTERPOLATION; then
-  echo "Fan speed interpolation: Enabled (ramps from $DECIMAL_FAN_SPEED% at ${CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION}°C up to $DECIMAL_HIGH_FAN_SPEED% at ${CPU_TEMPERATURE_THRESHOLD}°C, based on the hottest detected CPU)"
+if $LINE_INTERPOLATION_ENABLED; then
+  echo "Fan speed interpolation: Enabled (ramps from $DECIMAL_FAN_SPEED% at ${CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION}°C up to $DECIMAL_HIGH_FAN_SPEED% at ${CPU_TEMPERATURE_THRESHOLD}°C, based on the hottest detected CPU)"
 else
   echo "Fan speed interpolation: Disabled"
 fi
@@ -653,12 +662,12 @@ while true; do
     fi
   else
     # Every detected CPU is already known, by is_any_CPU_overheating() above, to be at or under
-    # CPU_TEMPERATURE_THRESHOLD. Below it, ENABLE_LINE_INTERPOLATION only changes WHICH speed
+    # CPU_TEMPERATURE_THRESHOLD. Below it, LINE_INTERPOLATION_ENABLED only changes WHICH speed
     # apply_user_fan_control_profile() is asked for -- FAN_SPEED itself, or a point of the ramp towards
     # HIGH_FAN_SPEED -- never whether the fallback further up applies, so the two share everything else :
     # the refusal memory, the per-fan identifier walk and the hand-back to Dell all still apply
     APPLIED_PROFILE_CLAUSE="user's fan control profile applied"
-    if $ENABLE_LINE_INTERPOLATION; then
+    if $LINE_INTERPOLATION_ENABLED; then
       HOTTEST_CPU_TEMPERATURE=$(hottest_detected_CPU_temperature)
       DECIMAL_FAN_SPEED_TO_APPLY=$(compute_interpolated_fan_speed "$HOTTEST_CPU_TEMPERATURE")
       HEXADECIMAL_FAN_SPEED_TO_APPLY=$(convert_decimal_value_to_hexadecimal "$DECIMAL_FAN_SPEED_TO_APPLY")
