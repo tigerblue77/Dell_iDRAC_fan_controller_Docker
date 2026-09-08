@@ -633,6 +633,10 @@ function test_no_fan_control_profile_can_outgrow_the_column_reserved_for_it() {
     local -a PROFILES=("Dell default dynamic fan control profile")
     for SPEED in 1 5 10 50 100; do
       PROFILES+=("User static fan control profile ($SPEED%)")
+      # The ramp's own profile : shorter than the static one so as to leave room for the
+      # " (monitoring only, not applied)" badge, which "User interpolated fan control profile" -- the
+      # straightforward name -- did not (issue #44)
+      PROFILES+=("User interpolated fan profile ($SPEED%)")
     done
 
     # The fans taken and the speed refused leaves them on neither profile, and #389 gave that state two

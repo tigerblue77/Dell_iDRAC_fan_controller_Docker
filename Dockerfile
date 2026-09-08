@@ -84,6 +84,11 @@ ENV IDRAC_HOST=local
 # ENV IDRAC_PASSWORD=calvin
 ENV FAN_SPEED=5
 ENV CPU_TEMPERATURE_THRESHOLD=auto
+# Ramps the fan speed between FAN_SPEED and HIGH_FAN_SPEED as the hottest CPU approaches
+# CPU_TEMPERATURE_THRESHOLD, instead of jumping straight to Dell's default profile (issue #44).
+# HIGH_FAN_SPEED has no default, like IDRAC_USERNAME above : setting it is what turns the ramp on
+# ENV HIGH_FAN_SPEED=50
+ENV CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=30
 ENV CPU_TEMPERATURE_SOURCE=auto
 ENV CHECK_INTERVAL=5
 # Give up on an iDRAC that has been unreachable for this long, so a restart policy can retry with a

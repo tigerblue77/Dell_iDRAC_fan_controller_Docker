@@ -20,6 +20,11 @@ function setup_test_context() {
   export IDRAC_PASSWORD="calvin"
   export FAN_SPEED=5
   export CPU_TEMPERATURE_THRESHOLD=auto
+  # No default, like IDRAC_USERNAME/IDRAC_PASSWORD above : the image ships none, and setting it is
+  # what turns line interpolation on. Explicitly emptied here (rather than left to whatever a
+  # previous test case exported) so every test starts from the same "off" state
+  export HIGH_FAN_SPEED=""
+  export CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=30
   export CPU_TEMPERATURE_SOURCE=auto
   export CHECK_INTERVAL=5
   export MAXIMUM_IPMI_UNREACHABLE_DURATION="60s"
