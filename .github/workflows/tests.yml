@@ -17,8 +17,92 @@ permissions:
   contents: read
 
 jobs:
+  detect-reuse:
+    name: Look for an already-tested identical tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+    outputs:
+      reuse-run-id: ${{ steps.detect.outputs.reuse-run-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # A push to master that merged a pull request lands a tree this workflow
+      # already ran to green on that same pull request : branch protection
+      # requires it, and "Auto-update pull request branches" keeps every open
+      # pull request rebased onto master, so by the time it is merged its base
+      # is already master's current tip. Rebuilding the Docker image and
+      # rerunning the whole suite a second time on that same tree proves
+      # nothing new -- issue #500 measured it as a wasted rerun of "Tests" on
+      # every single merge.
+      #
+      # This looks for that situation and, only when every check below holds,
+      # hands "publish-test-results" the run ID to copy results from instead of
+      # asking "test" and "test-in-docker-image" to redo the work :
+      #   - this commit is the merge product of a specific pull request
+      #   - the ref GitHub keeps for that pull request's head (which survives
+      #     the head branch being deleted) still resolves to the exact head
+      #     sha the API reports, and its tree is identical to this commit's
+      #     (a content comparison, not a commit comparison, so it survives
+      #     whichever merge strategy -- squash, merge or rebase -- produced
+      #     this commit)
+      #   - the "Test results" check already passed on that head
+      #   - a completed, successful "Tests" run for that head still has its
+      #     artifacts
+      #
+      # Every failure mode here -- no pull request found yet (GitHub can take
+      # a moment to record merge_commit_sha after a squash or rebase merge), a
+      # squash edited by hand, an expired artifact, a GitHub API error -- falls
+      # through to an empty output. "test" and "test-in-docker-image" read that
+      # as "run for real", and so does an outright failure of this job itself :
+      # nothing here can make them skip without a positive match
+      - name: Decide whether to reuse a pull request's results
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reuse_run_id=""
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            pr_number=$(gh api "repos/{owner}/{repo}/commits/${GITHUB_SHA}/pulls" \
+              --jq ".[] | select(.merge_commit_sha == \"${GITHUB_SHA}\") | .number" 2>/dev/null \
+              | head -n1) || pr_number=""
+
+            if [[ -n "$pr_number" ]]; then
+              pr_head_sha=$(gh api "repos/{owner}/{repo}/pulls/${pr_number}" --jq '.head.sha' 2>/dev/null) || pr_head_sha=""
+            fi
+
+            if [[ -n "${pr_head_sha:-}" ]] && git fetch --depth 1 origin "refs/pull/${pr_number}/head" 2>/dev/null; then
+              fetched_sha=$(git rev-parse FETCH_HEAD 2>/dev/null) || fetched_sha=""
+            fi
+
+            if [[ -n "${fetched_sha:-}" && "$fetched_sha" == "$pr_head_sha" ]]; then
+              head_tree=$(git rev-parse FETCH_HEAD^{tree} 2>/dev/null) || head_tree=""
+              merge_tree=$(git rev-parse HEAD^{tree} 2>/dev/null) || merge_tree=""
+            fi
+
+            if [[ -n "${head_tree:-}" && "$head_tree" == "${merge_tree:-}" ]]; then
+              check_conclusion=$(gh api --paginate "repos/{owner}/{repo}/commits/${pr_head_sha}/check-runs" \
+                --jq '.check_runs[] | select(.name == "Test results") | .conclusion' 2>/dev/null) || check_conclusion=""
+            fi
+
+            if [[ "${check_conclusion:-}" == "success" ]]; then
+              reuse_run_id=$(gh api "repos/{owner}/{repo}/actions/workflows/tests.yml/runs?head_sha=${pr_head_sha}&event=pull_request&status=completed" \
+                --jq '.workflow_runs[] | select(.conclusion == "success") | .id' 2>/dev/null | head -n1) || reuse_run_id=""
+            fi
+          fi
+
+          echo "reuse-run-id=${reuse_run_id}" >> "$GITHUB_OUTPUT"
+
   test:
     name: Run the test suite
+    needs: detect-reuse
+    if: always() && needs.detect-reuse.outputs.reuse-run-id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -42,6 +126,8 @@ jobs:
 
   test-in-docker-image:
     name: Run the test suite inside the Docker image
+    needs: detect-reuse
+    if: always() && needs.detect-reuse.outputs.reuse-run-id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -82,7 +168,7 @@ jobs:
 
   publish-test-results:
     name: Publish the test results
-    needs: [test, test-in-docker-image]
+    needs: [detect-reuse, test, test-in-docker-image]
     runs-on: ubuntu-latest
     # A pull request opened from a fork runs with a read-only token, so it cannot
     # publish anything from here : the "Test results" workflow does it instead,
@@ -97,10 +183,14 @@ jobs:
       pull-requests: write
       actions: read
     steps:
+      # Own run by default ; the run of the pull request whose results are
+      # being reused instead, when "detect-reuse" found one
       - name: Download the test results
         uses: actions/download-artifact@v8
         with:
           pattern: Test Results (*)
+          run-id: ${{ needs.detect-reuse.outputs.reuse-run-id || github.run_id }}
+          github-token: ${{ github.token }}
           path: test-results
 
       - name: Publish the test results
