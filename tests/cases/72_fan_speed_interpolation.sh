@@ -99,14 +99,16 @@ function test_the_interpolation_chart_does_not_duplicate_rows_on_a_narrow_range(
   assert_equals "2" "$ROW_COUNT"
 }
 
-function test_the_interpolation_chart_prints_plain_text() {
-  # Every line this codebase prints has to survive docker logs and whatever log aggregator sits
-  # behind it exactly as printed : an ANSI colour escape code would not
-  given_the_interpolation_parameters 10 50 30 70
+function test_the_interpolation_chart_colors_rows_by_how_close_they_are_to_the_threshold() {
+  # Same 80/90% split of the range 7Adrian's fork uses : green below 80%, yellow up to 90%, red on
+  # the last tenth before the threshold
+  given_the_interpolation_parameters 10 50 0 100
 
   local -r OUTPUT=$(print_line_interpolation_chart)
 
-  assert_not_contains "$OUTPUT" $'\e' "no ANSI escape code"
+  assert_contains "$OUTPUT" $'\e[32m' "green somewhere below 80% of the range"
+  assert_contains "$OUTPUT" $'\e[33m' "yellow somewhere between 80 and 90% of the range"
+  assert_contains "$OUTPUT" $'\e[31m' "red on the last tenth, up to the threshold"
 }
 
 # --- hottest_detected_CPU_temperature() -----------------------------------------------------------
