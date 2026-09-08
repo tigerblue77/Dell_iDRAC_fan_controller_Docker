@@ -279,6 +279,8 @@ Every parameter has a default value except `IDRAC_USERNAME` and `IDRAC_PASSWORD`
     | 50°C | 30% |
     | 69°C | 49% |
     | 70°C | 50%, or Dell's default profile the very next cycle a reading is still at or above the threshold |
+
+    The container prints the same shape as a small ASCII chart at startup, once for the values actually configured, so the ramp can be read at a glance without doing the arithmetic by hand.
 - `CPU_TEMPERATURE_SOURCE` parameter selects where the CPU temperatures the container supervises are read from. **Default** value is "auto".
   - `auto` reads them from your iDRAC, and falls back to [`lm-sensors`](https://github.com/lm-sensors/lm-sensors) only if your iDRAC turns out to report no CPU temperature **at all**. Some older iDRACs accept Dell's raw fan control commands but answer nothing usable to a temperature query ([issue #216](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/216)) : on those, the container used to be able to do nothing but hand the fans back to Dell's own profile forever. The fallback is tried on the check that found no sensor, just before the container would otherwise refuse to run over it, and it is logged when it engages. One check is enough to conclude: an iDRAC that exposes no processor entity does so on every check rather than on that one, which is the same reason the container refuses instead of retrying. Once engaged it stays for the life of the container, that being a property of the firmware rather than a passing condition, and changing the meaning of the table's numbers mid-run would be worse than keeping a source that works.
   - `ipmi` never reads `lm-sensors`, whatever your iDRAC reports. Set it if you want the source to be the iDRAC and nothing else.

@@ -77,6 +77,38 @@ function test_the_interpolated_speed_does_not_read_a_leading_zero_as_octal() {
   assert_equals "10" "$(compute_interpolated_fan_speed "030")" "030°C is the start point, not octal 24"
 }
 
+# --- print_line_interpolation_chart() ---------------------------------------------------------------
+
+function test_the_interpolation_chart_shows_both_ends_of_the_ramp() {
+  given_the_interpolation_parameters 10 50 30 70
+
+  local -r OUTPUT=$(print_line_interpolation_chart)
+
+  assert_contains "$OUTPUT" "30°C |  10%" "the start point, at the base speed"
+  assert_contains "$OUTPUT" "70°C |  50%" "the threshold, at the top of the ramp"
+}
+
+function test_the_interpolation_chart_does_not_duplicate_rows_on_a_narrow_range() {
+  # A 1°C range would print the same rounded-down step ten times over if the sample count were not
+  # capped to the range itself : exactly two rows are meaningful here, the two ends
+  given_the_interpolation_parameters 10 50 59 60
+
+  local -r OUTPUT=$(print_line_interpolation_chart)
+  local -r ROW_COUNT=$(grep -c "°C |" <<<"$OUTPUT")
+
+  assert_equals "2" "$ROW_COUNT"
+}
+
+function test_the_interpolation_chart_prints_plain_text() {
+  # Every line this codebase prints has to survive docker logs and whatever log aggregator sits
+  # behind it exactly as printed : an ANSI colour escape code would not
+  given_the_interpolation_parameters 10 50 30 70
+
+  local -r OUTPUT=$(print_line_interpolation_chart)
+
+  assert_not_contains "$OUTPUT" $'\e' "no ANSI escape code"
+}
+
 # --- hottest_detected_CPU_temperature() -----------------------------------------------------------
 
 function test_the_hottest_detected_cpu_drives_the_ramp_on_a_multi_socket_server() {
@@ -154,6 +186,7 @@ function test_line_interpolation_is_disabled_by_default() {
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "Fan speed interpolation: Disabled"
+  assert_not_contains "$OUTPUT" "Fan speed interpolation chart" "the chart is only meaningful once the ramp is on"
 }
 
 function test_the_start_temperature_is_not_validated_when_high_fan_speed_is_unset() {
@@ -190,6 +223,7 @@ function test_high_fan_speed_alone_is_enough_to_enable_the_ramp() {
 
   assert_not_contains "$OUTPUT" "Invalid configuration, the container will not start"
   assert_contains "$OUTPUT" "Fan speed interpolation: Enabled"
+  assert_contains "$OUTPUT" "Fan speed interpolation chart"
 }
 
 function test_a_start_temperature_at_or_above_the_threshold_refuses_to_start() {

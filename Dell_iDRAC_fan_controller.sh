@@ -292,6 +292,7 @@ echo "iDRAC firmware version: $IDRAC_FIRMWARE_VERSION"
 echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
 if $LINE_INTERPOLATION_ENABLED; then
   echo "Fan speed interpolation: Enabled (ramps from $DECIMAL_FAN_SPEED% at ${CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION}°C up to $DECIMAL_HIGH_FAN_SPEED% at ${CPU_TEMPERATURE_THRESHOLD}°C, based on the hottest detected CPU)"
+  print_line_interpolation_chart
 else
   echo "Fan speed interpolation: Disabled"
 fi

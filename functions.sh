@@ -3161,6 +3161,61 @@ function compute_interpolated_fan_speed() {
   echo $((DECIMAL_FAN_SPEED + FAN_SPEED_RANGE * TEMPERATURE_OFFSET / TEMPERATURE_RANGE))
 }
 
+# Prints, once at startup when the ramp is on, the fan speed compute_interpolated_fan_speed() would
+# apply at up to ten temperatures evenly spaced between CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION
+# and CPU_TEMPERATURE_THRESHOLD -- the shape of the ramp, without doing the arithmetic by hand. Reads
+# the same readonly globals compute_interpolated_fan_speed() does rather than taking parameters : by
+# the time this is called they already are the resolved values, and this has no other caller
+#
+# Ten samples would repeat the same temperature when the two thresholds are only a few degrees apart,
+# since the step between samples is itself rounded down to whole degrees -- capped instead at one
+# sample per degree of range, so a one-degree range prints two distinct rows (the two ends) rather
+# than ten copies of the first
+#
+# Plain text, no ANSI colour : every line this codebase prints is meant to survive `docker logs` and
+# whatever log aggregator sits behind it exactly as printed, which a colour escape code does not --
+# nothing else here writes one
+#
+# Usage : print_line_interpolation_chart
+function print_line_interpolation_chart() {
+  local -r CHART_WIDTH=50
+  local -r TEMPERATURE_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION))
+  local -r SAMPLE_COUNT=$((TEMPERATURE_RANGE + 1 < 10 ? TEMPERATURE_RANGE + 1 : 10))
+  local -r TEMPERATURE_STEP=$((TEMPERATURE_RANGE / (SAMPLE_COUNT - 1)))
+
+  echo "Fan speed interpolation chart:"
+  printf "%5s | %4s | %s\n" "Temp" "Fan" "Speed"
+  local SEPARATOR
+  printf -v SEPARATOR '%*s' $((14 + CHART_WIDTH)) ''
+  echo "${SEPARATOR// /=}"
+
+  local INDEX SAMPLE_CPU_TEMPERATURE SAMPLE_FAN_SPEED BAR_LENGTH EMPTY_LENGTH BAR EMPTY
+  for ((INDEX = 0; INDEX < SAMPLE_COUNT; INDEX++)); do
+    # The last sample is CPU_TEMPERATURE_THRESHOLD itself rather than start + INDEX * step : integer
+    # rounding of the step would otherwise land short of it
+    if ((INDEX == SAMPLE_COUNT - 1)); then
+      SAMPLE_CPU_TEMPERATURE=$CPU_TEMPERATURE_THRESHOLD
+    else
+      SAMPLE_CPU_TEMPERATURE=$((CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION + INDEX * TEMPERATURE_STEP))
+    fi
+    SAMPLE_FAN_SPEED=$(compute_interpolated_fan_speed "$SAMPLE_CPU_TEMPERATURE")
+    BAR_LENGTH=$((SAMPLE_FAN_SPEED * CHART_WIDTH / 100))
+    EMPTY_LENGTH=$((CHART_WIDTH - BAR_LENGTH))
+
+    # printf -v writes straight into the variable rather than through a forked subshell, the same
+    # reason SEPARATOR above is built the same way
+    BAR=""
+    if ((BAR_LENGTH > 0)); then
+      printf -v BAR '%*s' "$BAR_LENGTH" ''
+      BAR=${BAR// /#}
+    fi
+    printf -v EMPTY '%*s' "$EMPTY_LENGTH" ''
+
+    printf "%4d°C | %3d%% | %s%s|\n" "$SAMPLE_CPU_TEMPERATURE" "$SAMPLE_FAN_SPEED" "$BAR" "$EMPTY"
+  done
+  echo
+}
+
 # Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
 # Usage : join_with_and $ITEM...
 function join_with_and() {
