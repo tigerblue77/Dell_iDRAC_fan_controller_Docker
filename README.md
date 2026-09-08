@@ -108,7 +108,7 @@ docker run -d \
   -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
   -e HIGH_FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64, higher than FAN_SPEED ; setting it turns line interpolation on> \
-  -e CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD> \
+  -e CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
@@ -132,7 +132,7 @@ docker run -d \
   -e FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64> \
   -e CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto> \
   -e HIGH_FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64, higher than FAN_SPEED ; setting it turns line interpolation on> \
-  -e CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD> \
+  -e CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD> \
   -e CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors> \
   -e CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes> \
   -e MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty> \
@@ -160,7 +160,7 @@ services:
       - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
       - HIGH_FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64, higher than FAN_SPEED ; setting it turns line interpolation on>
-      - CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD>
+      - CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
@@ -189,7 +189,7 @@ services:
       - FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
       - CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
       - HIGH_FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64, higher than FAN_SPEED ; setting it turns line interpolation on>
-      - CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD>
+      - CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD>
       - CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
       - CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
       - MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>
@@ -267,9 +267,9 @@ Every parameter has a default value except `IDRAC_USERNAME` and `IDRAC_PASSWORD`
 - `HIGH_FAN_SPEED` parameter is the fan speed the ramp reaches once the hottest detected CPU reaches `CPU_TEMPERATURE_THRESHOLD`, in the same notation as `FAN_SPEED` (a decimal percentage from 0 to 100, or the same value in hexadecimal from 0x00 to 0x64), instead of jumping straight from `FAN_SPEED` to the Dell default fan control profile the moment `CPU_TEMPERATURE_THRESHOLD` is crossed ([issue #44](https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/issues/44)). It has **no default value** : the image ships none, and setting it is what turns line interpolation on — a container that never mentions it behaves exactly as one that predates this feature. It must be higher than `FAN_SPEED`, and the container refuses to start otherwise. `CPU_TEMPERATURE_THRESHOLD` still applies unchanged as the final safety fallback : this parameter only changes what happens below it.
   - The ramp is driven by the hottest of every CPU this container detects, whichever socket it is on and however many the server has.
   - It is a memoryless function of the current temperature, not a state : it changes the speed **below** the threshold, but not what happens **at** it. A CPU whose load holds it exactly on the threshold still crosses it every `CHECK_INTERVAL`, ramp or not. What decides whether that crossing is audible is the size of the step it makes at the top of the ramp — set `HIGH_FAN_SPEED` as close as your server tolerates to the speed Dell's own profile actually reaches (read it from the "Active fan speed profile" column once it engages) : the ramp only ever removes the step *below* this speed, and a low `HIGH_FAN_SPEED` against a Dell profile that ramps far higher is still an audible jump at the threshold, just a smaller one.
-- `CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION` parameter is the CPU temperature (in degrees Celsius, same 20 to 125 window as `CPU_TEMPERATURE_THRESHOLD`) at which the ramp starts climbing away from `FAN_SPEED`. Below it, `FAN_SPEED` is used unchanged. It must be lower than `CPU_TEMPERATURE_THRESHOLD`, and the container refuses to start otherwise. **Default** value is 30(°C).
+- `CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION` parameter is the CPU temperature (in degrees Celsius, same 20 to 125 window as `CPU_TEMPERATURE_THRESHOLD`) at which the ramp starts climbing away from `FAN_SPEED`. Below it, `FAN_SPEED` is used unchanged. It must be lower than `CPU_TEMPERATURE_THRESHOLD`, and the container refuses to start otherwise. **Default** value is 30(°C).
   - Only read, and only validated, once the ramp is on : shipping this one a default is safe, unlike the parameter above with none, precisely because it stays unread until that one turns the ramp on.
-  - Example, with `FAN_SPEED=10`, `HIGH_FAN_SPEED=50`, `CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=30` and `CPU_TEMPERATURE_THRESHOLD=70` :
+  - Example, with `FAN_SPEED=10`, `HIGH_FAN_SPEED=50`, `CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=30` and `CPU_TEMPERATURE_THRESHOLD=70` :
 
     | Hottest detected CPU | Fan speed |
     | --- | --- |
@@ -556,7 +556,7 @@ export IDRAC_PASSWORD=<iDRAC password>
 export FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64>
 export CPU_TEMPERATURE_THRESHOLD=<decimal temperature threshold in °C, from 20 to 125, or auto>
 export HIGH_FAN_SPEED=<fan speed in %, from 0 to 100, or hexadecimal from 0x00 to 0x64, higher than FAN_SPEED ; setting it turns line interpolation on>
-export CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD>
+export CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=<decimal temperature in °C, from 20 to 125, lower than CPU_TEMPERATURE_THRESHOLD>
 export CPU_TEMPERATURE_SOURCE=<auto, ipmi or lm-sensors>
 export CHECK_INTERVAL=<seconds between each check, or a suffixed duration like 5m, up to 15 minutes>
 export MAXIMUM_IPMI_UNREACHABLE_DURATION=<how long the iDRAC may stay unreachable before exiting, in seconds or suffixed like 5m, or empty>

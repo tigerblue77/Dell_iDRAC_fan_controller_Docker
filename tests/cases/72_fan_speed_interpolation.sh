@@ -4,11 +4,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 # HIGH_FAN_SPEED (issue #44) : an opt-in ramp between FAN_SPEED and HIGH_FAN_SPEED as the hottest
-# detected CPU rises from CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION towards CPU_TEMPERATURE_THRESHOLD,
+# detected CPU rises from CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION towards CPU_TEMPERATURE_THRESHOLD,
 # instead of jumping straight from FAN_SPEED to Dell's default profile. HIGH_FAN_SPEED has no default
 # of its own -- like IDRAC_USERNAME/IDRAC_PASSWORD -- and setting it is what turns the ramp on : there
 # is no separate boolean, so a container that never mentions it behaves exactly as one that predates
-# this feature. CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION does carry a default (30°C), safely, since
+# this feature. CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION does carry a default (30°C), safely, since
 # it is only ever read once HIGH_FAN_SPEED has already turned the ramp on.
 #
 # Five community pull requests attempted this feature before this one, and every one of them was found,
@@ -27,13 +27,13 @@
 function given_the_interpolation_parameters() {
   DECIMAL_FAN_SPEED="$1"
   DECIMAL_HIGH_FAN_SPEED="$2"
-  CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION="$3"
+  CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION="$3"
   CPU_TEMPERATURE_THRESHOLD="$4"
 }
 
 function test_the_interpolated_speed_matches_the_worked_example_the_readme_documents() {
   # FAN_SPEED=10, HIGH_FAN_SPEED=50, start=30°C, threshold=70°C : the exact table README.md's
-  # CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION bullet documents
+  # CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION bullet documents
   given_the_interpolation_parameters 10 50 30 70
 
   assert_equals "10" "$(compute_interpolated_fan_speed 15)" "below the start point : base speed"
@@ -158,9 +158,9 @@ function test_line_interpolation_is_disabled_by_default() {
 
 function test_the_start_temperature_is_not_validated_when_high_fan_speed_is_unset() {
   # A value that would be refused with the ramp on must not stop a container that never reads it :
-  # HIGH_FAN_SPEED alone decides whether CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION is even looked at
+  # HIGH_FAN_SPEED alone decides whether CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION is even looked at
   simulate_server "PowerEdge R730xd" --cpus 1 --cpu-temperatures "42"
-  export CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION="not a temperature"
+  export CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION="not a temperature"
 
   local -r OUTPUT=$(run_controller)
 
@@ -181,7 +181,7 @@ function test_a_high_fan_speed_that_is_not_a_valid_speed_refuses_to_start() {
 }
 
 function test_high_fan_speed_alone_is_enough_to_enable_the_ramp() {
-  # CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION is left at the harness's (Dockerfile's) shipped
+  # CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION is left at the harness's (Dockerfile's) shipped
   # default of 30 here, on purpose : setting HIGH_FAN_SPEED alone must be enough
   simulate_server "PowerEdge R730xd" --cpus 1 --cpu-temperatures "42"
   export HIGH_FAN_SPEED=50
@@ -196,12 +196,12 @@ function test_a_start_temperature_at_or_above_the_threshold_refuses_to_start() {
   simulate_server "PowerEdge R730xd" --cpus 1 --cpu-temperatures "42"
   export HIGH_FAN_SPEED=50
   export CPU_TEMPERATURE_THRESHOLD=50
-  export CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=50
+  export CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=50
 
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "Invalid configuration, the container will not start"
-  assert_contains "$OUTPUT" "CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION"
+  assert_contains "$OUTPUT" "CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION"
 }
 
 function test_a_high_fan_speed_at_or_below_fan_speed_refuses_to_start() {
@@ -218,17 +218,17 @@ function test_a_high_fan_speed_at_or_below_fan_speed_refuses_to_start() {
 function test_a_start_temperature_outside_the_plausible_window_refuses_to_start() {
   simulate_server "PowerEdge R730xd" --cpus 1 --cpu-temperatures "42"
   export HIGH_FAN_SPEED=50
-  export CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=200
+  export CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=200
 
   local -r OUTPUT=$(run_controller)
 
   assert_contains "$OUTPUT" "Invalid configuration, the container will not start"
-  assert_contains "$OUTPUT" "CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION"
+  assert_contains "$OUTPUT" "CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION"
 }
 
 function test_enabling_the_ramp_against_the_auto_threshold_still_starts() {
   # The one regression every rework of this feature is at risk of : validating
-  # CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION against CPU_TEMPERATURE_THRESHOLD before "auto" has
+  # CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION against CPU_TEMPERATURE_THRESHOLD before "auto" has
   # been resolved to a number refuses to start on the image's own stock default
   simulate_server "PowerEdge R730xd" --cpus 1 --cpu-temperatures "42"
   export HIGH_FAN_SPEED=50
@@ -246,7 +246,7 @@ function test_the_controller_ramps_the_fan_speed_between_the_two_configured_thre
   simulate_server "PowerEdge R730xd" --cpus 2 --cpu-temperatures "50 35"
   export FAN_SPEED=10
   export HIGH_FAN_SPEED=50
-  export CPU_TEMPERATURE_TO_START_LINE_INTERPOLATION=30
+  export CPU_TEMPERATURE_THRESHOLD_TO_START_LINE_INTERPOLATION=30
   export CPU_TEMPERATURE_THRESHOLD=70
 
   local -r OUTPUT=$(run_controller)
