@@ -51,6 +51,7 @@ without the value it takes.
 | `cases/55_enclosure_housed_servers.sh` | Blades and modular servers, whose fans belong to their enclosure |
 | `cases/60_cpu_topologies.sh` | 1, 2 and 4 socket servers, missing sensors, table layout |
 | `cases/70_fan_control_profiles.sh` | The raw commands sent to the server, what their rejections mean, and the one refusal that must never stop the controller from trying again |
+| `cases/72_fan_speed_interpolation.sh` | `ENABLE_LINE_INTERPOLATION`'s ramp between `FAN_SPEED` and `HIGH_FAN_SPEED` : the arithmetic, the hottest-CPU selection on a multi-socket server, startup validation, and that it is disabled by default and still falls back to Dell above `CPU_TEMPERATURE_THRESHOLD` |
 | `cases/80_temperature_thresholds.sh` | The overheating decision, including its fail-safe behavior |
 | `cases/85_power_state.sh` | Skipping the cycle when the target server is powered off, and half the file over what happens when it cannot be reached at all : `MAXIMUM_IPMI_UNREACHABLE_DURATION` and `MAXIMUM_CONSECUTIVE_IPMI_FAILURES`, how each resolves into cycles, which of the two wins, and the container giving up |
 | `cases/90_integration.sh` | The whole controller, started like its Docker image does |

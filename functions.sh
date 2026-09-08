@@ -40,11 +40,24 @@ function apply_Dell_default_fan_control_profile() {
   CURRENT_FAN_CONTROL_PROFILE="Dell default dynamic fan control profile"
 }
 
-# This function applies a user-specified static fan control profile
+# This function applies a user-specified fan control profile : FAN_SPEED by default, or any other speed
+# a caller passes in (compute_interpolated_fan_speed's result, when ENABLE_LINE_INTERPOLATION is on).
+# One function rather than a copy per speed source, so that every fan-control behaviour below -- the
+# refusal memory, the per-fan identifier walk, the hand-back to Dell -- is never at risk of drifting
+# between a "static" path and an "interpolated" one that duplicated it.
 # In monitoring only mode, the profile is only logged, not actually applied
+# Usage : apply_user_fan_control_profile [$TARGET_DECIMAL_FAN_SPEED $TARGET_HEXADECIMAL_FAN_SPEED [$PROFILE_LABEL]]
 function apply_user_fan_control_profile() {
+  local -r TARGET_DECIMAL_FAN_SPEED="${1:-$DECIMAL_FAN_SPEED}"
+  local -r TARGET_HEXADECIMAL_FAN_SPEED="${2:-$HEXADECIMAL_FAN_SPEED}"
+  # Distinct names rather than local shadows of DECIMAL_FAN_SPEED / HEXADECIMAL_FAN_SPEED : both globals
+  # are readonly, and "local DECIMAL_FAN_SPEED=..." fails loudly on that ("local: DECIMAL_FAN_SPEED:
+  # readonly variable") while "local -r DECIMAL_FAN_SPEED=$1" is accepted and silently keeps the global's
+  # value instead -- the one bug this whole function exists to be safe against
+  local -r PROFILE_LABEL="${3:-User static fan control profile}"
+
   if "$MONITORING_ONLY_MODE"; then
-    CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (monitoring only, not applied)"
+    CURRENT_FAN_CONTROL_PROFILE="$PROFILE_LABEL ($TARGET_DECIMAL_FAN_SPEED%) (monitoring only, not applied)"
     return
   fi
   # Same as above : a server that refused to hand its fans over is not asked again, and the profile it
@@ -91,11 +104,11 @@ function apply_user_fan_control_profile() {
   # that question once, and re-asking would put one doomed command on the wire every cycle for the life
   # of the container, which is what issues #267 and #347 exist about
   if [ ${#DISCOVERED_FAN_IDENTIFIERS[@]} -gt 0 ]; then
-    if ! set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"; then
+    if ! set_the_fan_speed_on_each_fan_individually "$TARGET_HEXADECIMAL_FAN_SPEED" "$TARGET_DECIMAL_FAN_SPEED"; then
       IS_PROFILE_APPLIED=false
     fi
   else
-    ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
+    ipmitool_stderr=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 0xff $TARGET_HEXADECIMAL_FAN_SPEED 2>&1 >/dev/null)
     # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
     if [ $? -ne 0 ]; then
       # A server that answered "invalid data field" ran the command and refused an argument rather than
@@ -103,7 +116,7 @@ function apply_user_fan_control_profile() {
       # the fans are there and take the very same command addressed one at a time (issue #378). So the
       # speed is sent that way instead, and only a server that refuses it both ways has really refused it
       if ! does_the_server_reject_this_data_field "$ipmitool_stderr" ||
-        ! set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"; then
+        ! set_the_fan_speed_on_each_fan_individually "$TARGET_HEXADECIMAL_FAN_SPEED" "$TARGET_DECIMAL_FAN_SPEED"; then
         IS_PROFILE_APPLIED=false
         # A walk that was abandoned mid-way answered nothing about this server : it was interrupted,
         # not refused. Saying "both ways were refused" there would be a verdict drawn from a moment,
@@ -115,11 +128,11 @@ function apply_user_fan_control_profile() {
           # life of the container, and this line has nothing to add the second time. It is not replaced
           # by silence : the profile column names the state the fans are in on every row (issue #397)
           if ! "$WAS_THE_SPEED_ALREADY_REFUSED_EVERY_WAY"; then
-            print_error "Failed to set fan speed to $DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
+            print_error "Failed to set fan speed to $TARGET_DECIMAL_FAN_SPEED%. ipmitool said: $ipmitool_stderr"
           fi
           # Explained once, rather than as a raw ipmitool line on every cycle. It settles nothing and
           # stops nothing being sent
-          note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr"
+          note_that_the_server_rejects_the_broadcast_fan_selector "$ipmitool_stderr" "$TARGET_DECIMAL_FAN_SPEED"
           # The server answered with a completion code that is a decision rather than a moment : it
           # rejected the selector byte and then rejected every fan it was offered one at a time, or it
           # answered that it does not have the command at all, or that this account may not run it.
@@ -198,10 +211,10 @@ function apply_user_fan_control_profile() {
   fi
 
   if ! $IS_PROFILE_APPLIED; then
-    CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%) (not applied)"
+    CURRENT_FAN_CONTROL_PROFILE="$PROFILE_LABEL ($TARGET_DECIMAL_FAN_SPEED%) (not applied)"
     return 1
   fi
-  CURRENT_FAN_CONTROL_PROFILE="User static fan control profile ($DECIMAL_FAN_SPEED%)"
+  CURRENT_FAN_CONTROL_PROFILE="$PROFILE_LABEL ($TARGET_DECIMAL_FAN_SPEED%)"
 }
 
 # The fan identifiers this server was found to accept, discovered once and reused on every cycle after
@@ -239,7 +252,9 @@ WAS_THE_FAN_IDENTIFIER_WALK_ABANDONED=false
 HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=false
 
 # Set the fan speed one fan at a time, on a server that refuses to have them all addressed at once.
-# Usage : set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED"
+# Usage : set_the_fan_speed_on_each_fan_individually "$HEXADECIMAL_FAN_SPEED" ["$DECIMAL_FAN_SPEED"]
+# The second argument is only for the messages below, which name the speed in the notation a reader
+# expects ; it defaults to the static global so every existing call site keeps working unchanged
 # Returns : 0 if every fan this server has was set, 1 if none was or the set is incomplete
 #
 # Only ever called after "raw 0x30 0x30 0x02 0xff <speed>" came back 0xcc, which is a BMC that has the
@@ -261,6 +276,7 @@ HAS_THE_FAN_IDENTIFIER_WALK_FOUND_NOTHING=false
 # leaves every accepted fan already set to FAN_SPEED
 function set_the_fan_speed_on_each_fan_individually() {
   local -r HEXADECIMAL_SPEED="$1"
+  local -r TARGET_DECIMAL_FAN_SPEED="${2:-$DECIMAL_FAN_SPEED}"
 
   # Discovered once. A server does not grow fans while the container runs, and re-walking every cycle
   # would put one refused command per cycle in the log for the life of the container
@@ -272,7 +288,7 @@ function set_the_fan_speed_on_each_fan_individually() {
       IPMITOOL_STDERR=$(ipmitool -I $IDRAC_LOGIN_STRING raw 0x30 0x30 0x02 "$IDENTIFIER" "$HEXADECIMAL_SPEED" 2>&1 >/dev/null)
       # shellcheck disable=SC2181  # $? here is the command substitution above, already run; there is no direct command left to negate
       if [ $? -ne 0 ]; then
-        print_error "Failed to set fan $IDENTIFIER to $DECIMAL_FAN_SPEED%, on a server that accepted it before. ipmitool said: $IPMITOOL_STDERR"
+        print_error "Failed to set fan $IDENTIFIER to $TARGET_DECIMAL_FAN_SPEED%, on a server that accepted it before. ipmitool said: $IPMITOOL_STDERR"
         IS_EVERY_FAN_SET=false
       fi
     done
@@ -335,7 +351,7 @@ function set_the_fan_speed_on_each_fan_individually() {
   local TIMESTAMP
   set_log_timestamp TIMESTAMP
   printf "%19s  This server refuses to have every fan addressed at once, so its fans are set one at a time. It accepts %d of them (%s), and they are now running at %d%%.\n" \
-    "$TIMESTAMP" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "${DISCOVERED_FAN_IDENTIFIERS[*]}" "$DECIMAL_FAN_SPEED"
+    "$TIMESTAMP" "${#DISCOVERED_FAN_IDENTIFIERS[@]}" "${DISCOVERED_FAN_IDENTIFIERS[*]}" "$TARGET_DECIMAL_FAN_SPEED"
   return 0
 }
 
@@ -409,6 +425,33 @@ function validate_fan_speed_parameter() {
 
   if [ "$DECIMAL_VALUE" -gt "$MAXIMUM_FAN_SPEED_PERCENTAGE" ]; then
     print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$ACCEPTED_RANGE (this is ${DECIMAL_VALUE}%)"
+  fi
+}
+
+# Stop the container unless the given parameter is a usable CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION,
+# only ever called once ENABLE_LINE_INTERPOLATION is known to be "true"
+# Usage : validate_CPU_temperature_for_start_line_interpolation_parameter "$PARAMETER_NAME" "$VALUE"
+#
+# Held to the same plausibility window as CPU_TEMPERATURE_THRESHOLD, for the same reason : a value
+# outside it can never be the temperature at which a real CPU starts the ramp, and letting the container
+# start on one would silently run the whole cycle unpaced by anything but a typo. It carries no "auto"
+# of its own -- unlike CPU_TEMPERATURE_THRESHOLD, this parameter has no lm-sensors equivalent to fall
+# back on -- so a bare decimal integer is the only accepted form
+function validate_CPU_temperature_for_start_line_interpolation_parameter() {
+  local -r PARAMETER_NAME="$1"
+  local -r VALUE="$2"
+  local -r ACCEPTED_RANGE="a temperature in degrees Celsius between ${MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD} and ${MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD}"
+
+  if [[ ! "$VALUE" =~ ^[0-9]{1,3}$ ]]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "$VALUE" "$ACCEPTED_RANGE"
+  fi
+
+  # Leading zeros are dropped before the comparison, the same way CPU_TEMPERATURE_THRESHOLD's own
+  # resolution does, so a value such as "030" is not read as octal 24
+  local -r DECIMAL_VALUE=$((10#$VALUE))
+
+  if [ "$DECIMAL_VALUE" -lt "$MINIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ] || [ "$DECIMAL_VALUE" -gt "$MAXIMUM_PLAUSIBLE_CPU_TEMPERATURE_THRESHOLD" ]; then
+    print_configuration_error_and_exit "$PARAMETER_NAME" "${DECIMAL_VALUE}°C" "$ACCEPTED_RANGE"
   fi
 }
 
@@ -2614,7 +2657,7 @@ HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
 
 # Read a refused fan speed command and, if the server refused it over its data bytes, explain the one
 # thing that answers like this and say it once.
-# Usage : note_that_the_server_rejects_the_broadcast_fan_selector "$IPMITOOL_STDERR"
+# Usage : note_that_the_server_rejects_the_broadcast_fan_selector "$IPMITOOL_STDERR" ["$DECIMAL_FAN_SPEED"]
 # Returns : 0 if this call is the one that explained it
 #
 # This deliberately reaches NO verdict and stops nothing being sent. It is the counterpart of
@@ -2635,6 +2678,7 @@ HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=false
 # suggest that addressing the fans individually is still worth trying
 function note_that_the_server_rejects_the_broadcast_fan_selector() {
   local -r IPMITOOL_STDERR="$1"
+  local -r TARGET_DECIMAL_FAN_SPEED="${2:-$DECIMAL_FAN_SPEED}"
 
   if ! does_the_server_reject_this_data_field "$IPMITOOL_STDERR"; then
     return 1
@@ -2647,7 +2691,7 @@ function note_that_the_server_rejects_the_broadcast_fan_selector() {
   HAS_THE_BROADCAST_FAN_SELECTOR_REJECTION_BEEN_REPORTED=true
 
   print_warning "This server took the command that puts its fans under manual control, then refused the one that sets their speed, over one of its arguments rather than over the command itself (completion code 0xcc, \"invalid data field in request\").
- Its fans have therefore been handed back to Dell's own dynamic fan control profile, which is the only state this container can both reach and describe : they had already left it when the command that takes them landed, and the speed of $DECIMAL_FAN_SPEED% meant to replace it never arrived, so they were running at a duty nothing here can read back (issue #389).
+ Its fans have therefore been handed back to Dell's own dynamic fan control profile, which is the only state this container can both reach and describe : they had already left it when the command that takes them landed, and the speed of $TARGET_DECIMAL_FAN_SPEED% meant to replace it never arrived, so they were running at a duty nothing here can read back (issue #389).
  Both ways of asking were refused. The speed is normally addressed to every fan at once with the selector 0xff, and an 11th generation iDRAC6 refuses that while accepting the very same command addressed to one fan at a time (issue #378) -- so the fans were then asked individually, walking upwards from 0x00, and this server refused that too. The selector is therefore not what stands in the way here.
  This container cannot make this server quieter, and will keep saying so rather than appearing to. Setting MONITORING_ONLY_MODE=true stops it trying at all and keeps the temperatures logged, which is the same outcome with a quieter log.
  If your server answers this, the output of \"ipmitool -I lanplus -H <iDRAC IP address> -U <iDRAC username> -P <iDRAC password> sdr type fan\" on issue #378 would help work out what it wants instead"
@@ -3046,6 +3090,74 @@ function is_any_CPU_overheating() {
   fi
 
   (( ${#OVERHEATING_CPUS_AND_TEMPERATURES[@]} > 0 ))
+}
+
+# The highest reading among every detected CPU, whichever position it is at and however many CPUs the
+# server has -- unlike the two-CPU-only design ENABLE_LINE_INTERPOLATION was first proposed with, this
+# reduces over the whole DETECTED_CPU_TEMPERATURES array, the same one is_any_CPU_overheating() reads,
+# so a 4-socket server (R930, R830...) is driven by its hottest CPU and not only its first one.
+# An unreadable or non-numeric reading is skipped rather than treated as the hottest : is_any_CPU_overheating()
+# already falls back to Dell's default profile the moment one CPU can't be read, so this is never asked
+# to decide a ramp speed off a value it could not trust in the first place -- it only has to pick the
+# highest among the ones that remain
+# Usage : hottest_detected_CPU_temperature
+# Returns : the highest reading, or empty if none of the detected CPUs has a readable one
+function hottest_detected_CPU_temperature() {
+  local HOTTEST=""
+  local CPU_TEMPERATURE NORMALIZED_CPU_TEMPERATURE
+  for CPU_TEMPERATURE in "${DETECTED_CPU_TEMPERATURES[@]}"; do
+    is_temperature_reading_valid "$CPU_TEMPERATURE" || continue
+    NORMALIZED_CPU_TEMPERATURE=$(normalize_decimal_value "$CPU_TEMPERATURE")
+    if [ -z "$HOTTEST" ] || [ "$NORMALIZED_CPU_TEMPERATURE" -gt "$HOTTEST" ]; then
+      HOTTEST=$NORMALIZED_CPU_TEMPERATURE
+    fi
+  done
+  echo "$HOTTEST"
+}
+
+# Computes the fan speed (%) ENABLE_LINE_INTERPOLATION applies below CPU_TEMPERATURE_THRESHOLD, ramping
+# linearly from DECIMAL_FAN_SPEED at CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION up to
+# DECIMAL_HIGH_FAN_SPEED at CPU_TEMPERATURE_THRESHOLD -- the shape #44 asked for : a step between the
+# user's usual speed and Dell's own fallback, instead of jumping straight from one to the other.
+#
+# Multiplies before it divides (FAN_SPEED_RANGE * TEMPERATURE_OFFSET / TEMPERATURE_RANGE), the one
+# arithmetic mistake that silently zeroes bash's integer division the other way round, and echoes rather
+# than returns : "return" hands back an exit CODE, capped at 255 and wrapping past it, which is not what
+# a caller capturing this with $(...) as a fan speed is asking for.
+# Usage : compute_interpolated_fan_speed $CURRENT_CPU_TEMPERATURE
+# Returns : the fan speed (%) to apply this cycle
+function compute_interpolated_fan_speed() {
+  local -r CURRENT_CPU_TEMPERATURE="$1"
+
+  # Fails safe to the base fan speed on a reading this function cannot trust, the same way
+  # is_any_CPU_overheating() does for the overheat decision -- reached only if a caller asks this
+  # function directly, hottest_detected_CPU_temperature() already having skipped such a reading
+  if ! is_temperature_reading_valid "$CURRENT_CPU_TEMPERATURE"; then
+    echo "$DECIMAL_FAN_SPEED"
+    return
+  fi
+
+  local -r NORMALIZED_CPU_TEMPERATURE=$(normalize_decimal_value "$CURRENT_CPU_TEMPERATURE")
+
+  # Below the start point, or at/above the threshold : the two ends of the ramp, clamped rather than
+  # left to the arithmetic below. The caller only ever reaches this function once is_any_CPU_overheating()
+  # has already said every CPU is at or under CPU_TEMPERATURE_THRESHOLD, so the upper clamp is not
+  # expected to fire in practice -- but a function this safety-relevant is right on its own terms, not
+  # only by construction of the one place that currently calls it
+  if [ "$NORMALIZED_CPU_TEMPERATURE" -le "$CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION" ]; then
+    echo "$DECIMAL_FAN_SPEED"
+    return
+  fi
+  if [ "$NORMALIZED_CPU_TEMPERATURE" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    echo "$DECIMAL_HIGH_FAN_SPEED"
+    return
+  fi
+
+  local -r TEMPERATURE_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))
+  local -r FAN_SPEED_RANGE=$((DECIMAL_HIGH_FAN_SPEED - DECIMAL_FAN_SPEED))
+  local -r TEMPERATURE_OFFSET=$((NORMALIZED_CPU_TEMPERATURE - CPU_TEMPERATURE_FOR_START_LINE_INTERPOLATION))
+
+  echo $((DECIMAL_FAN_SPEED + FAN_SPEED_RANGE * TEMPERATURE_OFFSET / TEMPERATURE_RANGE))
 }
 
 # Join the given items into an enumeration : "CPU 1", "CPU 1 and CPU 2", "CPU 1, CPU 2 and CPU 3"...
