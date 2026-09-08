@@ -209,7 +209,11 @@ function graceful_exit() {
 
 # Helps debugging when people are posting their output
 function get_Dell_server_model() {
-  local -r IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
+  # Declared separately from the assignment below : "local X=$(cmd)" makes $? the exit status of the
+  # "local" builtin itself (always 0 here), not of the command substitution, so the check that follows
+  # never actually saw ipmitool fail. A plain assignment (no "local" on the same line) does propagate it
+  local IPMI_FRU_content
+  IPMI_FRU_content=$(ipmitool -I $IDRAC_LOGIN_STRING fru 2>/dev/null) # FRU stands for "Field Replaceable Unit"
 
   if [ $? -ne 0 ]; then
     echo "Failed to retrieve iDRAC data, please check IP and credentials." >&2
@@ -278,7 +282,7 @@ print_interpolated_fan_speeds() {
     else
       highest_CPU_temperature=$((CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION + i * step))
     fi
-    fan_speed=$(calculate_interpolated_fan_speed LOCAL_DECIMAL_FAN_SPEED LOCAL_DECIMAL_HIGH_FAN_SPEED highest_CPU_temperature CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION CPU_TEMPERATURE_THRESHOLD)
+    fan_speed=$(calculate_interpolated_fan_speed "$LOCAL_DECIMAL_FAN_SPEED" "$LOCAL_DECIMAL_HIGH_FAN_SPEED" "$highest_CPU_temperature" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD")
     bar_length=$((fan_speed * chart_width / 100))
     empty_length=$((chart_width - bar_length))
 
@@ -310,13 +314,40 @@ print_interpolated_fan_speeds() {
 # T1 - lower temperature threshold
 # T2 - higher temperature threshold
 # Fan speed = F1 + (( F2 - F1 ) * ( T_CPU - T1 ) / ( T2 - T1 ))
+#
+# Callers must pass VALUES ("$VAR"), never bare variable names : an earlier version took names and
+# aliased them to identically-named locals, so bash's arithmetic expansion looked the value back up
+# as a variable of that same name and recursed into itself ("expression recursion level exceeded").
+#
+# echoes its result rather than using "return" : the caller captures this with $(...), and "return"
+# hands back an exit CODE (0-255, wrapping past it), not the fan speed.
 function calculate_interpolated_fan_speed() {
   local -r LOCAL_DECIMAL_FAN_SPEED=$1
   local -r LOCAL_DECIMAL_HIGH_FAN_SPEED=$2
   local -r highest_CPU_temperature=$3
   local -r CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$4
   local -r CPU_TEMPERATURE_THRESHOLD=$5
-  return $((LOCAL_DECIMAL_FAN_SPEED + ((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED) * ((highest_CPU_temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION) / (CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))))
+
+  # Clamped at both ends rather than left to the arithmetic below : at or below T1, the base speed ;
+  # at or above T2, the max speed (the caller only reaches this function below T2 in practice, since
+  # CPU1_OVERHEATING/CPU2_OVERHEATING already caught anything at or above it, but the function is
+  # right on its own terms rather than only by construction of its one caller)
+  if [ "$highest_CPU_temperature" -le "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+    echo "$LOCAL_DECIMAL_FAN_SPEED"
+    return
+  fi
+  if [ "$highest_CPU_temperature" -ge "$CPU_TEMPERATURE_THRESHOLD" ]; then
+    echo "$LOCAL_DECIMAL_HIGH_FAN_SPEED"
+    return
+  fi
+
+  local -r TEMPERATURE_RANGE=$((CPU_TEMPERATURE_THRESHOLD - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+  local -r FAN_SPEED_RANGE=$((LOCAL_DECIMAL_HIGH_FAN_SPEED - LOCAL_DECIMAL_FAN_SPEED))
+  local -r TEMPERATURE_OFFSET=$((highest_CPU_temperature - CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION))
+
+  # Multiplying before dividing matters : bash's integer division truncates, so doing the division
+  # first collapsed the whole ramp back to the base speed for every temperature except right at the top
+  echo $((LOCAL_DECIMAL_FAN_SPEED + FAN_SPEED_RANGE * TEMPERATURE_OFFSET / TEMPERATURE_RANGE))
 }
 
 # Returns the maximum value among the given integer arguments.

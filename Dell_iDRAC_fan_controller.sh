@@ -25,16 +25,20 @@ else
   # readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
 fi
 
-# Check if fan speed interpolation is enabled
-if [[ "$FAN_SPEED" -gt "$HIGH_FAN_SPEED" ]]; then
-  echo "Error : \"$FAN_SPEED\" have to be less or equal to \"$HIGH_FAN_SPEED\". Exiting."
-  exit 1
-elif [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -eq "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+# Check if fan speed interpolation is enabled. The emptiness checks have to run BEFORE the "-gt"
+# comparison below, not after it: with HIGH_FAN_SPEED unset (running the script directly without
+# setting it, or an older image whose Dockerfile did not default it yet), "$HIGH_FAN_SPEED" expands
+# to nothing, and [[ "$FAN_SPEED" -gt "" ]] reads the empty side as 0 -- so a perfectly normal
+# FAN_SPEED > 0 config refused to start with the interpolation feature disabled and unrelated to it
+if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ] || [ "$CPU_TEMPERATURE_THRESHOLD" -eq "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
   readonly FAN_SPEED_INTERPOLATION_ENABLED=false
-  
+
   # We define these variables to the same values than user fan control profile
   readonly HIGH_FAN_SPEED="$FAN_SPEED"
   readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION="$CPU_TEMPERATURE_THRESHOLD"
+elif [[ "$FAN_SPEED" -gt "$HIGH_FAN_SPEED" ]]; then
+  echo "Error : \"$FAN_SPEED\" have to be less or equal to \"$HIGH_FAN_SPEED\". Exiting."
+  exit 1
 else
   readonly FAN_SPEED_INTERPOLATION_ENABLED=true
 fi
@@ -148,13 +152,19 @@ while true; do
       IS_DELL_DEFAULT_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
-  elif CPU1_HEATING || $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_HEATING; then
+  # "||" and "&&" chained without grouping are evaluated strictly left to right in bash ("A || B && C"
+  # is "(A || B) && C", not "A || (B && C)"), so this used to require CPU2_HEATING regardless of
+  # CPU1's own reading : on a single-CPU server IS_CPU2_TEMPERATURE_SENSOR_PRESENT is false, CPU2_HEATING
+  # then fails on an empty $CPU2_TEMPERATURE ("-gt: unary operator expected"), and the whole condition
+  # came back false however hot CPU1 was -- the ramp could never engage on a single-CPU server. The
+  # parentheses below force the intended grouping : CPU1 alone, or CPU2 when it exists and is heating
+  elif CPU1_HEATING || ( $IS_CPU2_TEMPERATURE_SENSOR_PRESENT && CPU2_HEATING ); then
     HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
     if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
       HIGHEST_CPU_TEMPERATURE=$(max $CPU1_TEMPERATURE $CPU2_TEMPERATURE)
     fi
 
-    DECIMAL_FAN_SPEED_TO_APPLY=$(calculate_interpolated_fan_speed DECIMAL_LOW_FAN_SPEED_OBJECTIVE DECIMAL_HIGH_FAN_SPEED_OBJECTIVE HIGHEST_CPU_TEMPERATURE CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION CPU_TEMPERATURE_THRESHOLD)
+    DECIMAL_FAN_SPEED_TO_APPLY=$(calculate_interpolated_fan_speed "$DECIMAL_LOW_FAN_SPEED_OBJECTIVE" "$DECIMAL_HIGH_FAN_SPEED_OBJECTIVE" "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD")
     apply_user_fan_control_profile 2 $DECIMAL_FAN_SPEED_TO_APPLY
   else
     apply_user_fan_control_profile 1 $DECIMAL_LOW_FAN_SPEED_OBJECTIVE
