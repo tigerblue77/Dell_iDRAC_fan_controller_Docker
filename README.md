@@ -15,6 +15,7 @@ If it has made your server(s) quieter, you can [thank me by sponsoring me](https
   <li><a href="#parameters">Parameters</a></li>
   <li><a href="#stopping-the-container">Stopping the container</a></li>
   <li><a href="#troubleshooting">Troubleshooting</a></li>
+  <li><a href="#contributors">Contributors</a></li>
   <li><a href="#contributing">Contributing</a></li>
   <li><a href="#license">License</a></li>
 </ol>
@@ -526,6 +527,17 @@ Whatever the source, **fan control itself always goes through your iDRAC**. If t
 ```
 
 then no temperature source changes anything: your server's fans cannot be driven through this container. That is expected on blades and sleds, whose fans belong to their enclosure and are driven by its CMC.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+<!-- CONTRIBUTORS -->
+## Contributors
+
+Thanks to everyone who already has :
+
+<a href="https://github.com/tigerblue77/Dell_iDRAC_fan_controller_Docker/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tigerblue77/Dell_iDRAC_fan_controller_Docker" alt="Contributors to this repository" />
+</a>
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
