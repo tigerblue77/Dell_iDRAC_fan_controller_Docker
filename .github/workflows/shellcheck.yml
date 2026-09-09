@@ -39,8 +39,72 @@ permissions:
   contents: read
 
 jobs:
+  detect-reuse:
+    name: Look for an already-tested identical tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+    outputs:
+      reuse: ${{ steps.detect.outputs.reuse }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Same reasoning as "Tests" (issue #500, fixed by #501) : a push to
+      # master that merged a pull request lands a tree this workflow already
+      # linted clean on that same pull request, so relinting it a second time
+      # right after proves nothing new (issue #502). This is the same
+      # "detect-reuse" job as tests.yml's, minus the workflow-run lookup that
+      # one needs : there is nothing to download and republish here, since the
+      # lint step's own success is the only signal this workflow ever
+      # produces. Every failure mode -- no pull request found yet, a
+      # hand-edited squash, a GitHub API error, an outright failure of this
+      # job itself -- falls through to an empty output, which "shellcheck"
+      # reads as "lint for real"
+      - name: Decide whether to reuse a pull request's result
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reuse=""
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            pr_number=$(gh api "repos/{owner}/{repo}/commits/${GITHUB_SHA}/pulls" \
+              --jq ".[] | select(.merge_commit_sha == \"${GITHUB_SHA}\") | .number" 2>/dev/null \
+              | head -n1) || pr_number=""
+
+            if [[ -n "$pr_number" ]]; then
+              pr_head_sha=$(gh api "repos/{owner}/{repo}/pulls/${pr_number}" --jq '.head.sha' 2>/dev/null) || pr_head_sha=""
+            fi
+
+            if [[ -n "${pr_head_sha:-}" ]] && git fetch --depth 1 origin "refs/pull/${pr_number}/head" 2>/dev/null; then
+              fetched_sha=$(git rev-parse FETCH_HEAD 2>/dev/null) || fetched_sha=""
+            fi
+
+            if [[ -n "${fetched_sha:-}" && "$fetched_sha" == "$pr_head_sha" ]]; then
+              head_tree=$(git rev-parse FETCH_HEAD^{tree} 2>/dev/null) || head_tree=""
+              merge_tree=$(git rev-parse HEAD^{tree} 2>/dev/null) || merge_tree=""
+            fi
+
+            if [[ -n "${head_tree:-}" && "$head_tree" == "${merge_tree:-}" ]]; then
+              check_conclusion=$(gh api --paginate "repos/{owner}/{repo}/commits/${pr_head_sha}/check-runs" \
+                --jq '.check_runs[] | select(.name == "Lint the shell scripts") | .conclusion' 2>/dev/null) || check_conclusion=""
+            fi
+
+            if [[ "${check_conclusion:-}" == "success" ]]; then
+              reuse="true"
+            fi
+          fi
+
+          echo "reuse=${reuse}" >> "$GITHUB_OUTPUT"
+
   shellcheck:
     name: Lint the shell scripts
+    needs: detect-reuse
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -48,6 +112,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Run shellcheck
+        if: needs.detect-reuse.outputs.reuse != 'true'
         run: |
           shellcheck -x \
             Dell_iDRAC_fan_controller.sh \
@@ -76,6 +141,7 @@ jobs:
       # Everything else is on, SC2031 included : losing a global across a subshell boundary is the invariant
       # CLAUDE.md warns is enforced by nothing, and this is the one place that can enforce it.
       - name: Run shellcheck on the test suite
+        if: needs.detect-reuse.outputs.reuse != 'true'
         run: |
           shellcheck -x -e SC2155,SC2034,SC2016,SC1091,SC1090 \
             tests/run_tests.sh \
