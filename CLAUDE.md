@@ -103,6 +103,20 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   a script missing from it is analysed by nothing at all.
 - **Add a test case for what you change.** A behaviour with no test is one the next
   refactor is free to break, and this codebase's refactors span a hundred server models.
+- **Nothing is assumed : an ambiguity is a question, not a judgement call.** Where two
+  readings of an instruction would lead to materially different work, the question is put
+  before the work starts, even though asking costs a round trip — because guessing costs
+  the work. The judgement being asked for is narrow : routine calls a careful colleague
+  makes alone stay made alone, and what gets asked is what changes the shape of what gets
+  delivered. A default chosen silently is a decision nobody made, and it surfaces at
+  review, which is the most expensive place for it to surface.
+- **A request to merge says what the pull request brings.** Merging is the maintainer's own
+  act, so the ask carries what they need in order to decide : what the change does, what it
+  is worth, what in it could not be verified and why, and — where it has siblings — the
+  order it wants merging in. "This is ready" makes them work all of that out from the diff,
+  which is the work the session was supposed to have already done, done twice. On a project
+  that talks to twenty years of firmware, "what could not be verified" is rarely empty and
+  is the half that matters : say which generation it was tested on, and which it was not.
 
 ## Invariants that are not obvious from the code
 
