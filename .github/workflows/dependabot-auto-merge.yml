@@ -3,6 +3,43 @@
 
 name: Dependabot auto-merge
 
+# Dependabot's minor and patch updates, every ecosystem, merge themselves once
+# the checks .github/rulesets/master.json requires are green on them. Majors
+# stay open for a review : they are the ones that can change behaviour. The
+# same shape as wader/postfix-relay's workflow of the same name, which is the
+# reference every repository of this maintainer is aligned on.
+#
+# "gh pr merge --auto" asks GitHub to merge LATER, once the required checks
+# pass, and it is GitHub that does the waiting. Two repository settings make
+# that true, and neither is a file : "Allow auto-merge" (Settings > General),
+# and a ruleset or branch protection on master that requires checks.
+# .github/rulesets/master.json is that ruleset, in the form "Import a ruleset"
+# takes, so that the gate is something the tree states and
+# tests/cases/12_github_workflows.sh can check rather than a setting believed.
+#
+# There is deliberately no fallback. The one this file used to carry,
+# "|| gh pr merge --squash", merged straight away whenever "--auto" could not
+# be enabled -- which is exactly when nothing is requiring any check, so it
+# landed the update with no check having run. A pull request that cannot be
+# queued now stays open, which is visible, instead of merged, which is not.
+#
+# Every ecosystem, not only github_actions : what decides whether an update is
+# safe is the suite, which every one of these pull requests runs, and not a
+# guess about which ecosystem is risky. A devcontainer feature update that
+# broke something would turn the suite red and wait for a human like any other.
+#
+# The merge is a squash, as every pull request on master is.
+#
+# /!\ The merge is made in GITHUB_TOKEN's name, and a push made with that token
+# starts no workflow : after a Dependabot update lands, "Tests" and
+# "Shellcheck" do not rerun on master and "Auto-update pull request branches"
+# does not rebase the pull requests left behind. The tree was tested on the
+# pull request itself, with branches required to be up to date, so nothing
+# unchecked reaches master ; what waits is the rebase of the others, until the
+# next merge or a manual run of that workflow. Dependabot-triggered runs only
+# see Dependabot secrets, so the App credential that workflow uses would have
+# to be stored there as well to change this -- a choice, not an oversight.
+
 on: pull_request
 
 permissions:
@@ -11,7 +48,7 @@ permissions:
 
 jobs:
   auto-merge:
-    name: Auto-merge minor and patch GitHub Actions updates
+    name: Queue minor and patch Dependabot updates for auto-merge
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: github.event.pull_request.user.login == 'dependabot[bot]'
@@ -22,18 +59,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Major updates are excluded: their PRs wait for manual review.
-      # 'gh pr merge --auto' requires "Allow auto-merge" in the repo
-      # settings plus branch protection with required checks; when either
-      # is missing it exits non-zero, so fall back to an immediate direct
-      # merge (if branch protection exists, it still blocks any direct
-      # merge that would skip required checks).
       - name: Enable auto-merge
         if: >-
-          steps.metadata.outputs.package-ecosystem == 'github_actions' &&
-          (steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
-           steps.metadata.outputs.update-type == 'version-update:semver-patch')
-        run: gh pr merge --auto --squash "$PR_URL" || gh pr merge --squash "$PR_URL"
+          steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

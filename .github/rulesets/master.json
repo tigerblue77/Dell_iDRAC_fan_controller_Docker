@@ -1,0 +1,37 @@
+{
+  "name": "master",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "Run the test suite"
+          },
+          {
+            "context": "Run the test suite inside the Docker image"
+          },
+          {
+            "context": "Lint the shell scripts"
+          },
+          {
+            "context": "Check the commits carry a sign-off"
+          }
+        ]
+      }
+    }
+  ]
+}
