@@ -114,6 +114,15 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   in its own workflow instead ; the rule is the same. What gets through is decided by the
   suite, not by a guess about which ecosystem is risky : majors wait for a human, and so
   does anything red.
+- **Pull requests are kept level with the default branch, and never required to be, in
+  every repository of this maintainer.** "Require branches to be up to date before
+  merging" stays off : whatever cannot be updated automatically — a conflict, a fork, a
+  draft, and every pull request after a Dependabot merge, which starts no workflow — would
+  be blocked rather than behind. `.github/workflows/auto_update_pull_request_branches.yml`
+  does the updating, after every merge and hourly, as best effort. A public repository
+  runs it, its minutes costing nothing ; a private one carries the same file switched off
+  behind the `PULL_REQUESTS_UPDATE_ENABLED` variable, until it moves to the organisation
+  whose runners will run it (#512).
 - **Nothing is assumed : an ambiguity is a question, not a judgement call.** Where two
   readings of an instruction would lead to materially different work, the question is put
   before the work starts, even though asking costs a round trip — because guessing costs
