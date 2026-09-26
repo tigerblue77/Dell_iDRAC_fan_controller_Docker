@@ -10,6 +10,17 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    # The limit counts per entry, so the reason given on the entry below holds
+    # here too
+    open-pull-requests-limit: 99
+    # Grouped the same way and for the same reason as the entry below : minor
+    # and patch updates merge themselves once the suite is green, majors wait
+    groups:
+      devcontainers-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"

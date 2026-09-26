@@ -383,3 +383,101 @@ function test_every_publishing_workflow_annotates_the_image_index() {
       "$RELATIVE_PATH states different custom entries as labels and as annotations ; getAnnotations() never reads the labels input, so whatever is missing here is missing from the index"
   done
 }
+
+# The checks .github/rulesets/master.json requires are matched by a job's
+# display "name:", never by its key and never by the workflow's name, and only
+# on a job that actually reports on a pull request. A context that names no such
+# job never reports, and on a branch that requires it every pull request then
+# waits for ever -- Dependabot's first, since nothing else would merge them.
+# This is the counterpart of wader/postfix-relay's tests/test_ruleset.py, which
+# every repository of this maintainer is aligned on.
+function test_every_check_the_ruleset_requires_is_a_job_a_pull_request_runs() {
+  local -r RULESET="$REPO_ROOT/.github/rulesets/master.json"
+  local -r WORKFLOW_DIRECTORY="$REPO_ROOT/.github/workflows"
+  if [ ! -f "$RULESET" ] || [ ! -d "$WORKFLOW_DIRECTORY" ] || ! command -v jq > /dev/null 2>&1; then
+    skip_test "no .github next to the scripts, or no jq to read the ruleset with"
+    return 0
+  fi
+
+  # Every job display name, from the workflows a pull request starts. A job
+  # without a "name:" reports under its key, so the key is the default. Read
+  # with awk rather than a YAML parser because the suite installs none, and
+  # every workflow here is written in the one shape this reads : two-space job
+  # keys under a top-level "jobs:", their "name:" four spaces in
+  local WORKFLOW
+  local REPORTED=""
+  for WORKFLOW in "$WORKFLOW_DIRECTORY"/*.yml; do
+    grep -Eq '^on: pull_request$|^  pull_request:' "$WORKFLOW" || continue
+    REPORTED+=$(awk '
+      /^jobs:/ { in_jobs = 1; next }
+      in_jobs && /^[^ #]/ { in_jobs = 0 }
+      !in_jobs { next }
+      /^  [A-Za-z0-9_-]+:[ ]*$/ {
+        if (key != "" && !named) print key
+        key = $1; sub(/:$/, "", key); named = 0; next
+      }
+      key != "" && !named && /^    name:/ {
+        line = $0; sub(/^    name:[ ]*/, "", line); gsub(/^"|"$/, "", line)
+        print line; named = 1
+      }
+      END { if (key != "" && !named) print key }
+    ' "$WORKFLOW")
+    REPORTED+=$'\n'
+  done
+
+  local CONTEXT
+  local MISSING=""
+  while IFS= read -r CONTEXT; do
+    [ -n "$CONTEXT" ] || continue
+    if ! grep -Fxq -- "$CONTEXT" <<< "$REPORTED"; then
+      MISSING="$MISSING \"$CONTEXT\""
+    fi
+  done < <(jq -r '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' "$RULESET")
+
+  assert_empty "$MISSING" \
+    "every required check has to be the name of a job a pull request runs, or it never reports"
+}
+
+# A re-export made after clicking around the settings page can hand back a file
+# that still parses and no longer gates anything : disabled or in "evaluate"
+# mode, aimed at another branch, opened to a bypass actor, or its one rule
+# swapped for a type that requires nothing. Each of those is checked, so that
+# the file being importable is not mistaken for it being the same gate
+function test_the_ruleset_still_gates_master() {
+  local -r RULESET="$REPO_ROOT/.github/rulesets/master.json"
+  if [ ! -f "$RULESET" ] || ! command -v jq > /dev/null 2>&1; then
+    skip_test "no .github next to the scripts, or no jq to read the ruleset with"
+    return 0
+  fi
+
+  assert_equals "active" "$(jq -r '.enforcement' "$RULESET")" \
+    "the ruleset has to be enforced, not evaluated or disabled"
+  assert_equals '["~DEFAULT_BRANCH"]' "$(jq -c '.conditions.ref_name.include' "$RULESET")" \
+    "the ruleset has to target the default branch"
+  assert_equals '[]' "$(jq -c '.conditions.ref_name.exclude' "$RULESET")" \
+    "nothing may be excluded from the ruleset's target"
+  assert_equals '[]' "$(jq -c '.bypass_actors' "$RULESET")" \
+    "the ruleset has no bypass actor"
+  assert_equals '["required_status_checks"]' "$(jq -c '[.rules[].type]' "$RULESET")" \
+    "the ruleset carries exactly the one rule that requires checks"
+  assert_not_equals "0" "$(jq '[.rules[].parameters.required_status_checks[]] | length' "$RULESET")" \
+    "a ruleset requiring no check lets auto-merge land an update with nothing checked"
+}
+
+# "gh pr merge --auto" waits for the required checks ; a bare "gh pr merge" does
+# not. The workflow used to fall back to the second whenever the first could not
+# be enabled -- precisely when no check was being required -- and so merged
+# Dependabot's updates with nothing having run. Every merge it issues has to be
+# the waiting kind
+function test_dependabot_updates_are_only_ever_queued_never_merged_directly() {
+  local -r AUTO_MERGE_WORKFLOW="$REPO_ROOT/.github/workflows/dependabot-auto-merge.yml"
+  if [ ! -f "$AUTO_MERGE_WORKFLOW" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  local -r MERGES=$(grep -v '^[[:space:]]*#' "$AUTO_MERGE_WORKFLOW" | grep -o 'gh pr merge[^|&;]*')
+  assert_not_empty "$MERGES" "the workflow is expected to queue the merge with gh pr merge"
+  assert_empty "$(grep -v -- '--auto' <<< "$MERGES")" \
+    "every gh pr merge in the auto-merge workflow has to carry --auto, so that it waits for the required checks"
+}

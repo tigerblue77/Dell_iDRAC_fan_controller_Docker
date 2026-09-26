@@ -103,6 +103,17 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   a script missing from it is analysed by nothing at all.
 - **Add a test case for what you change.** A behaviour with no test is one the next
   refactor is free to break, and this codebase's refactors span a hundred server models.
+- **Dependabot's minor and patch updates merge themselves once CI is green, in every
+  repository of this maintainer.** A Dependabot pull request sitting open with every check
+  green is a defect in that process, not a task for a human. Here, as on wader/postfix-relay
+  which is the reference, it is GitHub that waits :
+  `.github/workflows/dependabot-auto-merge.yml` queues the merge with `gh pr merge --auto`
+  and never merges directly, and the checks it waits for are
+  `.github/rulesets/master.json`, which `tests/cases/12_github_workflows.sh` keeps naming
+  jobs that exist. A private repository, where GitHub enforces no ruleset, does the waiting
+  in its own workflow instead ; the rule is the same. What gets through is decided by the
+  suite, not by a guess about which ecosystem is risky : majors wait for a human, and so
+  does anything red.
 - **Nothing is assumed : an ambiguity is a question, not a judgement call.** Where two
   readings of an instruction would lead to materially different work, the question is put
   before the work starts, even though asking costs a round trip — because guessing costs
