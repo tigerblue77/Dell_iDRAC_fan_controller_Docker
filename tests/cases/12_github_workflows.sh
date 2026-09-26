@@ -441,9 +441,9 @@ function test_every_check_the_ruleset_requires_is_a_job_a_pull_request_runs() {
 # A re-export made after clicking around the settings page can hand back a file
 # that still parses and no longer gates anything : disabled or in "evaluate"
 # mode, aimed at another branch, opened to a bypass actor, its rule requiring
-# checks dropped or emptied, or a required approval added. Each of those is
-# checked, so that the file being importable is not mistaken for it being the
-# same gate.
+# checks dropped or emptied, a required approval added, or branches required to
+# be up to date again. Each of those is checked, so that the file being
+# importable is not mistaken for it being the same gate.
 #
 # The file is the whole of the live ruleset, not only its checks : master is
 # also protected against deletion and force-pushes, takes pull requests only,
@@ -451,7 +451,20 @@ function test_every_check_the_ruleset_requires_is_a_job_a_pull_request_runs() {
 # all four the day it was imported in place of the live one (#510). Those four
 # are not asserted here -- they are protections, not what makes the gate pass
 # or fail. The approval count is : one required approval holds every Dependabot
-# update for a person, which is exactly what #506 closed
+# update for a person, which is exactly what #506 closed.
+#
+# So is "Require branches to be up to date before merging". With it on, each
+# merge leaves every other open pull request blocked until its branch is
+# updated, and what updates them is best effort : "Auto-update pull request
+# branches" leaves alone the ones that conflict, cannot write to a fork, skips
+# drafts, and only reaches what a Dependabot merge left behind on its next
+# scheduled run, a merge made in GITHUB_TOKEN's name starting no workflow.
+# Each of those would turn from behind into blocked. What the setting bought --
+# a pull request tested against the master it lands on -- is what that
+# workflow gives wherever it can, and is paid for after the merge elsewhere,
+# where "Tests" runs for real on any merge made behind master but a Dependabot
+# one (see its "detect-reuse" job, and dependabot-auto-merge.yml for the
+# exception), which is also the choice wader/postfix-relay made
 function test_the_ruleset_still_gates_master() {
   local -r RULESET="$REPO_ROOT/.github/rulesets/master.json"
   if [ ! -f "$RULESET" ] || ! command -v jq > /dev/null 2>&1; then
@@ -473,6 +486,8 @@ function test_the_ruleset_still_gates_master() {
     "a ruleset requiring no check lets auto-merge land an update with nothing checked"
   assert_equals "0" "$(jq '[.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count] | add // 0' "$RULESET")" \
     "a required approval would hold every Dependabot update for a person, however green"
+  assert_equals "false" "$(jq '[.rules[] | select(.type == "required_status_checks") | .parameters.strict_required_status_checks_policy] | any' "$RULESET")" \
+    "requiring branches to be up to date would block every pull request the branch updater cannot reach, Dependabot's merges leaving all of them behind until its next scheduled run"
 }
 
 # "gh pr merge --auto" waits for the required checks ; a bare "gh pr merge" does
@@ -491,4 +506,284 @@ function test_dependabot_updates_are_only_ever_queued_never_merged_directly() {
   assert_not_empty "$MERGES" "the workflow is expected to queue the merge with gh pr merge"
   assert_empty "$(grep -v -- '--auto' <<< "$MERGES")" \
     "every gh pr merge in the auto-merge workflow has to carry --auto, so that it waits for the required checks"
+}
+
+# The "detect-reuse" jobs of "Tests" and "Shellcheck" decide, on a push to
+# master, whether the pull request that push merged was already checked on the
+# exact tree it lands, and if so they skip the run and republish its result. A
+# wrong "yes" is a green check on master for a tree nothing ran on, and no pull
+# request ever exercises these blocks : they only act on master, after the merge.
+#
+# So they are run here, as written in the workflow, against a real repository :
+# one standing in for GitHub's copy, holding master and the pull request's head
+# under refs/pull/<number>/head, and a clone of it checked out on the merge, the
+# way the job's own checkout is. GitHub's API is a stubbed gh first in the PATH
+# that answers from that same repository, so a question asked the wrong way
+# round gets the answer the real API would give, not the one a test hoped for.
+#
+# The question these exist for is the one the up-to-date requirement used to
+# answer : with master taking pull requests that are behind it, a pull request's
+# run tested it merged into whichever master it saw, and a matching tree alone
+# does not prove that master was the one this push was made on.
+readonly REUSE_DECIDING_WORKFLOWS=(".github/workflows/tests.yml" ".github/workflows/shellcheck.yml")
+readonly REUSE_PULL_REQUEST_NUMBER=7
+readonly REUSE_RUN_ID=4242
+
+# The suite also runs inside the built image, which carries neither the
+# workflows nor git
+# Usage : if ! reuse_decision_can_run; then skip_test "..."; return 0; fi
+function reuse_decision_can_run() {
+  local WORKFLOW
+  for WORKFLOW in "${REUSE_DECIDING_WORKFLOWS[@]}"; do
+    [ -f "$REPO_ROOT/$WORKFLOW" ] || return 1
+  done
+  command -v git > /dev/null 2>&1
+}
+
+# Builds GitHub's copy of the repository and the job's checkout of the merge.
+# The pull request branches off the first commit of master and adds one file ;
+# what master does meanwhile is the scenario :
+#   level     nothing, so the pull request is merged up to date
+#   moved     another pull request adds a file first, so this one lands behind
+#   reverted  another pull request is merged and then reverted, so this one
+#             lands behind master with a tree identical to its own head
+# Usage : build_reuse_sandbox level|moved|reverted
+#         -> REUSE_SANDBOX, REUSE_CHECKOUT, REUSE_HEAD_SHA,
+#            REUSE_PREVIOUS_MASTER_SHA, REUSE_MERGE_SHA
+function build_reuse_sandbox() {
+  local -r MASTER_HISTORY="$1"
+
+  REUSE_SANDBOX="$(mktemp -d)"
+  local -r ORIGIN="$REUSE_SANDBOX/origin"
+  REUSE_CHECKOUT="$REUSE_SANDBOX/checkout"
+
+  git init --quiet --initial-branch=master "$ORIGIN"
+  git -C "$ORIGIN" config user.name "Maintainer"
+  git -C "$ORIGIN" config user.email "maintainer@example.org"
+  git -C "$ORIGIN" config commit.gpgsign false
+
+  printf 'base\n' > "$ORIGIN/base.txt"
+  git -C "$ORIGIN" add base.txt
+  git -C "$ORIGIN" commit --quiet --no-verify -m "The commit the pull request starts from"
+
+  git -C "$ORIGIN" checkout --quiet -b pull-request
+  printf 'change\n' > "$ORIGIN/change.txt"
+  git -C "$ORIGIN" add change.txt
+  git -C "$ORIGIN" commit --quiet --no-verify -m "The pull request"
+  REUSE_HEAD_SHA="$(git -C "$ORIGIN" rev-parse HEAD)"
+  git -C "$ORIGIN" update-ref "refs/pull/$REUSE_PULL_REQUEST_NUMBER/head" "$REUSE_HEAD_SHA"
+  git -C "$ORIGIN" checkout --quiet master
+
+  if [ "$MASTER_HISTORY" != level ]; then
+    printf 'other\n' > "$ORIGIN/other.txt"
+    git -C "$ORIGIN" add other.txt
+    git -C "$ORIGIN" commit --quiet --no-verify -m "Another pull request"
+  fi
+  if [ "$MASTER_HISTORY" = reverted ]; then
+    git -C "$ORIGIN" revert --no-edit HEAD > /dev/null
+  fi
+  REUSE_PREVIOUS_MASTER_SHA="$(git -C "$ORIGIN" rev-parse HEAD)"
+
+  # How the pull request is merged here : a squash
+  git -C "$ORIGIN" merge --quiet --squash pull-request > /dev/null
+  git -C "$ORIGIN" commit --quiet --no-verify -m "The pull request, squashed"
+  REUSE_MERGE_SHA="$(git -C "$ORIGIN" rev-parse HEAD)"
+
+  git clone --quiet "file://$ORIGIN" "$REUSE_CHECKOUT"
+  git -C "$REUSE_CHECKOUT" checkout --quiet --detach "$REUSE_MERGE_SHA"
+
+  mkdir -p "$REUSE_SANDBOX/bin"
+  cat > "$REUSE_SANDBOX/bin/gh" << 'STUB'
+#!/bin/bash
+# Answers the five API calls the blocks make, in the shapes they make them, from
+# the repository standing in for GitHub's. The --jq filter is not applied : each
+# answer is already what that filter extracts. Anything else is refused, so a
+# call the stub was not written for fails loudly instead of answering empty
+set -uo pipefail
+
+printf '%s\n' "$*" >> "$MOCK_GH_CALL_LOG"
+
+[ "${1:-}" = api ] || { printf 'unexpected gh call : %s\n' "$*" >&2; exit 64; }
+shift
+[ "${1:-}" = --paginate ] && shift
+
+ENDPOINT="${1:-}"
+case "$ENDPOINT" in
+  "repos/{owner}/{repo}/commits/$MOCK_MERGE_SHA/pulls")
+    printf '%s\n' "$MOCK_PULL_REQUEST_NUMBER"
+    ;;
+  "repos/{owner}/{repo}/pulls/$MOCK_PULL_REQUEST_NUMBER")
+    git -C "$MOCK_ORIGIN" rev-parse "refs/pull/$MOCK_PULL_REQUEST_NUMBER/head"
+    ;;
+  "repos/{owner}/{repo}/compare/"*...*)
+    # behind_by : the commits the base side has and the head side does not
+    RANGE="${ENDPOINT#"repos/{owner}/{repo}/compare/"}"
+    git -C "$MOCK_ORIGIN" rev-list --count "${RANGE#*...}..${RANGE%%...*}"
+    ;;
+  "repos/{owner}/{repo}/commits/"*"/check-runs")
+    printf 'success\n'
+    ;;
+  "repos/{owner}/{repo}/actions/workflows/tests.yml/runs?"*)
+    printf '%s\n' "$MOCK_RUN_ID"
+    ;;
+  *)
+    printf 'unexpected gh call : %s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+STUB
+  chmod 0755 "$REUSE_SANDBOX/bin/gh"
+
+  export MOCK_GH_CALL_LOG="$REUSE_SANDBOX/gh_calls.log"
+  export MOCK_ORIGIN="$ORIGIN"
+  export MOCK_MERGE_SHA="$REUSE_MERGE_SHA"
+  export MOCK_PULL_REQUEST_NUMBER="$REUSE_PULL_REQUEST_NUMBER"
+  export MOCK_RUN_ID="$REUSE_RUN_ID"
+  : > "$MOCK_GH_CALL_LOG"
+}
+
+function teardown_reuse_sandbox() {
+  [ -n "${REUSE_SANDBOX:-}" ] && rm -rf "$REUSE_SANDBOX"
+}
+
+# Runs one workflow's decision against the sandbox, as the push of the merge to
+# master, with the shell GitHub gives a "run:" that names none, and prints the
+# value it wrote to its output : the run ID or "true" to reuse, empty to run for
+# real. Fails, printing why, when the block cannot be found or does not reach
+# the line that writes its output -- an empty value is only an answer when the
+# block got as far as giving it
+# Usage : if ! DECISION=$(run_reuse_decision WORKFLOW); then fail "$DECISION"; fi
+function run_reuse_decision() {
+  local -r WORKFLOW_FILE="$REPO_ROOT/$1"
+  local -r EXTRACTION_DIRECTORY="$REUSE_SANDBOX/blocks/${1//\//_}"
+  local -r OUTPUT_FILE="$REUSE_SANDBOX/output"
+  mkdir -p "$EXTRACTION_DIRECTORY"
+
+  local RUN_LINE
+  RUN_LINE=$(awk '
+    index($0, "- name: Decide whether to reuse a pull request") { found = 1 }
+    found && /^[ \t-]*run:/ { print FNR; exit }
+  ' "$WORKFLOW_FILE")
+
+  local SCRIPT
+  SCRIPT=$(extract_workflow_run_blocks "$WORKFLOW_FILE" "$EXTRACTION_DIRECTORY" |
+    awk -F '\t' -v LINE="$RUN_LINE" '$1 == LINE { print $2 }')
+  if [ -z "$RUN_LINE" ] || [ ! -f "$SCRIPT" ]; then
+    printf 'no "Decide whether to reuse" step with a run: block in %s\n' "$1"
+    return 1
+  fi
+
+  # An expression written into the block would reach bash as "${{ ... }}", a bad
+  # substitution : what GitHub supplies has to come in through the environment
+  if grep -q '\${{' "$SCRIPT"; then
+    printf 'the decision in %s carries a ${{ }} expression, so it cannot run as it stands\n' "$1"
+    return 1
+  fi
+
+  : > "$OUTPUT_FILE"
+  local ERRORS
+  ERRORS=$(
+    cd "$REUSE_CHECKOUT" &&
+      env GITHUB_EVENT_NAME=push \
+        GITHUB_SHA="$REUSE_MERGE_SHA" \
+        PREVIOUS_MASTER_SHA="$REUSE_PREVIOUS_MASTER_SHA" \
+        GITHUB_OUTPUT="$OUTPUT_FILE" \
+        GH_TOKEN=unused \
+        PATH="$REUSE_SANDBOX/bin:$PATH" \
+        bash -e "$SCRIPT" 2>&1
+  )
+
+  if ! grep -q '^[a-z-]*=' "$OUTPUT_FILE"; then
+    printf 'the decision in %s stopped before writing its output : %s\n' "$1" "$ERRORS"
+    return 1
+  fi
+  sed -n 's/^[a-z-]*=//p' "$OUTPUT_FILE"
+}
+
+function test_a_merge_of_a_pull_request_level_with_master_reuses_its_checks() {
+  if ! reuse_decision_can_run; then
+    skip_test "no .github/workflows next to the scripts, or no git"
+    return 0
+  fi
+
+  # The case both jobs exist for (#500, #502) : nothing else reached master
+  # while the pull request was open, so its runs tested this very tree
+  build_reuse_sandbox level
+
+  local WORKFLOW DECISION
+  for WORKFLOW in "${REUSE_DECIDING_WORKFLOWS[@]}"; do
+    if ! DECISION=$(run_reuse_decision "$WORKFLOW"); then
+      fail "$DECISION"
+      continue
+    fi
+    assert_not_empty "$DECISION" \
+      "$WORKFLOW should reuse the checks of a pull request merged level with master, which ran on this exact tree"
+  done
+
+  # Asked the right way round : does the head contain master's previous tip,
+  # and not the reverse, which a pull request with any commit of its own fails
+  assert_contains "$(cat "$MOCK_GH_CALL_LOG")" "compare/$REUSE_PREVIOUS_MASTER_SHA...$REUSE_HEAD_SHA" \
+    "the decision should ask whether the head contains master's tip from before the push"
+
+  teardown_reuse_sandbox
+}
+
+function test_a_merge_of_a_pull_request_behind_master_is_checked_again() {
+  if ! reuse_decision_can_run; then
+    skip_test "no .github/workflows next to the scripts, or no git"
+    return 0
+  fi
+
+  # What branches not being required to be up to date lets through, wherever
+  # the branch updater did not reach : another pull request landed first, so
+  # the tree this merge lands is one no run of this pull request ever saw, and
+  # the suite has to run on master
+  build_reuse_sandbox moved
+
+  local WORKFLOW DECISION
+  for WORKFLOW in "${REUSE_DECIDING_WORKFLOWS[@]}"; do
+    if ! DECISION=$(run_reuse_decision "$WORKFLOW"); then
+      fail "$DECISION"
+      continue
+    fi
+    assert_empty "$DECISION" \
+      "$WORKFLOW should run for real on a merge whose tree differs from the pull request's head"
+  done
+
+  teardown_reuse_sandbox
+}
+
+function test_a_merge_level_with_its_head_only_after_a_revert_is_checked_again() {
+  if ! reuse_decision_can_run; then
+    skip_test "no .github/workflows next to the scripts, or no git"
+    return 0
+  fi
+
+  # The case a tree comparison alone lets through. Another pull request was
+  # merged and then reverted while this one was open, so the merge's tree is
+  # identical to this head's -- while a run of this pull request made between
+  # the two tested it with the reverted commit in it. Only the head containing
+  # master's previous tip rules that out, and here it does not
+  build_reuse_sandbox reverted
+
+  local HEAD_TREE MERGE_TREE
+  HEAD_TREE=$(git -C "$REUSE_CHECKOUT" rev-parse "$REUSE_HEAD_SHA^{tree}")
+  MERGE_TREE=$(git -C "$REUSE_CHECKOUT" rev-parse "$REUSE_MERGE_SHA^{tree}")
+  if ! assert_equals "$HEAD_TREE" "$MERGE_TREE" \
+    "the sandbox should hold a merge whose tree is the head's, or this case proves nothing"; then
+    teardown_reuse_sandbox
+    return 1
+  fi
+
+  local WORKFLOW DECISION
+  for WORKFLOW in "${REUSE_DECIDING_WORKFLOWS[@]}"; do
+    if ! DECISION=$(run_reuse_decision "$WORKFLOW"); then
+      fail "$DECISION"
+      continue
+    fi
+    assert_empty "$DECISION" \
+      "$WORKFLOW should run for real when the pull request's head does not contain master's previous tip, however equal the trees"
+  done
+
+  teardown_reuse_sandbox
 }

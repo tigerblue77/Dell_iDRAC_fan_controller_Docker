@@ -54,24 +54,28 @@ jobs:
         uses: actions/checkout@v7
 
       # Same reasoning as "Tests" (issue #500, fixed by #501) : a push to
-      # master that merged a pull request lands a tree this workflow already
-      # linted clean on that same pull request, so relinting it a second time
-      # right after proves nothing new (issue #502). This is the same
-      # "detect-reuse" job as tests.yml's, minus the workflow-run lookup that
-      # one needs : there is nothing to download and republish here, since the
-      # lint step's own success is the only signal this workflow ever
-      # produces. Every failure mode -- no pull request found yet, a
-      # hand-edited squash, a GitHub API error, an outright failure of this
-      # job itself -- falls through to an empty output, which "shellcheck"
-      # reads as "lint for real"
+      # master that merged a pull request can land a tree this workflow
+      # already linted clean on that same pull request, and relinting it a
+      # second time right after proves nothing new (issue #502). This is the
+      # same "detect-reuse" job as tests.yml's -- whose comment says why a
+      # matching tree is not enough on its own, now that master takes pull
+      # requests that are behind it, and why the head also has to contain
+      # master's tip from before this push -- minus the workflow-run lookup
+      # that one needs : there is nothing to download and republish here,
+      # since the lint step's own success is the only signal this workflow
+      # ever produces. Every failure mode -- no pull request found yet, a
+      # pull request merged behind master, a hand-edited squash, a GitHub API
+      # error, an outright failure of this job itself -- falls through to an
+      # empty output, which "shellcheck" reads as "lint for real"
       - name: Decide whether to reuse a pull request's result
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIOUS_MASTER_SHA: ${{ github.event.before }}
         run: |
           reuse=""
 
-          if [[ "${{ github.event_name }}" == "push" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             pr_number=$(gh api "repos/{owner}/{repo}/commits/${GITHUB_SHA}/pulls" \
               --jq ".[] | select(.merge_commit_sha == \"${GITHUB_SHA}\") | .number" 2>/dev/null \
               | head -n1) || pr_number=""
@@ -89,7 +93,13 @@ jobs:
               merge_tree=$(git rev-parse HEAD^{tree} 2>/dev/null) || merge_tree=""
             fi
 
-            if [[ -n "${head_tree:-}" && "$head_tree" == "${merge_tree:-}" ]]; then
+            # In "A...B", behind_by counts the commits A has and B does not
+            if [[ -n "${head_tree:-}" && "$head_tree" == "${merge_tree:-}" && -n "${PREVIOUS_MASTER_SHA:-}" ]]; then
+              behind_by=$(gh api "repos/{owner}/{repo}/compare/${PREVIOUS_MASTER_SHA}...${pr_head_sha}" \
+                --jq '.behind_by' 2>/dev/null) || behind_by=""
+            fi
+
+            if [[ "${behind_by:-}" == "0" ]]; then
               check_conclusion=$(gh api --paginate "repos/{owner}/{repo}/commits/${pr_head_sha}/check-runs" \
                 --jq '.check_runs[] | select(.name == "Lint the shell scripts") | .conclusion' 2>/dev/null) || check_conclusion=""
             fi

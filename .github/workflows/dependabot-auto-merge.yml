@@ -32,13 +32,18 @@ name: Dependabot auto-merge
 #
 # /!\ The merge is made in GITHUB_TOKEN's name, and a push made with that token
 # starts no workflow : after a Dependabot update lands, "Tests" and
-# "Shellcheck" do not rerun on master and "Auto-update pull request branches"
-# does not rebase the pull requests left behind. The tree was tested on the
-# pull request itself, with branches required to be up to date, so nothing
-# unchecked reaches master ; what waits is the rebase of the others, until the
-# next merge or a manual run of that workflow. Dependabot-triggered runs only
-# see Dependabot secrets, so the App credential that workflow uses would have
-# to be stored there as well to change this -- a choice, not an oversight.
+# "Shellcheck" do not rerun on master, and "Auto-update pull request branches"
+# only reaches the pull requests left behind on its next scheduled run. What the
+# required checks passed is the update merged into master as master stood when
+# they ran, and master does not require a branch to be up to date before it is
+# merged. So when something else reached master in between, the tree that lands
+# is one no check ran on, and it stays that way until the suite next runs over a
+# tree that contains it : on a pull request that workflow brings level with
+# master, on the next merge made by a person, or on a manual run of "Tests".
+# Only a credential other than GITHUB_TOKEN would make the merge start
+# workflows, and Dependabot-triggered runs only see Dependabot secrets, so the
+# App credential that workflow uses would have to be stored there as well -- a
+# choice, not an oversight.
 
 on: pull_request
 

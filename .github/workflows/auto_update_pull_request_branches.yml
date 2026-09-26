@@ -3,12 +3,19 @@
 
 name: Auto-update pull request branches
 
-# "Require branches to be up to date before merging" leaves every other open
-# pull request one commit behind master as soon as one of them is merged, and
-# each of them then needs its "Update branch" button pressed by hand. This
-# workflow presses it for them after every merge, for the pull requests that can
-# be updated without a conflict. The ones that do conflict are left alone :
+# Every merge leaves the other open pull requests behind master, and the checks
+# they show then describe a master that is gone. This workflow presses their
+# "Update branch" button after every merge, for the pull requests that can be
+# updated without a conflict, so what a reviewer reads is the result against
+# the master they would land on. The ones that do conflict are left alone :
 # resolving them is a decision only their author can make.
+#
+# It is best effort, and master does not require it : "Require branches to be
+# up to date before merging" is off in .github/rulesets/master.json, and has to
+# stay off. A pull request this cannot reach -- one that conflicts, one from a
+# fork, a draft, or any of them between a Dependabot merge and the next
+# scheduled run below -- would be blocked by that setting rather than merely
+# behind.
 #
 # GitHub's own answer to this problem is the merge queue, which tests and merges
 # pull requests against an up-to-date master without anyone updating anything.
@@ -76,6 +83,13 @@ name: Auto-update pull request branches
 on:
   push:
     branches: [master]
+  # A Dependabot update is merged in GITHUB_TOKEN's name, and a push made with
+  # that token starts no workflow, this one included (dependabot-auto-merge.yml
+  # says why that stays so). The schedule is what reaches the pull requests
+  # those merges leave behind, within the hour. A run that finds nothing behind
+  # changes nothing, and on a public repository its minutes cost nothing either
+  schedule:
+    - cron: "17 * * * *"
   # Lets the whole set be caught up by hand : after a run failed on a credential
   # that had lapsed, or simply to see the thing work without waiting for a merge
   workflow_dispatch:
@@ -223,8 +237,8 @@ jobs:
 
           updated=0
           for number in "${pull_requests[@]}"; do
-            # GitHub computes mergeability lazily, and the push that started
-            # this run invalidated it for every open pull request : the answer
+            # GitHub computes mergeability lazily, and every push to master
+            # invalidates it for every open pull request : the answer
             # is "null" until the background job that recomputes it is done, so
             # the first read is really what asks the question and the next ones
             # wait for the answer
@@ -249,7 +263,7 @@ jobs:
             fi
 
             if [ "$mergeable" = "null" ]; then
-              echo "::warning::Pull request #$number : GitHub did not say in time whether it can be merged, skipping it. The next push to master will try again."
+              echo "::warning::Pull request #$number : GitHub did not say in time whether it can be merged, skipping it. The next run will try again."
               continue
             fi
 
