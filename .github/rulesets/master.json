@@ -1,17 +1,23 @@
 {
-  "name": "master",
+  "name": "Protect master branch",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": [],
   "conditions": {
     "ref_name": {
+      "exclude": [],
       "include": [
         "~DEFAULT_BRANCH"
-      ],
-      "exclude": []
+      ]
     }
   },
   "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
     {
       "type": "required_status_checks",
       "parameters": {
@@ -19,19 +25,43 @@
         "do_not_enforce_on_create": false,
         "required_status_checks": [
           {
-            "context": "Run the test suite"
+            "context": "Run the test suite",
+            "integration_id": 15368
           },
           {
-            "context": "Run the test suite inside the Docker image"
+            "context": "Run the test suite inside the Docker image",
+            "integration_id": 15368
           },
           {
-            "context": "Lint the shell scripts"
+            "context": "Lint the shell scripts",
+            "integration_id": 15368
           },
           {
-            "context": "Check the commits carry a sign-off"
+            "context": "Check the commits carry a sign-off",
+            "integration_id": 15368
           }
         ]
       }
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": [
+          "merge",
+          "squash",
+          "rebase"
+        ]
+      }
+    },
+    {
+      "type": "required_linear_history"
     }
   ]
 }

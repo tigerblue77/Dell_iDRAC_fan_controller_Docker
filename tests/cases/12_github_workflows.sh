@@ -440,9 +440,18 @@ function test_every_check_the_ruleset_requires_is_a_job_a_pull_request_runs() {
 
 # A re-export made after clicking around the settings page can hand back a file
 # that still parses and no longer gates anything : disabled or in "evaluate"
-# mode, aimed at another branch, opened to a bypass actor, or its one rule
-# swapped for a type that requires nothing. Each of those is checked, so that
-# the file being importable is not mistaken for it being the same gate
+# mode, aimed at another branch, opened to a bypass actor, its rule requiring
+# checks dropped or emptied, or a required approval added. Each of those is
+# checked, so that the file being importable is not mistaken for it being the
+# same gate.
+#
+# The file is the whole of the live ruleset, not only its checks : master is
+# also protected against deletion and force-pushes, takes pull requests only,
+# and keeps a linear history, and a file carrying the checks alone would drop
+# all four the day it was imported in place of the live one (#510). Those four
+# are not asserted here -- they are protections, not what makes the gate pass
+# or fail. The approval count is : one required approval holds every Dependabot
+# update for a person, which is exactly what #506 closed
 function test_the_ruleset_still_gates_master() {
   local -r RULESET="$REPO_ROOT/.github/rulesets/master.json"
   if [ ! -f "$RULESET" ] || ! command -v jq > /dev/null 2>&1; then
@@ -458,10 +467,12 @@ function test_the_ruleset_still_gates_master() {
     "nothing may be excluded from the ruleset's target"
   assert_equals '[]' "$(jq -c '.bypass_actors' "$RULESET")" \
     "the ruleset has no bypass actor"
-  assert_equals '["required_status_checks"]' "$(jq -c '[.rules[].type]' "$RULESET")" \
-    "the ruleset carries exactly the one rule that requires checks"
-  assert_not_equals "0" "$(jq '[.rules[].parameters.required_status_checks[]] | length' "$RULESET")" \
+  assert_equals "1" "$(jq '[.rules[] | select(.type == "required_status_checks")] | length' "$RULESET")" \
+    "the ruleset carries exactly one rule that requires checks"
+  assert_not_equals "0" "$(jq '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]] | length' "$RULESET")" \
     "a ruleset requiring no check lets auto-merge land an update with nothing checked"
+  assert_equals "0" "$(jq '[.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count] | add // 0' "$RULESET")" \
+    "a required approval would hold every Dependabot update for a person, however green"
 }
 
 # "gh pr merge --auto" waits for the required checks ; a bare "gh pr merge" does
