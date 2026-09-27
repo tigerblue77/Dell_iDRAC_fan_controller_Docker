@@ -96,15 +96,17 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   addressed by this at all — its pull request is theirs to assign and theirs to open as a
   draft, which is what the branch updater's filter is there to protect (#457).
 - **Issues and pull requests are written in English, and one that is not is flagged, in
-  every repository of this maintainer** but the private ones of the `Dragnix-Tigerblue77`
-  organisation, where they are written in French while code and commit messages stay in
-  English. Titles, bodies and comments alike. One found breaking it is never let pass
-  silently : the maintainer is told, every time, with the link, and offered a
-  translation, which is made once they agree. This is what a session does, not a demand
-  on whoever reports or contributes : an outside contributor writes in the language they
-  have, and the flag and the offer are the session's
+  every repository of this maintainer** but the private repositories of the
+  `Dragnix-Tigerblue77` organisation, and
+  Tigerblue77-personal/Homelab_Ansible_deployment, where they are written in French while
+  code and commit messages stay in English. Titles, bodies and comments alike. One found
+  breaking it is never let pass silently : the maintainer is told, every time, with the
+  link, and offered a translation, which is made once they agree. This is what a session
+  does, not a demand on whoever reports or contributes : an outside contributor writes in
+  the language they have, and the flag and the offer are the session's
   (Tigerblue77-personal/Homelab_Ansible_deployment#1006, #516 ; pull requests since
-  Tigerblue77-personal/Homelab_Ansible_deployment#1037, #518).
+  Tigerblue77-personal/Homelab_Ansible_deployment#1037, #518 ; that repository in the
+  group since Tigerblue77-personal/Homelab_Ansible_deployment#1046, #520).
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
 - **A new script under the repository root, `.github/` or `.claude/` must be added
