@@ -102,9 +102,13 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   silently : the maintainer is told, every time, with the link, and offered a
   translation, which is made once they agree. This is what a session does, not a demand
   on whoever reports or contributes : an outside contributor writes in the language they
-  have, and the flag and the offer are the session's
-  (Tigerblue77-personal/Homelab_Ansible_deployment#1006, #516 ; pull requests since
-  Tigerblue77-personal/Homelab_Ansible_deployment#1037, #518).
+  have, and the flag and the offer are the session's (#516 ; pull requests since #518).
+- **A public repository never names a private one of this maintainer**, never cites its
+  issues or pull requests and never describes what it holds : not in a file, a commit
+  message, a branch name, an issue, a pull request or a comment. This repository is
+  public. A rule shared with a private repository is carried here with no citation of
+  where it came from ; "the maintainer's private repositories" is as close as a reference
+  gets, and the `Dragnix-Tigerblue77` organisation, being public, may be named (#522).
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
 - **A new script under the repository root, `.github/` or `.claude/` must be added
