@@ -15,7 +15,8 @@ name: Auto-update pull request branches
 # stay off. A pull request this cannot reach -- one that conflicts, one from a
 # fork, a draft, or any of them between a Dependabot merge and the next
 # scheduled run below -- would be blocked by that setting rather than merely
-# behind.
+# behind. So would Dependabot's own, which this leaves to Dependabot on purpose
+# (the loop below says why).
 #
 # GitHub's own answer to this problem is the merge queue, which tests and merges
 # pull requests against an up-to-date master without anyone updating anything.
@@ -245,20 +246,46 @@ jobs:
             mergeable="null"
             head_sha=""
             node_id=""
+            author=""
             for _ in 1 2 3 4 5; do
               if ! pull_request="$(gh api "repos/$REPOSITORY/pulls/$number")"; then
                 break
               fi
+              author="$(jq --raw-output '.user.login' <<< "$pull_request")"
               mergeable="$(jq --raw-output '.mergeable | tostring' <<< "$pull_request")"
               head_sha="$(jq --raw-output '.head.sha' <<< "$pull_request")"
               # The GraphQL mutation addresses the pull request by node ID
               node_id="$(jq --raw-output '.node_id' <<< "$pull_request")"
+              # Skipped below whatever it answers, so not worth waiting for
+              [ "$author" = "dependabot[bot]" ] && break
               [ "$mergeable" != "null" ] && break
               sleep 5
             done
 
             if [ -z "$head_sha" ]; then
               echo "::warning::Pull request #$number could not be read, skipping it."
+              continue
+            fi
+
+            # Dependabot's pull requests are Dependabot's to keep level. A
+            # rebase or a merge pushed by anyone else replaces the commit
+            # Dependabot signed with one it did not, and
+            # dependabot-auto-merge.yml's dependabot/fetch-metadata refuses a
+            # commit whose signature is not Dependabot's : that job then fails
+            # on the new head, and an update whose merge it had not queued yet
+            # never gets it queued. Dependabot, which only resolves the
+            # conflicts of a pull request nobody else has pushed to, would
+            # stop resolving this one's as well.
+            # Left behind, it is blocked by nothing, since master does not
+            # require a branch to be up to date, and Dependabot rebases it
+            # itself once it conflicts. What it gives up -- checks run against
+            # the master it lands on -- is the gap dependabot-auto-merge.yml
+            # already describes for the merges it makes. The identity is the
+            # one the REST API gives and the one that workflow checks,
+            # "dependabot[bot]", rather than whatever spelling gh uses for a
+            # bot in its own output
+            if [ "$author" = "dependabot[bot]" ]; then
+              echo "Pull request #$number is Dependabot's, leaving it to Dependabot."
               continue
             fi
 

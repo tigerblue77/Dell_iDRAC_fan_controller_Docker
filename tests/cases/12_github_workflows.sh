@@ -457,8 +457,9 @@ function test_every_check_the_ruleset_requires_is_a_job_a_pull_request_runs() {
 # merge leaves every other open pull request blocked until its branch is
 # updated, and what updates them is best effort : "Auto-update pull request
 # branches" leaves alone the ones that conflict, cannot write to a fork, skips
-# drafts, and only reaches what a Dependabot merge left behind on its next
-# scheduled run, a merge made in GITHUB_TOKEN's name starting no workflow.
+# drafts, leaves Dependabot's to Dependabot, and only reaches what a Dependabot
+# merge left behind on its next scheduled run, a merge made in GITHUB_TOKEN's
+# name starting no workflow.
 # Each of those would turn from behind into blocked. What the setting bought --
 # a pull request tested against the master it lands on -- is what that
 # workflow gives wherever it can, and is paid for after the merge elsewhere,
@@ -506,6 +507,110 @@ function test_dependabot_updates_are_only_ever_queued_never_merged_directly() {
   assert_not_empty "$MERGES" "the workflow is expected to queue the merge with gh pr merge"
   assert_empty "$(grep -v -- '--auto' <<< "$MERGES")" \
     "every gh pr merge in the auto-merge workflow has to carry --auto, so that it waits for the required checks"
+}
+
+# "Auto-update pull request branches" leaves Dependabot's pull requests to
+# Dependabot. A rebase pushed by anyone else replaces the commit Dependabot
+# signed, and dependabot/fetch-metadata in dependabot-auto-merge.yml refuses the
+# result : "Dependabot's commit signature is not verified, refusing to proceed",
+# which is what every Dependabot pull request of WD_MyPassport_Linux_unlocker
+# answered after that repository's copy of the updater first reached them (#514).
+#
+# Run here as written, over two pull requests equally far behind master, against
+# a stubbed gh that answers the calls the step makes and records them : the one
+# Dependabot opened must see no update at all, and the other one must still get
+# its rebase, so that a filter which skipped everything would fail this as well
+function test_the_branch_updater_leaves_dependabot_pull_requests_to_dependabot() {
+  local -r WORKFLOW_FILE="$REPO_ROOT/.github/workflows/auto_update_pull_request_branches.yml"
+  if [ ! -f "$WORKFLOW_FILE" ] || ! command -v jq > /dev/null 2>&1; then
+    skip_test "no .github/workflows next to the scripts, or no jq for the step to read its answers with"
+    return 0
+  fi
+
+  local -r SANDBOX="$TEST_TEMPORARY_DIRECTORY/branch_updater"
+  rm -rf "$SANDBOX"
+  mkdir -p "$SANDBOX/bin" "$SANDBOX/blocks"
+
+  local RUN_LINE
+  RUN_LINE=$(awk '
+    index($0, "- name: Rebase every conflict-free pull request") { found = 1 }
+    found && /^[ \t-]*run:/ { print FNR; exit }
+  ' "$WORKFLOW_FILE")
+
+  local SCRIPT
+  SCRIPT=$(extract_workflow_run_blocks "$WORKFLOW_FILE" "$SANDBOX/blocks" |
+    awk -F '\t' -v LINE="$RUN_LINE" '$1 == LINE { print $2 }')
+  if [ -z "$RUN_LINE" ] || [ ! -f "$SCRIPT" ]; then
+    fail "no \"Rebase every conflict-free pull request\" step with a run: block in the branch updater"
+    return 1
+  fi
+
+  cat > "$SANDBOX/bin/gh" << 'STUB'
+#!/bin/bash
+# Pull request 11 is Dependabot's and 12 a person's, both mergeable and both two
+# commits behind master. The --jq filter is not applied : each answer is already
+# what that filter extracts. Anything else is refused, so a call the stub was
+# not written for fails loudly instead of answering empty
+set -uo pipefail
+
+printf '%s\n' "$*" >> "$MOCK_GH_CALL_LOG"
+
+case "$1 ${2:-}" in
+  "pr list")
+    printf '[{"number":11,"isDraft":false},{"number":12,"isDraft":false}]\n'
+    ;;
+  "api repos/example/repository/commits/master")
+    printf 'master-sha\n'
+    ;;
+  "api repos/example/repository/pulls/11")
+    printf '{"user":{"login":"dependabot[bot]"},"mergeable":true,"head":{"sha":"dependabot-sha"},"node_id":"DEPENDABOT_NODE"}\n'
+    ;;
+  "api repos/example/repository/pulls/12")
+    printf '{"user":{"login":"tigerblue77"},"mergeable":true,"head":{"sha":"person-sha"},"node_id":"PERSON_NODE"}\n'
+    ;;
+  "api repos/example/repository/compare/"*)
+    printf '2\n'
+    ;;
+  "api graphql")
+    printf '{"data":{"updatePullRequestBranch":{"pullRequest":{"headRefOid":"rebased-sha"}}}}\n'
+    ;;
+  *)
+    printf 'unexpected gh call : %s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+STUB
+  chmod 0755 "$SANDBOX/bin/gh"
+
+  local -r CALL_LOG="$SANDBOX/gh_calls.log"
+  : > "$CALL_LOG"
+
+  local OUTPUT
+  if ! OUTPUT=$(
+    env MOCK_GH_CALL_LOG="$CALL_LOG" \
+      GH_TOKEN=unused \
+      UPDATING_AS="the GitHub App" \
+      REPOSITORY=example/repository \
+      FALL_BACK_TO_MERGE=true \
+      GITHUB_STEP_SUMMARY="$SANDBOX/summary" \
+      PATH="$SANDBOX/bin:$PATH" \
+      bash "$SCRIPT" 2>&1
+  ); then
+    fail "the branch updater's step failed against the stubbed API" "$OUTPUT"
+    return 1
+  fi
+
+  local -r CALLS=$(cat "$CALL_LOG")
+  assert_not_contains "$CALLS" "DEPENDABOT_NODE" \
+    "the branch updater must never push an update onto a Dependabot pull request"
+  assert_not_contains "$CALLS" "dependabot-sha" \
+    "a Dependabot pull request is left alone before anything is measured on it"
+  assert_contains "$CALLS" "pullRequestId=PERSON_NODE" \
+    "the other pull request, just as far behind, still has to be updated"
+  assert_contains "$OUTPUT" "Pull request #11 is Dependabot's" \
+    "the log should say why the Dependabot pull request was skipped"
+  assert_equals "Updated 1 pull request(s)." "$(cat "$SANDBOX/summary")" \
+    "only the person's pull request is counted as updated"
 }
 
 # The "detect-reuse" jobs of "Tests" and "Shellcheck" decide, on a push to
