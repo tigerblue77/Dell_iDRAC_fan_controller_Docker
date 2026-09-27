@@ -32,14 +32,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # A push to master that merged a pull request lands a tree this workflow
-      # already ran to green on that same pull request : branch protection
-      # requires it, and "Auto-update pull request branches" keeps every open
-      # pull request rebased onto master, so by the time it is merged its base
-      # is already master's current tip. Rebuilding the Docker image and
-      # rerunning the whole suite a second time on that same tree proves
-      # nothing new -- issue #500 measured it as a wasted rerun of "Tests" on
-      # every single merge.
+      # A push to master that merged a pull request CAN land a tree this
+      # workflow already ran to green on that same pull request, and then
+      # rebuilding the Docker image and rerunning the whole suite a second time
+      # on it proves nothing new -- issue #500 measured it as a wasted rerun of
+      # "Tests" on every merge.
+      #
+      # Can, not does : master does not require a pull request to be up to
+      # date before it is merged (.github/rulesets/master.json), and "Auto-update
+      # pull request branches" keeps them level only as far as it can reach, so
+      # one can be merged behind master, and what lands then is its changes on
+      # top of commits its checks never saw. A pull request's run tests it merged
+      # into master as master stood WHEN THAT RUN STARTED, so its results are
+      # this commit's only if its head already contains master's tip from
+      # before this push : master is never rewritten, so every master the run
+      # could have seen is an ancestor of that tip, and a head containing it
+      # was tested as itself. Matching trees alone do not prove it : a commit
+      # that reached master while the pull request was open and was reverted
+      # before this merge leaves the head's tree identical to this commit's,
+      # while a run made before the revert tested the head with that commit in
+      # it.
       #
       # This looks for that situation and, only when every check below holds,
       # hands "publish-test-results" the run ID to copy results from instead of
@@ -51,24 +63,38 @@ jobs:
       #     (a content comparison, not a commit comparison, so it survives
       #     whichever merge strategy -- squash, merge or rebase -- produced
       #     this commit)
+      #   - that head contains master's tip from before this push, for the
+      #     reason above
       #   - the "Test results" check already passed on that head
       #   - a completed, successful "Tests" run for that head still has its
       #     artifacts
+      #
+      # A pull request merged behind master therefore runs the suite for real
+      # here, and that run is where two pull requests that pass on their own
+      # and fail together are caught -- after the merge rather than before it,
+      # which is the price of not requiring branches to be up to date. A
+      # Dependabot merge is the exception : it starts no workflow at all, see
+      # dependabot-auto-merge.yml.
       #
       # Every failure mode here -- no pull request found yet (GitHub can take
       # a moment to record merge_commit_sha after a squash or rebase merge), a
       # squash edited by hand, an expired artifact, a GitHub API error -- falls
       # through to an empty output. "test" and "test-in-docker-image" read that
       # as "run for real", and so does an outright failure of this job itself :
-      # nothing here can make them skip without a positive match
+      # nothing here can make them skip without a positive match.
+      #
+      # The event name and master's previous tip reach the script through its
+      # environment rather than as expressions written into it, so that
+      # tests/cases/12_github_workflows.sh can run it as it stands
       - name: Decide whether to reuse a pull request's results
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIOUS_MASTER_SHA: ${{ github.event.before }}
         run: |
           reuse_run_id=""
 
-          if [[ "${{ github.event_name }}" == "push" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             pr_number=$(gh api "repos/{owner}/{repo}/commits/${GITHUB_SHA}/pulls" \
               --jq ".[] | select(.merge_commit_sha == \"${GITHUB_SHA}\") | .number" 2>/dev/null \
               | head -n1) || pr_number=""
@@ -86,7 +112,13 @@ jobs:
               merge_tree=$(git rev-parse HEAD^{tree} 2>/dev/null) || merge_tree=""
             fi
 
-            if [[ -n "${head_tree:-}" && "$head_tree" == "${merge_tree:-}" ]]; then
+            # In "A...B", behind_by counts the commits A has and B does not
+            if [[ -n "${head_tree:-}" && "$head_tree" == "${merge_tree:-}" && -n "${PREVIOUS_MASTER_SHA:-}" ]]; then
+              behind_by=$(gh api "repos/{owner}/{repo}/compare/${PREVIOUS_MASTER_SHA}...${pr_head_sha}" \
+                --jq '.behind_by' 2>/dev/null) || behind_by=""
+            fi
+
+            if [[ "${behind_by:-}" == "0" ]]; then
               check_conclusion=$(gh api --paginate "repos/{owner}/{repo}/commits/${pr_head_sha}/check-runs" \
                 --jq '.check_runs[] | select(.name == "Test results") | .conclusion' 2>/dev/null) || check_conclusion=""
             fi

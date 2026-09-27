@@ -81,10 +81,10 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   Both are fields on the call that creates the thing, and the session that would come back
   to repair them afterwards has ended by then. Draft is the half with a price on it :
   `.github/workflows/auto_update_pull_request_branches.yml` skips drafts deliberately, so a
-  pull request opened as one is the pull request "Require branches to be up to date before
-  merging" leaves further behind `master` at every merge, owing a hand-pressed *Update
-  branch* at the moment somebody wanted to merge it — and it has to be converted before it
-  can be merged at all, so the state buys nothing here. Unassigned is quieter and costs the
+  pull request opened as one is the one pull request `master`'s moves never reach : it falls
+  further behind at every merge, its checks go on describing a `master` that is gone, and it
+  has to be converted by hand before it can be merged at all, at the moment somebody wanted
+  to merge it — so the state buys nothing here. Unassigned is quieter and costs the
   same way : the maintainer's *Assigned* list is where the work is scheduled, and what is
   not on it has to be remembered instead. A contributor's own draft is untouched by this —
   the rule is what a session opens, not what that workflow does with a draft it finds.
@@ -114,6 +114,15 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   in its own workflow instead ; the rule is the same. What gets through is decided by the
   suite, not by a guess about which ecosystem is risky : majors wait for a human, and so
   does anything red.
+- **Pull requests are kept level with the default branch, and never required to be, in
+  every repository of this maintainer.** "Require branches to be up to date before
+  merging" stays off : whatever cannot be updated automatically — a conflict, a fork, a
+  draft, and every pull request after a Dependabot merge, which starts no workflow — would
+  be blocked rather than behind. `.github/workflows/auto_update_pull_request_branches.yml`
+  does the updating, after every merge and hourly, as best effort. A public repository
+  runs it, its minutes costing nothing ; a private one carries the same file switched off
+  behind the `PULL_REQUESTS_UPDATE_ENABLED` variable, until it moves to the organisation
+  whose runners will run it (#512).
 - **Nothing is assumed : an ambiguity is a question, not a judgement call.** Where two
   readings of an instruction would lead to materially different work, the question is put
   before the work starts, even though asking costs a round trip — because guessing costs

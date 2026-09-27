@@ -990,8 +990,8 @@ function test_the_workflow_claude_md_gives_as_its_reason_still_skips_drafts() {
 
   # CLAUDE.md tells a session never to open a draft, and the reason it gives is this
   # workflow : drafts are filtered out of what it updates, so a draft opened here would be
-  # the one pull request master's moves never reach, falling behind at every merge under
-  # "Require branches to be up to date before merging" (#448).
+  # the one pull request master's moves never reach, falling further behind at every merge
+  # while its checks go on describing a master that is gone (#448).
   #
   # Two documents, one fact, and the rule is only worth its line while the fact holds. The
   # filter is right for what it was written for -- a contributor's work in progress, often

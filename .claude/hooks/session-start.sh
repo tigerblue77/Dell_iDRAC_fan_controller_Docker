@@ -160,9 +160,8 @@ if "$IS_THIS_REPOSITORY"; then
   # Draft is the one with a price on it.
   # .github/workflows/auto_update_pull_request_branches.yml skips drafts deliberately, so a
   # draft opened here is the single pull request master's moves never reach : it falls behind
-  # at every merge and owes a hand-pressed "Update branch" at the moment somebody wanted to
-  # merge it, having bought nothing, since it has to be converted before it can be merged at
-  # all. Unassigned is quieter and costs the same way, one list further : what is not on the
+  # at every merge, its checks describe a master that is gone, and it has to be converted by
+  # hand at the moment somebody wanted to merge it, having bought nothing. Unassigned is quieter and costs the same way, one list further : what is not on the
   # maintainer's is not scheduled, it is remembered instead.
   #
   # Said at the start of every session rather than left in CLAUDE.md alone, for the reason
