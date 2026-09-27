@@ -513,8 +513,8 @@ function test_dependabot_updates_are_only_ever_queued_never_merged_directly() {
 # Dependabot. A rebase pushed by anyone else replaces the commit Dependabot
 # signed, and dependabot/fetch-metadata in dependabot-auto-merge.yml refuses the
 # result : "Dependabot's commit signature is not verified, refusing to proceed",
-# which is what every Dependabot pull request of WD_MyPassport_Linux_unlocker
-# answered after that repository's copy of the updater first reached them (#514).
+# which is what every Dependabot pull request answers once such a rebase has
+# reached it (#514).
 #
 # Run here as written, over two pull requests equally far behind master, against
 # a stubbed gh that answers the calls the step makes and records them : the one
