@@ -95,6 +95,14 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   before it says any of it, and says nothing on a fork. A contributor's session is not
   addressed by this at all — its pull request is theirs to assign and theirs to open as a
   draft, which is what the branch updater's filter is there to protect (#457).
+- **Issues are written in English, and one that is not is flagged, in every repository of
+  this maintainer** but the private ones of the `Dragnix-Tigerblue77` organisation, where
+  another language is fine. Titles, bodies and comments alike. An issue found breaking it
+  is never let pass silently : the maintainer is told, every time, with the link, and
+  offered a translation, which is made once they agree. This is what a session does, not
+  a demand on whoever reports : an outside contributor writes in the language they have,
+  and the flag and the offer are the session's
+  (Tigerblue77-personal/Homelab_Ansible_deployment#1006, #516).
 - **Every new shell script carries the two SPDX lines** right after the shebang, test
   cases, mocks and helpers included. Copy them from any existing script.
 - **A new script under the repository root, `.github/` or `.claude/` must be added
