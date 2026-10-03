@@ -458,8 +458,8 @@ function test_every_check_the_ruleset_requires_is_a_job_a_pull_request_runs() {
 # updated, and what updates them is best effort : "Auto-update pull request
 # branches" leaves alone the ones that conflict, cannot write to a fork, skips
 # drafts, leaves Dependabot's to Dependabot, and only reaches what a Dependabot
-# merge left behind on its next scheduled run, a merge made in GITHUB_TOKEN's
-# name starting no workflow.
+# merge left behind after the next push to master made any other way, a merge
+# made in GITHUB_TOKEN's name starting no workflow, and so no wait.
 # Each of those would turn from behind into blocked. What the setting bought --
 # a pull request tested against the master it lands on -- is what that
 # workflow gives wherever it can, and is paid for after the merge elsewhere,
@@ -488,7 +488,7 @@ function test_the_ruleset_still_gates_master() {
   assert_equals "0" "$(jq '[.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count] | add // 0' "$RULESET")" \
     "a required approval would hold every Dependabot update for a person, however green"
   assert_equals "false" "$(jq '[.rules[] | select(.type == "required_status_checks") | .parameters.strict_required_status_checks_policy] | any' "$RULESET")" \
-    "requiring branches to be up to date would block every pull request the branch updater cannot reach, Dependabot's merges leaving all of them behind until its next scheduled run"
+    "requiring branches to be up to date would block every pull request the branch updater cannot reach, Dependabot's merges leaving all of them behind until the next push to master made any other way"
 }
 
 # "gh pr merge --auto" waits for the required checks ; a bare "gh pr merge" does
@@ -519,8 +519,16 @@ function test_dependabot_updates_are_only_ever_queued_never_merged_directly() {
 # Run here as written, over two pull requests equally far behind master, against
 # a stubbed gh that answers the calls the step makes and records them : the one
 # Dependabot opened must see no update at all, and the other one must still get
-# its rebase, so that a filter which skipped everything would fail this as well
-function test_the_branch_updater_leaves_dependabot_pull_requests_to_dependabot() {
+# its rebase, so that a filter which skipped everything would fail this as well.
+#
+# The same run covers the comment that announces a conflict (#527), over two
+# more pull requests that conflict with master. The one with no comment yet gets
+# exactly one, carrying the marker a later pass looks for ; the one already
+# carrying it gets none, which is how a conflict is announced once however many
+# passes see it. And the pull request that is conflict-free again has the
+# comment removed, the comment beside it that is not the updater's left where
+# it is, and Dependabot's pull request never reaches the comment API at all
+function test_the_branch_updater_leaves_dependabot_pull_requests_to_dependabot_and_announces_each_conflict_once() {
   local -r WORKFLOW_FILE="$REPO_ROOT/.github/workflows/auto_update_pull_request_branches.yml"
   if [ ! -f "$WORKFLOW_FILE" ] || ! command -v jq > /dev/null 2>&1; then
     skip_test "no .github/workflows next to the scripts, or no jq for the step to read its answers with"
@@ -548,16 +556,19 @@ function test_the_branch_updater_leaves_dependabot_pull_requests_to_dependabot()
   cat > "$SANDBOX/bin/gh" << 'STUB'
 #!/bin/bash
 # Pull request 11 is Dependabot's and 12 a person's, both mergeable and both two
-# commits behind master. The --jq filter is not applied : each answer is already
-# what that filter extracts. Anything else is refused, so a call the stub was
-# not written for fails loudly instead of answering empty
+# commits behind master. 12 carries a comment of the updater's from an earlier
+# conflict, which is over, beside a comment that is not. 13 and 14 conflict with
+# master : 13 has never been announced, 14 already has been. The --jq filter is
+# not applied : each answer is already what that filter extracts. Anything else
+# is refused, so a call the stub was not written for fails loudly instead of
+# answering empty
 set -uo pipefail
 
 printf '%s\n' "$*" >> "$MOCK_GH_CALL_LOG"
 
 case "$1 ${2:-}" in
   "pr list")
-    printf '[{"number":11,"isDraft":false},{"number":12,"isDraft":false}]\n'
+    printf '[{"number":11,"isDraft":false},{"number":12,"isDraft":false},{"number":13,"isDraft":false},{"number":14,"isDraft":false}]\n'
     ;;
   "api repos/example/repository/commits/master")
     printf 'master-sha\n'
@@ -568,11 +579,39 @@ case "$1 ${2:-}" in
   "api repos/example/repository/pulls/12")
     printf '{"user":{"login":"tigerblue77"},"mergeable":true,"head":{"sha":"person-sha"},"node_id":"PERSON_NODE"}\n'
     ;;
+  "api repos/example/repository/pulls/13")
+    printf '{"user":{"login":"tigerblue77"},"mergeable":false,"head":{"sha":"unannounced-sha"},"node_id":"UNANNOUNCED_NODE"}\n'
+    ;;
+  "api repos/example/repository/pulls/14")
+    printf '{"user":{"login":"tigerblue77"},"mergeable":false,"head":{"sha":"announced-sha"},"node_id":"ANNOUNCED_NODE"}\n'
+    ;;
   "api repos/example/repository/compare/"*)
     printf '2\n'
     ;;
   "api graphql")
     printf '{"data":{"updatePullRequestBranch":{"pullRequest":{"headRefOid":"rebased-sha"}}}}\n'
+    ;;
+  "api repos/example/repository/issues/"*"/comments")
+    # Writing a comment is the call that carries a body, and reading them is
+    # the one that does not
+    if [[ "$*" == *"--raw-field body="* ]]; then
+      printf '{}\n'
+      exit 0
+    fi
+    case "$2" in
+      */issues/12/comments)
+        printf '[{"id":1201,"body":"<!-- auto-update-pull-request-branches: conflict -->\\n\\nold"},{"id":1202,"body":"a comment from a person"}]\n'
+        ;;
+      */issues/14/comments)
+        printf '[{"id":1401,"body":"<!-- auto-update-pull-request-branches: conflict -->\\n\\nold"}]\n'
+        ;;
+      *)
+        printf '[]\n'
+        ;;
+    esac
+    ;;
+  "api --method")
+    # Deleting a comment answers nothing the step reads
     ;;
   *)
     printf 'unexpected gh call : %s\n' "$*" >&2
@@ -609,8 +648,35 @@ STUB
     "the other pull request, just as far behind, still has to be updated"
   assert_contains "$OUTPUT" "Pull request #11 is Dependabot's" \
     "the log should say why the Dependabot pull request was skipped"
-  assert_equals "Updated 1 pull request(s)." "$(cat "$SANDBOX/summary")" \
-    "only the person's pull request is counted as updated"
+  assert_not_contains "$CALLS" "issues/11/" \
+    "a Dependabot pull request never reaches the comment API, whatever its mergeability"
+
+  # The conflict that has never been announced : one comment, with the marker and
+  # the text, and no other pull request gets one
+  assert_contains "$CALLS" "issues/13/comments --raw-field body=<!-- auto-update-pull-request-branches: conflict -->" \
+    "a pull request that conflicts with master has to be told so, behind the marker a later pass looks for"
+  assert_contains "$CALLS" 'This pull request conflicts with `master`, so the branch updater cannot bring it level on its own' \
+    "the comment has to say what is wrong and that the updater cannot mend it"
+  assert_equals "1" "$(grep -c -- '--raw-field body=' "$CALL_LOG")" \
+    "exactly one comment is written : the other conflict already carries one, and the rest have none"
+
+  # The one announced on an earlier pass is neither written nor deleted again,
+  # since its conflict is still there
+  assert_not_contains "$CALLS" "issues/14/comments --raw-field" \
+    "a conflict already announced is not announced twice"
+  assert_not_contains "$CALLS" "issues/comments/1401" \
+    "the comment of a conflict that is still there is not deleted"
+  assert_contains "$OUTPUT" "Pull request #14 conflicts with master, leaving it to its author." \
+    "the log should still say that the updater left the conflict to its author"
+
+  # The pull request conflict-free again loses the updater's comment and only that
+  assert_contains "$CALLS" "--method DELETE repos/example/repository/issues/comments/1201" \
+    "the comment announcing a conflict that is over has to go, so the next one is announced afresh"
+  assert_not_contains "$CALLS" "issues/comments/1202" \
+    "a comment that is not the updater's is never deleted"
+
+  assert_equals "Updated 1 pull request(s), announced 1 conflict(s)." "$(cat "$SANDBOX/summary")" \
+    "only the person's pull request is counted as updated, and only the unannounced conflict as announced"
 }
 
 # The "detect-reuse" jobs of "Tests" and "Shellcheck" decide, on a push to
