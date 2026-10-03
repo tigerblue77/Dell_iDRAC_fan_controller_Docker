@@ -33,9 +33,10 @@ name: Dependabot auto-merge
 # /!\ The merge is made in GITHUB_TOKEN's name, and a push made with that token
 # starts no workflow : after a Dependabot update lands, "Tests" and
 # "Shellcheck" do not rerun on master, and "Auto-update pull request branches"
-# only reaches the pull requests left behind on its next scheduled run. What the
-# required checks passed is the update merged into master as master stood when
-# they ran, and master does not require a branch to be up to date before it is
+# starts no wait either, so it only reaches the pull requests left behind after
+# the next push to master made any other way. What the required checks passed
+# is the update merged into master as master stood when they ran, and master
+# does not require a branch to be up to date before it is
 # merged. So when something else reached master in between, the tree that lands
 # is one no check ran on, and it stays that way until the suite next runs over a
 # tree that contains it : on a pull request that workflow brings level with

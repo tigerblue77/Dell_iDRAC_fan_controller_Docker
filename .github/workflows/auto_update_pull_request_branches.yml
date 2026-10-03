@@ -4,19 +4,53 @@
 name: Auto-update pull request branches
 
 # Every merge leaves the other open pull requests behind master, and the checks
-# they show then describe a master that is gone. This workflow presses their
-# "Update branch" button after every merge, for the pull requests that can be
-# updated without a conflict, so what a reviewer reads is the result against
-# the master they would land on. The ones that do conflict are left alone :
-# resolving them is a decision only their author can make.
+# they show then describe a master that is gone. This workflow brings them back
+# level, for the pull requests that can be updated without a conflict, so what
+# a reviewer reads is the result against the master they would land on. It does
+# so once master has been quiet for an hour rather than after every merge, so a
+# series of merges is followed by one pass instead of one pass per merge, and
+# every pass is one notification email per pull request it updates.
+#
+# The ones that do conflict are left alone, and each says so once in a comment
+# on the pull request, which is the email that asks for a manual rebase :
+# resolving a conflict is a decision only their author can make. The comment
+# carries a marker, so that a later pass finds it and does not write it again,
+# and the pass that finds the pull request conflict-free again deletes it, so
+# that the next conflict is announced in turn. It has to be written by the
+# GitHub App : GitHub does not email anyone about their own activity by default,
+# so a comment written by the personal access token below, which is the
+# maintainer's own identity, is not expected to reach their inbox.
+#
+# The quiet hour is a sleep. Every push to master starts a run, and the first
+# thing a run does is wait for QUIET_PERIOD_MINUTES ; a run still asleep when the
+# next push arrives is cancelled by it (the concurrency group below), and the
+# new run starts its own wait. Only the run that follows the last push of a
+# series ever wakes up, one quiet period after it. An hourly schedule used to do
+# this job less well : GitHub runs scheduled workflows on a best-effort basis,
+# and this one was measured starting every five and a half hours on average
+# instead of hourly (#527). What the sleep costs instead :
+#
+#  * A merge made in GITHUB_TOKEN's name -- a Dependabot update, queued by
+#    dependabot-auto-merge.yml, is one -- starts no workflow, so it starts no
+#    wait either (that file says why this stays so). The pull requests it
+#    leaves behind are brought level after the next push to master made any
+#    other way. Nothing is blocked meanwhile, since master does not require a
+#    branch to be up to date.
+#  * The job holds its runner while it sleeps : on a hosted runner of a public
+#    repository the minutes cost nothing, but one runner is occupied for the
+#    whole quiet period.
+#  * A run cancelled by the next push ends as "cancelled" in the Actions tab.
+#    GitHub's documentation says a notification is sent for the cancelled runs
+#    of a workflow one triggered, and does not say whether the "only notify for
+#    failed workflows" setting leaves them out.
 #
 # It is best effort, and master does not require it : "Require branches to be
 # up to date before merging" is off in .github/rulesets/master.json, and has to
 # stay off. A pull request this cannot reach -- one that conflicts, one from a
-# fork, a draft, or any of them between a Dependabot merge and the next
-# scheduled run below -- would be blocked by that setting rather than merely
-# behind. So would Dependabot's own, which this leaves to Dependabot on purpose
-# (the loop below says why).
+# fork, a draft, or any of them between a Dependabot merge and the next push to
+# master -- would be blocked by that setting rather than merely behind. So would
+# Dependabot's own, which this leaves to Dependabot on purpose (the loop below
+# says why).
 #
 # GitHub's own answer to this problem is the merge queue, which tests and merges
 # pull requests against an up-to-date master without anyone updating anything.
@@ -82,37 +116,51 @@ name: Auto-update pull request branches
 # has to be renewed by hand before it does
 
 on:
+  # Starts the wait the header describes, which the next push cancels
   push:
     branches: [master]
-  # A Dependabot update is merged in GITHUB_TOKEN's name, and a push made with
-  # that token starts no workflow, this one included (dependabot-auto-merge.yml
-  # says why that stays so). The schedule is what reaches the pull requests
-  # those merges leave behind, within the hour. A run that finds nothing behind
-  # changes nothing, and on a public repository its minutes cost nothing either
-  schedule:
-    - cron: "17 * * * *"
-  # Lets the whole set be caught up by hand : after a run failed on a credential
-  # that had lapsed, or simply to see the thing work without waiting for a merge
+  # Lets the whole set be caught up by hand, without the wait : after a run
+  # failed on a credential that had lapsed, after merges that started no
+  # workflow, or simply to see the thing work without waiting for a merge
   workflow_dispatch:
 
 # Everything is done with the credential above, so the token of the run itself
 # needs nothing at all
 permissions: {}
 
-# Two merges landing one after the other would otherwise walk the same list of
-# pull requests at the same time, the second run racing the updates the first
-# one is still pushing. Queueing the runs rather than cancelling them is what
-# makes the last one see the final state of master
+# A newer run cancels whatever is running or waiting in the group, and that is
+# what makes the wait a wait for a quiet master : the run asleep is cancelled by
+# the next push, and a pass that is still walking the pull requests when master
+# moves again is cancelled too, since it is measuring against a master that is
+# gone. The updates it had already pushed stand, and the next run does the rest
+# after its own wait. A run started by hand joins the group like any other : it
+# cancels a run that is waiting, and does its pass at once
 concurrency:
   group: auto-update-pull-request-branches
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   update-pull-request-branches:
     name: Update the pull requests master left behind
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The wait and then the pass, so it has to stay above QUIET_PERIOD_MINUTES by
+    # as much as a pass may take. A hosted job is cut off at six hours
+    timeout-minutes: 75
+    env:
+      # How long master must have gone without a push before the pull requests
+      # are touched
+      QUIET_PERIOD_MINUTES: "60"
     steps:
+      # Before the token below is minted, which lives an hour : this step takes
+      # as long as the quiet period, and a token minted ahead of it could have
+      # lapsed by the time it is wanted. Skipped for a run started by hand,
+      # which is there to act now
+      - name: Wait for master to stay quiet
+        if: github.event_name == 'push'
+        run: |
+          echo "Waiting ${QUIET_PERIOD_MINUTES} minute(s) for master to stay quiet ; a push to master before then cancels this run and starts the wait over."
+          sleep "$((QUIET_PERIOD_MINUTES * 60))"
+
       # Only runs once the App route is configured : without the variable there
       # is nothing to mint from, the step is skipped, and the token below falls
       # back to the personal access token. Setting the variable is the whole
@@ -185,6 +233,60 @@ jobs:
             fi
 
             return 0
+          }
+
+          # The comment that asks a pull request's author for a manual rebase
+          # when it conflicts with master. The marker is what a later pass looks
+          # for : it is why a conflict is announced once however many passes see
+          # it, and how the comment is found and removed once the pull request
+          # is conflict-free again. None of it ever fails the run : a comment
+          # that cannot be read, written or deleted is a warning, because the
+          # pull requests still have to be walked. The text is in English, like
+          # the pull requests of this repository
+          conflict_marker="<!-- auto-update-pull-request-branches: conflict -->"
+          conflict_comment="$conflict_marker"$'\n\n'"This pull request conflicts with \`master\`, so the branch updater cannot bring it level on its own: it has to be rebased (or \`master\` merged into it) by hand. This comment is written once per conflict, and it disappears once the conflict is resolved."
+          announced=0
+
+          # The ids of the comments carrying the marker. --paginate prints one
+          # JSON array per page, which jq reads as a stream
+          conflict_comment_ids() {
+            gh api "repos/$REPOSITORY/issues/$1/comments" --paginate |
+              jq --raw-output --arg marker "$conflict_marker" '.[] | select(.body | contains($marker)) | .id'
+          }
+
+          announce_conflict() {
+            local number="$1" existing
+
+            if ! existing="$(conflict_comment_ids "$number")"; then
+              echo "::warning::Pull request #$number conflicts with master, but its comments could not be read, so the conflict is not announced there."
+              return 0
+            fi
+
+            if [ -n "$existing" ]; then
+              return 0
+            fi
+
+            if gh api "repos/$REPOSITORY/issues/$number/comments" --raw-field "body=$conflict_comment" > /dev/null; then
+              announced=$((announced + 1))
+            else
+              echo "::warning::Pull request #$number conflicts with master, but the comment announcing it could not be written."
+            fi
+          }
+
+          forget_conflict() {
+            local number="$1" existing comment_id
+
+            # Nothing to forget is the usual case, and a failed read is not
+            # worth a warning on a pull request that has no conflict
+            if ! existing="$(conflict_comment_ids "$number")"; then
+              return 0
+            fi
+
+            for comment_id in $existing; do
+              if ! gh api --method DELETE "repos/$REPOSITORY/issues/comments/$comment_id" > /dev/null; then
+                echo "::warning::Pull request #$number is conflict-free again, but the comment announcing its conflict could not be deleted."
+              fi
+            done
           }
 
           if [ -z "$GH_TOKEN" ]; then
@@ -296,8 +398,13 @@ jobs:
 
             if [ "$mergeable" != "true" ]; then
               echo "Pull request #$number conflicts with master, leaving it to its author."
+              announce_conflict "$number"
               continue
             fi
+
+            # A conflict announced on an earlier pass is over, and the next one
+            # has to be announced afresh
+            forget_conflict "$number"
 
             # Comparing by SHA is what lets this work for a pull request opened
             # from a fork : its branch names nothing in this repository, but its
@@ -344,4 +451,4 @@ jobs:
             fi
           done
 
-          echo "Updated $updated pull request(s)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Updated $updated pull request(s), announced $announced conflict(s)." >> "$GITHUB_STEP_SUMMARY"
