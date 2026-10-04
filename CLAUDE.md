@@ -176,8 +176,10 @@ both checks, but it only gates once it has been imported under Settings > Rules.
 - **A checkout does not keep the job token.** By default the checkout action keeps the
   job's token after it has finished, usable through git by every later step of the job.
   Every checkout in `.github/workflows/` therefore sets `persist-credentials: false`,
-  so that no later step can use or read the credential the checkout would have left : a
-  step that wants the token is given it by name, where a reader of the workflow sees it.
+  so that the credential it set up is removed right after its fetch and no later step
+  inherits it. That is all it does, `secrets.GITHUB_TOKEN` stays usable by a step that
+  names it : a step that wants the token is given it by name, where a reader of the
+  workflow sees it.
   That includes the `detect-reuse` job of `.github/workflows/tests.yml` and of
   `.github/workflows/shellcheck.yml`, whose decision step fetches a pull request's head
   ref without it. That works because the repository is public, and it costs nothing when
