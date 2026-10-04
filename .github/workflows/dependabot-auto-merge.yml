@@ -9,6 +9,14 @@ name: Dependabot auto-merge
 # same shape as wader/postfix-relay's workflow of the same name, which is the
 # reference every repository of this maintainer is aligned on.
 #
+# What this waits on is the suite, which says nothing about whether a release can
+# be trusted, so the other half of the protection is upstream of it :
+# .github/dependabot.yml gives every entry a cooldown of seven days, and
+# Dependabot does not propose a version until it has been published that long
+# (it waits three days when none is configured). A release that is compromised
+# is usually noticed within that time, and then never reaches this workflow at
+# all. Security updates are never delayed by it, see that file.
+#
 # "gh pr merge --auto" asks GitHub to merge LATER, once the required checks
 # pass, and it is GitHub that does the waiting. Two repository settings make
 # that true, and neither is a file : "Allow auto-merge" (Settings > General),
