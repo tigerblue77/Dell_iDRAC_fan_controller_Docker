@@ -11,11 +11,12 @@ name: Dependabot auto-merge
 #
 # What this waits on is the suite, which says nothing about whether a release can
 # be trusted, so the other half of the protection is upstream of it :
-# .github/dependabot.yml gives every entry a cooldown of seven days, and
-# Dependabot does not propose a version until it has been published that long
-# (it waits three days when none is configured). A release that is compromised
-# is usually noticed within that time, and then never reaches this workflow at
-# all. Security updates are never delayed by it, see that file.
+# .github/dependabot.yml gives every entry a cooldown longer than the three days
+# Dependabot applies on its own, and a version is not proposed until it has been
+# published that long. A release that is compromised is usually noticed within
+# that time, and then never reaches this workflow at all. That file says what the
+# wait holds back here and what it does not. Security updates are never delayed
+# by it.
 #
 # "gh pr merge --auto" asks GitHub to merge LATER, once the required checks
 # pass, and it is GitHub that does the waiting. Two repository settings make
