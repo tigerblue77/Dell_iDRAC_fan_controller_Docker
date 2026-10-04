@@ -29,18 +29,20 @@ jobs:
     outputs:
       reuse-run-id: ${{ steps.detect.outputs.reuse-run-id }}
     steps:
-      # The one checkout in this repository that keeps the credential it
-      # persists : the decision step below runs "git fetch origin
-      # refs/pull/<number>/head", which authenticates through it. The token is
-      # read-only, and nothing from this workspace is uploaded. A fetch that
-      # fails is not an error there, it falls through to "run for real", so
-      # dropping the credential would not break the job, it would quietly stop
-      # it saving anything. tests/cases/12_github_workflows.sh names this job
-      # as the exception, and fails on any other checkout that keeps it.
-      # zizmor's artipacked audit is told to leave it alone on the line below,
-      # for the same reason : the credential is kept on purpose
+      # No credential is kept here either, although the decision step below runs
+      # "git fetch origin refs/pull/<number>/head". The repository is public, so
+      # that fetch needs none, and the step is fail-safe by design : a fetch that
+      # fails leaves fetched_sha empty, nothing is reused and the suite runs for
+      # real, so what would be lost is the saving and never a verdict.
+      # If the first push to master after a merged pull request ever runs the
+      # suite instead of reusing that pull request's results, this is where to
+      # look : the fetch then needs the credential, and this checkout goes back
+      # to the default, named in tests/cases/12_github_workflows.sh as the job
+      # that keeps it
       - name: Checkout
-        uses: actions/checkout@v7 # zizmor: ignore[artipacked] the decision step below fetches through this credential, see above
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # A push to master that merged a pull request CAN land a tree this
       # workflow already ran to green on that same pull request, and then
