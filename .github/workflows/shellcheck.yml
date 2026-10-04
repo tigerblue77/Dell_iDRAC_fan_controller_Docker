@@ -50,8 +50,14 @@ jobs:
     outputs:
       reuse: ${{ steps.detect.outputs.reuse }}
     steps:
+      # No credential is kept, for the reason "Tests" gives on its own
+      # "detect-reuse" checkout : the decision step below fetches the pull
+      # request's head ref from a public repository, and a fetch that fails
+      # only costs the saving
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Same reasoning as "Tests" (issue #500, fixed by #501) : a push to
       # master that merged a pull request can land a tree this workflow
@@ -120,6 +126,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Run shellcheck
         if: needs.detect-reuse.outputs.reuse != 'true'

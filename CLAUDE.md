@@ -146,6 +146,19 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   by hand to `.github/workflows/shellcheck.yml`.** That workflow names its files one
   by one instead of globbing, and `tests/cases/10_shell_scripts.sh` guards the list —
   a script missing from it is analysed by nothing at all.
+- **A checkout does not keep the job token.** By default the checkout action keeps the
+  job's token after it has finished, usable through git by every later step of the job.
+  Every checkout in `.github/workflows/` therefore sets `persist-credentials: false`,
+  so that the credential it set up is removed right after its fetch and no later step
+  inherits it. That is all it does, `secrets.GITHUB_TOKEN` stays usable by a step that
+  names it : a step that wants the token is given it by name, where a reader of the
+  workflow sees it.
+  That includes the `detect-reuse` job of `.github/workflows/tests.yml` and of
+  `.github/workflows/shellcheck.yml`, whose decision step fetches a pull request's head
+  ref without it. That works because the repository is public, and it costs nothing when
+  it does not : a fetch that fails makes the suite run for real, the saving is lost and
+  no verdict is. `tests/cases/12_github_workflows.sh` holds the rule, that failure and
+  a list of the checkouts allowed to keep the credential, which is empty (#530).
 - **Add a test case for what you change.** A behaviour with no test is one the next
   refactor is free to break, and this codebase's refactors span a hundred server models.
 - **Dependabot's minor and patch updates merge themselves once CI is green, in every
