@@ -449,13 +449,16 @@ jobs:
 
       # zizmor's superfluous-actions audit suggests "gh release create" for this
       # action, and it is told to leave it alone on the line below : the audit
-      # grades it informational, the action is not a risk in itself, and this
-      # is the one step that decides how a release is created and marked as the
-      # latest, which only a tag push ever runs. Swapping the tool there cannot
-      # be tried before a release, so it is left as it is until it can
+      # grades it informational and the action is not a risk in itself. It is
+      # also not only creating a release. It finds the release already there for
+      # the tag, drafts included, and updates it in place, which is how a note
+      # drafted by hand ahead of the tag ends up above the generated changelog,
+      # and "gh release create" does not look for a draft or fold into one.
+      # Replacing it has requirements of its own, written down in #535 : this
+      # gate stays in front of it, and it can only be tried on a tag
       - name: Generate release note
         if: steps.release_note.outputs.value == 'true'
-        uses: softprops/action-gh-release@v3 # zizmor: ignore[superfluous-actions] swapping the release tool cannot be tried before a release, see above
+        uses: softprops/action-gh-release@v3 # zizmor: ignore[superfluous-actions] it folds into a draft of the tag, which gh release create does not, see #535
         with:
           generate_release_notes: true
 

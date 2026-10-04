@@ -22,14 +22,27 @@ name: lint-workflows
 # Both are required checks, which is .github/rulesets/master.json, and the
 # ruleset is only as true as the file the maintainer imports : until the updated
 # file is imported under Settings > Rules they report on a pull request without
-# blocking it. tests/cases/12_github_workflows.sh holds the names against the
-# jobs here.
+# blocking it, and a pull request whose branch predates the import shows them as
+# "Expected, waiting" until it is updated. tests/cases/12_github_workflows.sh
+# holds the names against the jobs here, and
+# tests/cases/13_workflow_lint_gate.sh the rest of what keeps this a gate.
 #
-# They run on every pull request and on every push to master, with no
-# "detect-reuse" job in front of them, unlike "Shellcheck" and "Tests". Each
+# They run on every pull request and on every push to master, as "Shellcheck"
+# does, with no "detect-reuse" job in front of them, unlike it and "Tests". Each
 # takes seconds, so there is nothing to save, and a required check that is
 # skipped counts as satisfied : the one thing a gate on the workflows must not
-# be able to do is pass by not running.
+# be able to do is pass by not running. For the same reason no trigger carries a
+# "paths:" filter, which would hide the check from a pull request that touches
+# nothing it names and leave it waiting for ever.
+#
+# What a green run does and does not say. Both tools read the files and nothing
+# else, so the same tree gives the same answer, and that has a price : zizmor is
+# run offline, which drops four of its audits, impostor-commit,
+# known-vulnerable-actions, ref-confusion and stale-action-refs, so a green
+# zizmor is not a scan for vulnerable actions. And "uses:" is held to the policy
+# of .github/zizmor.yml, a version tag, which accepts any reference, a branch
+# such as @main included : it refuses an action named with no reference at all,
+# it does not refuse a moving one.
 #
 # Neither tool is installed through an action : a wrapper is one more
 # dependency, with a tag of its own that can be moved, in the workflow whose job
@@ -50,7 +63,9 @@ permissions:
 
 # A pull request that is pushed to again has no use for the run of the push
 # before it. The default branch is left alone, so that two merges close together
-# both get their verdict
+# both get their verdict, and that holds for two : GitHub keeps one pending run
+# per group, so a third push while one runs and one waits replaces the one that
+# waits
 concurrency:
   group: lint-workflows-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
@@ -80,7 +95,8 @@ jobs:
       # scripts of this repository are not : they are linted by "Shellcheck",
       # at the version it pins, and the blocks in a workflow are only parsed by
       # tests/cases/12_github_workflows.sh. actionlint reads the file and
-      # nothing else, so the same tree gives the same answer
+      # nothing else, so the same tree gives the same answer, and
+      # tests/cases/13_workflow_lint_gate.sh fails if either flag goes
       #
       # .github/actionlint.yaml is read from the repository on its own and holds
       # the two findings that are ignored, with the reason
@@ -119,15 +135,21 @@ jobs:
       # one day to the next without anyone touching this repository, which
       # would turn a required check red on a pull request that caused nothing.
       # What stays is everything that can be decided from the files, which is
-      # what a pull request can be held to.
+      # what a pull request can be held to, and the header says what is dropped.
+      #
+      # --strict-collection makes a file zizmor cannot parse an error. Without
+      # it the file is skipped with a warning and the check stays green, and
+      # .github/dependabot.yml is read by nothing else here.
       #
       # .github/zizmor.yml is found on its own, and holds the policy for
       # "uses:" : a version tag is accepted, a commit hash is not demanded.
       # What is told to leave one place alone is said on that line of the
       # workflow, "zizmor: ignore[...]", with the reason after it, and
-      # tests/cases/12_github_workflows.sh fails on one that gives none.
-      # "--format github" turns each finding into an annotation on the line it
-      # is about
+      # tests/cases/13_workflow_lint_gate.sh fails on one that gives none. There
+      # are two : the workflow_run trigger of test-results.yml, whose
+      # justification that case pins, and softprops/action-gh-release in the
+      # release build, tracked in #535. "--format github" turns each finding
+      # into an annotation on the line it is about
       - name: Run zizmor
         run: |
-          "$RUNNER_TEMP/zizmor/bin/zizmor" --offline --format github .
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --offline --strict-collection --format github .
