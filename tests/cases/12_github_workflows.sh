@@ -511,20 +511,23 @@ function test_dependabot_updates_are_only_ever_queued_never_merged_directly() {
 
 # Dependabot's minor and patch updates merge themselves once the required checks
 # are green (dependabot-auto-merge.yml), and nothing those checks run says
-# whether a release was published an hour ago by someone who should not have
-# been able to. A cooldown makes Dependabot wait before it proposes a version
-# that is only just out, which is the window in which a compromised release is
-# usually noticed and pulled, and it applies to version updates only : a
-# security update ignores it. So every entry of "updates" carries one, and an
-# entry that loses it goes back to being merged within hours of a publication
-# without anybody having decided that.
+# whether a release can be trusted. A cooldown makes Dependabot wait before it
+# proposes a version that is only just out, which is the window in which a
+# compromised release is usually noticed and pulled. Dependabot waits three days
+# on its own when none is configured ; every entry of "updates" asks for seven
+# instead, a number that is the maintainer's to change and that
+# MINIMUM_COOLDOWN_DAYS below keeps from being lowered without anybody
+# deciding it. A cooldown applies to version updates only : a security update
+# is never delayed.
 #
-# The one entry that would be left without it is an official base image, whose
-# freshness matters more than the delay. There is none : the base image of the
-# Dockerfile is not tracked by Dependabot at all, base_image_refresh.yml
-# rebuilds on it every night. If one is ever added it is named in
-# ENTRIES_WITHOUT_A_COOLDOWN below, with the reason, rather than quietly
-# missing its cooldown.
+# An entry with no cooldown block is not exempt from that, it is on the
+# three-day default, which is below the minimum and fails here. What exempts one
+# dependency is the cooldown's "exclude" list, and the entry keeps its block.
+# The one thing named in ENTRIES_WITHOUT_A_COOLDOWN is an entry that is
+# deliberately left on the default, an official base image whose freshness
+# matters more than the delay being the case it was written for. There is none :
+# the base image of the Dockerfile is not tracked by Dependabot at all,
+# base_image_refresh.yml rebuilds on it every night.
 #
 # Dependabot reports a configuration error only after the merge, on the
 # repository's Insights > Dependency graph > Dependabot page, so nothing in CI
@@ -538,9 +541,10 @@ function test_every_dependabot_update_waits_out_a_cooldown() {
     return 0
   fi
 
-  # "ecosystem:directory" pairs allowed to go without one, separated by spaces
+  # "ecosystem:directory" pairs allowed to stay on Dependabot's default, separated
+  # by spaces, each with the reason it is there
   local -r ENTRIES_WITHOUT_A_COOLDOWN=""
-  local -r MINIMUM_COOLDOWN_DAYS=3
+  local -r MINIMUM_COOLDOWN_DAYS=7
 
   # One "ecosystem|directory|days" per entry of "updates", days being empty when
   # the entry has no cooldown or no default-days under it. Read with awk rather
@@ -580,9 +584,9 @@ function test_every_dependabot_update_waits_out_a_cooldown() {
     fi
 
     if [[ ! "$DAYS" =~ ^[0-9]+$ ]]; then
-      fail "the $ECOSYSTEM entry for $DIRECTORY has no cooldown with a default-days, so Dependabot proposes a release the day it is published and auto-merge lands it within hours"
+      fail "the $ECOSYSTEM entry for $DIRECTORY has no cooldown with a default-days, so it is on Dependabot's default of three days, below the $MINIMUM_COOLDOWN_DAYS this repository asks for"
     elif [ "$DAYS" -lt "$MINIMUM_COOLDOWN_DAYS" ]; then
-      fail "the $ECOSYSTEM entry for $DIRECTORY waits $DAYS day(s) before proposing a version, less than the $MINIMUM_COOLDOWN_DAYS the auto-merge is meant to be held back by"
+      fail "the $ECOSYSTEM entry for $DIRECTORY waits $DAYS day(s) before proposing a version, less than the $MINIMUM_COOLDOWN_DAYS this repository asks for"
     else
       pass
     fi

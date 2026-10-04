@@ -159,10 +159,12 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   in its own workflow instead ; the rule is the same. What gets through is decided by the
   suite, not by a guess about which ecosystem is risky : majors wait for a human, and so
   does anything red. The suite cannot tell a trustworthy release from a compromised one
-  though, so every entry of `.github/dependabot.yml` carries a `cooldown` of three days :
-  a version is not proposed until it has been out that long, which is the window in which
-  a bad release is usually noticed and pulled. It holds for version updates only, a security
-  update ignores it, and `tests/cases/12_github_workflows.sh` holds it (#529).
+  though, so every entry of `.github/dependabot.yml` carries a `cooldown` of seven days :
+  a version is not proposed until it has been out that long, the window in which a bad
+  release is usually noticed and pulled. Dependabot waits three days when none is
+  configured, so seven is this repository asking for more, and the one number to edit
+  if it is too many. It holds for version updates only, a security update is never
+  delayed, and `tests/cases/12_github_workflows.sh` holds it (#529).
 - **Pull requests are kept level with the default branch, and never required to be, in
   every repository of this maintainer.** "Require branches to be up to date before
   merging" stays off : whatever cannot be updated automatically — a conflict, a fork, a
