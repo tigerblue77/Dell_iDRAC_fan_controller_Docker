@@ -18,6 +18,11 @@
 # The pattern is "*" and not a list of trusted owners on purpose : a list says
 # some third-party actions are held to a different standard, and none are here.
 # A new action therefore needs nothing added to this file.
+#
+# The content of this file is pinned, line for line, by
+# tests/cases/13_workflow_lint_gate.sh : another policy, or an ignore added here
+# to silence a whole audit, fails it. A finding that is meant to stay is ignored
+# on its own line in the workflow, with its reason
 
 rules:
   unpinned-uses:

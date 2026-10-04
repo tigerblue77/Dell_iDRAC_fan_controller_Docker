@@ -20,9 +20,9 @@
 # zizmor is run offline, because its online audits answer from GitHub and the
 # advisory databases, which change from one day to the next with nobody touching
 # this repository, and would turn a required check red on a pull request that
-# caused nothing. That drops four audits, impostor-commit,
-# known-vulnerable-actions, ref-confusion and stale-action-refs, so a green
-# zizmor is not a scan for vulnerable actions. And it is run with
+# caused nothing. That skips five audits, impostor-commit,
+# known-vulnerable-actions, ref-confusion, stale-action-refs and
+# ref-version-mismatch, so a green zizmor is not a scan for vulnerable actions. And it is run with
 # --strict-collection, because without it a file zizmor cannot parse is skipped
 # with a warning and the check stays green, dependabot.yml being read by nothing
 # else. actionlint is run with its shellcheck and pyflakes integrations off, so
@@ -129,4 +129,74 @@ function test_the_workflow_run_trigger_zizmor_is_told_to_ignore_still_deserves_i
     "test-results.yml may not run a script : the ignore says nothing from the artifacts it downloads is executed here"
   assert_empty "$(grep -nE '^[[:space:]-]*uses:[[:space:]]*\./' <<< "$CODE")" \
     "test-results.yml may not use a local action, which would be code from a checkout"
+}
+
+# The ignores are the exceptions to a gate, so the exceptions are what has to be
+# pinned : "every ignore has a reason" says nothing about an ignore that was
+# widened to silence more than it was written for, or one more that was added.
+# The inline ones are compared as a whole set of file, rules and the code on the
+# line they sit on, with the ref of a "uses:" left out so that a version bump of
+# the action does not fail it. A rule list that grows, an ignore moved to another
+# line, a third ignore or a different rule all differ from it. Removing one is
+# the one change that is meant to edit this case too, which is how #535 ends
+function test_the_inline_zizmor_ignores_are_exactly_the_two_expected_ones() {
+  local -r WORKFLOW_DIRECTORY="$REPO_ROOT/.github/workflows"
+  if [ ! -d "$WORKFLOW_DIRECTORY" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  local -r EXPECTED='build_and_publish_docker_image.yml|superfluous-actions|uses: softprops/action-gh-release
+test-results.yml|dangerous-triggers|workflow_run:'
+
+  local WORKFLOW LINE ACTUAL=""
+  for WORKFLOW in "$WORKFLOW_DIRECTORY"/*.yml "$WORKFLOW_DIRECTORY"/*.yaml; do
+    [ -f "$WORKFLOW" ] || continue
+    while IFS= read -r LINE; do
+      ACTUAL+="${WORKFLOW##*/}|$LINE"$'\n'
+    done < <(grep -v '^[[:space:]]*#' "$WORKFLOW" |
+      grep -E 'zizmor: ignore\[' |
+      sed -E 's/^[[:space:]-]*([^#]*[^#[:space:]])[[:space:]]*#[[:space:]]*zizmor: ignore\[([^]]*)\].*$/\2|\1/; s/@[^[:space:]]*$//')
+  done
+
+  assert_equals "$(sort <<< "$EXPECTED")" "$(grep . <<< "$ACTUAL" | sort)" \
+    "the inline zizmor ignores have to be exactly the two expected ones, each for one rule on its own line"
+}
+
+# The same for the two configuration files. .github/actionlint.yaml holds two
+# patterns for one file and nothing else : a pattern widened to match more, a
+# third pattern, or the path turned into a glob would silence findings nobody
+# looked at, so its lines are compared with the expected ones, comments left
+# out. Deleting the file passes, which is how it is meant to end once actionlint
+# knows the inputs of create-github-app-token v3 : the workflow gate then lints
+# without it, or fails by itself. .github/zizmor.yml holds one policy and no
+# ignore, for the same reason
+function test_the_lint_configuration_files_hold_exactly_what_they_were_written_for() {
+  local -r ACTIONLINT_CONFIG="$REPO_ROOT/.github/actionlint.yaml"
+  local -r ZIZMOR_CONFIG="$REPO_ROOT/.github/zizmor.yml"
+  if [ ! -f "$ZIZMOR_CONFIG" ]; then
+    skip_test "no .github next to the scripts"
+    return 0
+  fi
+
+  local -r EXPECTED_ZIZMOR='rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin'
+  assert_equals "$EXPECTED_ZIZMOR" "$(grep -vE '^[[:space:]]*(#|$)' "$ZIZMOR_CONFIG")" \
+    ".github/zizmor.yml has to hold the ref-pin policy and nothing else : a looser policy or an ignore silences findings nobody looked at"
+
+  if [ ! -f "$ACTIONLINT_CONFIG" ]; then
+    pass
+    return 0
+  fi
+
+  local -r EXPECTED_ACTIONLINT='paths:
+  .github/workflows/auto_update_pull_request_branches.yml:
+    ignore:
+      - '"'"'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'"'"'
+      - '"'"'input "client-id" is not defined in action "actions/create-github-app-token@v3"'"'"
+  assert_equals "$EXPECTED_ACTIONLINT" "$(grep -vE '^[[:space:]]*(#|$)' "$ACTIONLINT_CONFIG")" \
+    ".github/actionlint.yaml has to hold exactly the two messages of create-github-app-token@v3 for the one workflow that uses it"
 }

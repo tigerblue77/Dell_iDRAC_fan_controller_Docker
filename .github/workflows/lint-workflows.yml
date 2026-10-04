@@ -37,8 +37,9 @@ name: lint-workflows
 #
 # What a green run does and does not say. Both tools read the files and nothing
 # else, so the same tree gives the same answer, and that has a price : zizmor is
-# run offline, which drops four of its audits, impostor-commit,
-# known-vulnerable-actions, ref-confusion and stale-action-refs, so a green
+# run offline, which skips five of its audits (impostor-commit,
+# known-vulnerable-actions, ref-confusion, stale-action-refs and
+# ref-version-mismatch, as "zizmor --offline -vv" logs them), so a green
 # zizmor is not a scan for vulnerable actions. And "uses:" is held to the policy
 # of .github/zizmor.yml, a version tag, which accepts any reference, a branch
 # such as @main included : it refuses an action named with no reference at all,

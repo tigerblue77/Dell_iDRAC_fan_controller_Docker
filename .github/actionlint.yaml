@@ -18,7 +18,11 @@
 # Each pattern is a regular expression over the whole message and names the
 # action and its version, so it silences nothing else, not even another input of
 # the same action. Both can go the day actionlint ships a table that knows v3 :
-# delete this file then, and the workflow lints clean without it
+# delete this file then, and the workflow lints clean without it.
+#
+# The content of this file is pinned, line for line, by
+# tests/cases/13_workflow_lint_gate.sh : a pattern widened to silence more, a
+# third pattern or another file's path fails it, and deleting the file passes
 
 paths:
   .github/workflows/auto_update_pull_request_branches.yml:

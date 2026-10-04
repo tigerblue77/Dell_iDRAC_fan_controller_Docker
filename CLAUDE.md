@@ -85,8 +85,9 @@ CI installs zizmor against a hash, which this does not ; the version is the same
 finds its settings on its own, in `.github/actionlint.yaml` and in `.github/zizmor.yml`.
 The second records a decision rather than quieting a finding : actions are pinned to a
 version tag, not a commit hash, and Dependabot keeps the tags current. What a green zizmor
-says is less than it sounds : `--offline` drops four audits, impostor-commit,
-known-vulnerable-actions, ref-confusion and stale-action-refs, so it is not a scan for
+says is less than it sounds : `--offline` skips five audits, impostor-commit,
+known-vulnerable-actions, ref-confusion, stale-action-refs and ref-version-mismatch
+(`zizmor --offline -vv` logs them), so it is not a scan for
 vulnerable actions, and a version-tag policy accepts any reference, a branch such as
 `@main` included. `--strict-collection` is what makes a file it cannot parse an error
 instead of a skipped warning. A finding that is really meant to stay is ignored on its own
