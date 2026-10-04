@@ -10,6 +10,10 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    # Three days before a new version is proposed, for the reason given on the
+    # entry below, which holds here too
+    cooldown:
+      default-days: 3
     # The limit counts per entry, so the reason given on the entry below holds
     # here too
     open-pull-requests-limit: 99
@@ -30,6 +34,24 @@ updates:
     # still wait for a manual review
     schedule:
       interval: "daily"
+    # A version is proposed only once it has been published for three days.
+    # Minor and patch updates merge themselves once the suite is green, and the
+    # suite says nothing about whether a release can be trusted : a compromised
+    # one is usually noticed and pulled within days, so waiting is what keeps it
+    # from reaching master within hours of being published. The daily check above
+    # still applies, so a version is proposed the day after its cooldown ends.
+    # It holds for version updates only, a security update ignores it and a fix
+    # for a published vulnerability still arrives at once. Only default-days
+    # exists for this ecosystem : the semver-*-days options are for the semver
+    # ones, pip for instance. Majors are held back by the same three days, they
+    # wait for a review anyway.
+    # No entry here is left without one. The base image of the Dockerfile is not
+    # tracked by Dependabot at all, base_image_refresh.yml rebuilds on it every
+    # night, so the entry that would be exempt, an official base image whose
+    # freshness matters more than the delay, does not exist. If one is ever
+    # added, tests/cases/12_github_workflows.sh is where that exception is made
+    cooldown:
+      default-days: 3
     # Opening a pull request is the only way Dependabot reports anything, and it
     # stops opening them once this many are waiting - silently, naming nothing.
     # The default is 5, and the first scan here hit it exactly : five majors
