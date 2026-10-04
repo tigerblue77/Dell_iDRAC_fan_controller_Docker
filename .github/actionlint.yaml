@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# What actionlint is told about this repository. It reads this file on its own,
+# from .github/ of the repository it is run in.
+#
+# Two findings are ignored, both for the same reason and both only in the one
+# file that uses the action. actionlint knows the inputs of the popular actions
+# from a table bundled with each release, and the table of v1.7.12, the version
+# .github/workflows/lint-workflows.yml pins, lists actions/create-github-app-token
+# v3 with the inputs of v2 : "app-id" required and no "client-id". The action's
+# own action.yml at v3 is the other way round, "client-id" is an input and
+# "app-id" is deprecated in its favour with "required: false" on both, and
+# auto_update_pull_request_branches.yml passes the client ID on purpose, since
+# it is what the GitHub App's settings page shows. So the workflow is right and
+# the table is stale, and no newer actionlint exists to refresh it.
+#
+# Each pattern is a regular expression over the whole message and names the
+# action and its version, so it silences nothing else, not even another input of
+# the same action. Both can go the day actionlint ships a table that knows v3 :
+# delete this file then, and the workflow lints clean without it
+
+paths:
+  .github/workflows/auto_update_pull_request_branches.yml:
+    ignore:
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'

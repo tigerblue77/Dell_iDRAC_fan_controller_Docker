@@ -95,8 +95,13 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The name reaches the script through its environment rather than being
+      # written into it as an expression, here and in the two steps below, so
+      # that what a previous step produced is only ever data to the shell
       - name: Find the last published release
         id: release
+        env:
+          IMAGE_NAME: ${{ steps.image-name.outputs.value }}
         run: |
           set -euo pipefail
           # Not "the highest v* tag" any more, for the same reason the release
@@ -106,7 +111,7 @@ jobs:
           # night, publishing an image for a version nobody can pull by number.
           # The tags are walked highest first and the first one that actually
           # resolves in the registry is the release "latest" belongs to
-          IMAGE="ghcr.io/${{ steps.image-name.outputs.value }}"
+          IMAGE="ghcr.io/$IMAGE_NAME"
           ERRORS="$RUNNER_TEMP/imagetools-error.txt"
           TAG=""
           for CANDIDATE in $(git tag --list 'v[0-9]*.[0-9]*' --sort=-v:refname); do
@@ -133,6 +138,8 @@ jobs:
 
       - name: Resolve the digest the base image currently points to
         id: base
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           # Read from the release tag, not from the working tree : the image
@@ -144,7 +151,7 @@ jobs:
           # line, every tag released before that ARG existed names it on the
           # FROM line itself. This job reads whichever the last published
           # release happens to carry
-          BASE_IMAGE="$(git show "${{ steps.release.outputs.tag }}:Dockerfile" | awk '
+          BASE_IMAGE="$(git show "$RELEASE_TAG:Dockerfile" | awk '
             toupper($1) == "ARG" {
               eq = index($2, "=")
               if (eq > 1) default_of[substr($2, 1, eq - 1)] = substr($2, eq + 1)
@@ -160,7 +167,7 @@ jobs:
               exit
             }')"
           if [ -z "$BASE_IMAGE" ]; then
-            echo "::error::Could not work out the base image from the Dockerfile of ${{ steps.release.outputs.tag }}"
+            echo "::error::Could not work out the base image from the Dockerfile of $RELEASE_TAG"
             exit 1
           fi
           # Same ladder as "Docker image CI" uses on this exact call : the base
@@ -200,6 +207,11 @@ jobs:
 
       - name: Compare it with the base of the published image
         id: compare
+        env:
+          IMAGE_NAME: ${{ steps.image-name.outputs.value }}
+          BASE_IMAGE: ${{ steps.base.outputs.image }}
+          BASE_DIGEST: ${{ steps.base.outputs.digest }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           # Read from GHCR rather than Docker Hub : anonymous Docker Hub
@@ -207,7 +219,7 @@ jobs:
           # The publishing steps record both the base digest and the version as
           # labels, which is what makes these comparisons possible without
           # keeping state anywhere else
-          IMAGE="ghcr.io/${{ steps.image-name.outputs.value }}:latest"
+          IMAGE="ghcr.io/$IMAGE_NAME:latest"
           ERRORS="$RUNNER_TEMP/imagetools-error.txt"
 
           if CONFIG="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Image}}' 2>"$ERRORS")"; then
@@ -238,8 +250,8 @@ jobs:
             exit 1
           fi
 
-          CURRENT="${{ steps.base.outputs.digest }}"
-          RELEASE="${{ steps.release.outputs.tag }}"
+          CURRENT="$BASE_DIGEST"
+          RELEASE="$RELEASE_TAG"
 
           # "latest" sitting ahead of the highest release that resolves in the
           # registry means a version tag was deleted from under us, or something
@@ -280,13 +292,13 @@ jobs:
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
 
           {
-            echo "| | Digest of \`${{ steps.base.outputs.image }}\` |"
+            echo "| | Digest of \`$BASE_IMAGE\` |"
             echo "|---|---|"
             echo "| Published image was built on | \`${PUBLISHED:-none recorded}\` |"
             echo "| Base image now points to | \`$CURRENT\` |"
             echo
             if [ "$CHANGED" = true ]; then
-              echo "Rebuilding and republishing \`latest\` from \`${{ steps.release.outputs.tag }}\`."
+              echo "Rebuilding and republishing \`latest\` from \`$RELEASE_TAG\`."
             else
               echo "Unchanged, nothing to do."
             fi

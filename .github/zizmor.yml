@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# What zizmor is told about this repository. It reads this file on its own : it
+# is looked for in .github/ of the directory it is pointed at, which is how
+# .github/workflows/lint-workflows.yml runs it. The one setting here is the
+# policy for "uses:", and it exists to record a decision rather than to quiet a
+# finding.
+#
+# Since zizmor 1.20 the default policy for unpinned-uses is that EVERY action
+# is pinned to a commit hash. This repository pins to the version tag instead,
+# "actions/checkout@v7" and the like, and Dependabot's github-actions entry
+# keeps those tags current. That is the maintainer's decision and it is not
+# going to change here : a hash would have to be bumped by Dependabot as well,
+# and the review of a hash is not something anyone does. "ref-pin" accepts a tag
+# or a branch and still refuses an action named with no reference at all.
+#
+# The pattern is "*" and not a list of trusted owners on purpose : a list says
+# some third-party actions are held to a different standard, and none are here.
+# A new action therefore needs nothing added to this file.
+
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin

@@ -67,6 +67,29 @@ it costs a CI round trip, which is the cost the SessionStart hook installs `shel
 avoid. So the first two are what a session owes on any change ; the build is worth finding
 a daemon for when the change touches the `Dockerfile` or a script the image ships.
 
+**A change under `.github/workflows/` owes two more, which CI runs and requires on every
+pull request** (`.github/workflows/lint-workflows.yml`) : actionlint, for whether a
+workflow is correct, and zizmor, for whether it is safe. Neither is in a Claude Code on the
+web session, and both come without a release download, through the Go module proxy and
+PyPI, at the versions the workflow pins :
+
+```bash
+go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+actionlint -shellcheck= -pyflakes=   # what CI runs ; the shellcheck integration is off on purpose
+
+python -m venv /tmp/zizmor && /tmp/zizmor/bin/pip install zizmor==1.30.1
+/tmp/zizmor/bin/zizmor --offline .   # what CI runs ; offline, so the same tree gives the same answer
+```
+
+CI installs zizmor against a hash, which this does not ; the version is the same. Each
+finds its settings on its own, in `.github/actionlint.yaml` and in `.github/zizmor.yml`.
+The second records a decision rather than quieting a finding : actions are pinned to a
+version tag, not a commit hash, and Dependabot keeps the tags current. A finding that is really
+meant to stay is ignored on its own line with `# zizmor: ignore[rule]` and the reason
+after it, and `tests/cases/12_github_workflows.sh` fails on one that gives none. The
+ruleset file names both checks, but it only gates once it has been imported under
+Settings > Rules.
+
 ## Conventions
 
 - **Sign off every commit** with **`git signoff`**, never `git commit -s`. A commit without

@@ -52,9 +52,10 @@ jobs:
     steps:
       # Keeps the credential it persists, for the reason "Tests" gives on its
       # own "detect-reuse" checkout : the decision step below fetches the pull
-      # request's head ref from origin
+      # request's head ref from origin. zizmor's artipacked audit is told to
+      # leave it alone on the line below, for the same reason
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7 # zizmor: ignore[artipacked] the decision step below fetches through this credential, see above
 
       # Same reasoning as "Tests" (issue #500, fixed by #501) : a push to
       # master that merged a pull request can land a tree this workflow

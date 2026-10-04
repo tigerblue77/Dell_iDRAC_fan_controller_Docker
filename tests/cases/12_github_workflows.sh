@@ -583,6 +583,63 @@ function test_the_ruleset_still_gates_master() {
     "requiring branches to be up to date would block every pull request the branch updater cannot reach, Dependabot's merges leaving all of them behind until the next push to master made any other way"
 }
 
+# The two linters over the workflows, actionlint and zizmor, are only a gate
+# while three things stay true, and none of them is visible in a green run. The
+# ruleset names them, or they report without blocking anything. They run on
+# every pull request, because a required check that is skipped counts as
+# satisfied : a job with an "if", a "needs" on one that may be skipped or a
+# "continue-on-error" would let a pull request through by not running them, which
+# is the single thing a gate on the workflows must not be able to do. And zizmor
+# is run offline, because its online audits answer from GitHub and the advisory
+# databases, which change from one day to the next with nobody touching this
+# repository, and would turn a required check red on a pull request that caused
+# nothing.
+#
+# The fourth is about what the gate lets through : a finding is ignored with a
+# "# zizmor: ignore[rule]" comment on the line it is about, and one that gives
+# no reason after it is a finding silenced for nobody to find out why. The
+# ruleset is read as the form "Import a ruleset" takes, so what this checks is
+# the file, and the file only gates once the maintainer has imported it
+function test_the_workflow_lint_checks_are_required_and_cannot_pass_by_not_running() {
+  local -r RULESET="$REPO_ROOT/.github/rulesets/master.json"
+  local -r LINT_WORKFLOW="$REPO_ROOT/.github/workflows/lint-workflows.yml"
+  local -r WORKFLOW_DIRECTORY="$REPO_ROOT/.github/workflows"
+  if [ ! -f "$RULESET" ] || [ ! -f "$LINT_WORKFLOW" ] || ! command -v jq > /dev/null 2>&1; then
+    skip_test "no .github next to the scripts, or no jq to read the ruleset with"
+    return 0
+  fi
+
+  local -r REQUIRED=$(jq -r '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' "$RULESET")
+  local CHECK
+  for CHECK in actionlint zizmor; do
+    assert_contains "$(printf '\n%s\n' "$REQUIRED")" "$(printf '\n%s\n' "$CHECK")" \
+      "the ruleset has to require the $CHECK check, or it reports on a pull request without blocking it"
+  done
+
+  # Comments dropped first : the header of the workflow talks about every one of
+  # these words
+  local -r LINT_WORKFLOW_CODE=$(grep -v '^[[:space:]]*#' "$LINT_WORKFLOW")
+
+  assert_empty "$(grep -nE '^[[:space:]]*(- )?(if|needs|continue-on-error):' <<< "$LINT_WORKFLOW_CODE")" \
+    "no job or step of the workflow lint may carry an if, a needs or a continue-on-error : a required check that is skipped counts as satisfied"
+  assert_contains "$LINT_WORKFLOW_CODE" "pull_request:" \
+    "the workflow lint has to run on a pull request, which is where a required check reports"
+  assert_matches "$LINT_WORKFLOW_CODE" 'bin/zizmor"? .*--offline' \
+    "zizmor has to run offline, its online audits answer from databases that change under a pull request that touched nothing"
+
+  local WORKFLOW
+  local UNEXPLAINED=""
+  for WORKFLOW in "$WORKFLOW_DIRECTORY"/*.yml "$WORKFLOW_DIRECTORY"/*.yaml; do
+    [ -f "$WORKFLOW" ] || continue
+    UNEXPLAINED+=$(grep -v '^[[:space:]]*#' "$WORKFLOW" |
+      grep -E 'zizmor: ignore([^[]|$)|zizmor: ignore\[[^]]*\][[:space:]]*$' |
+      sed "s|^|${WORKFLOW#"$REPO_ROOT"/} : |")
+  done
+
+  assert_empty "$UNEXPLAINED" \
+    "every zizmor: ignore has to name the rule in brackets and give its reason after them"
+}
+
 # "gh pr merge --auto" waits for the required checks ; a bare "gh pr merge" does
 # not. The workflow used to fall back to the second whenever the first could not
 # be enabled -- precisely when no check was being required -- and so merged
