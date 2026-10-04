@@ -146,6 +146,98 @@ function test_every_workflow_carries_the_licence_header() {
     "every workflow has to open with the two SPDX lines the scripts and the Dockerfile carry"
 }
 
+# "actions/checkout" writes the job's token into the checkout's git
+# configuration unless it is told not to, and from then on every later step of
+# the job can read it, an upload of the workspace included. Almost nothing here
+# needs it : the suite and the linters read files, the sign-off check reads
+# objects the checkout already fetched, and the registries and the release API
+# are reached with their own credentials. So every checkout sets
+# "persist-credentials: false", except where a later step authenticates to the
+# remote through git itself, and those are named below, each with the step that
+# needs it. A checkout that is in neither group is a token left lying around for
+# nothing, and adding one is how it stops being the exception.
+#
+# The list is checked both ways. An entry whose checkout now drops the
+# credential is stale, and one that names no checkout at all is a typo, either
+# of which would leave the exception open for the next person to use. Whether a
+# checkout of a job with two of them is covered is decided per job, which is
+# enough while no job here has two that differ
+function test_every_checkout_drops_the_job_token_unless_a_later_step_needs_it() {
+  local -r WORKFLOW_DIRECTORY="$REPO_ROOT/.github/workflows"
+  if [ ! -d "$WORKFLOW_DIRECTORY" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # "workflow:job" pairs, separated by spaces. Both run "git fetch origin
+  # refs/pull/<number>/head" in their decision step, which authenticates through
+  # the persisted credential, and a fetch that fails there is not an error : it
+  # falls through to "run for real", so losing the credential would not break
+  # the job, it would quietly stop it saving anything
+  local -r CHECKOUTS_KEEPING_THE_CREDENTIAL="tests.yml:detect-reuse shellcheck.yml:detect-reuse"
+
+  # One "workflow|job|line|persist-credentials" per checkout, the last being
+  # what the step sets or "unset". Read with awk rather than a YAML parser for
+  # the reason the ruleset case above gives, and in the one shape every workflow
+  # here is written in : job keys two spaces in, steps opening on a
+  # "      - " line. A comment is never matched, the patterns being anchored on
+  # the key
+  local WORKFLOW CHECKOUTS=""
+  for WORKFLOW in "$WORKFLOW_DIRECTORY"/*.yml "$WORKFLOW_DIRECTORY"/*.yaml; do
+    [ -f "$WORKFLOW" ] || continue
+    CHECKOUTS+=$(awk -v workflow="$(basename "$WORKFLOW")" '
+      function flush() {
+        if (checkout) printf "%s|%s|%d|%s\n", workflow, job, checkout_line, (persist == "" ? "unset" : persist)
+        checkout = 0; persist = ""
+      }
+      /^jobs:/ { flush(); in_jobs = 1; next }
+      in_jobs && /^[^ #]/ { flush(); in_jobs = 0 }
+      !in_jobs { next }
+      /^  [A-Za-z0-9_-]+:[ ]*$/ { flush(); job = $1; sub(/:$/, "", job); next }
+      /^      - / { flush() }
+      /^[ \t-]*uses:[ \t]*actions\/checkout@/ { checkout = 1; checkout_line = FNR }
+      checkout && /^[ \t]+persist-credentials:/ {
+        persist = $0
+        sub(/^[^:]*:[ \t]*/, "", persist)
+        sub(/[ \t]*#.*$/, "", persist)
+        gsub(/"/, "", persist)
+      }
+      END { flush() }
+    ' "$WORKFLOW")
+    CHECKOUTS+=$'\n'
+  done
+
+  assert_not_empty "${CHECKOUTS//$'\n'/}" \
+    "the workflows are expected to hold at least one checkout, or this reads nothing" || return 1
+
+  local ENTRY KEY PERSIST LINE JOB WORKFLOW_NAME SEEN=""
+  while IFS='|' read -r WORKFLOW_NAME JOB LINE PERSIST; do
+    [ -n "$WORKFLOW_NAME" ] || continue
+    KEY="$WORKFLOW_NAME:$JOB"
+
+    if [[ " $CHECKOUTS_KEEPING_THE_CREDENTIAL " == *" $KEY "* ]]; then
+      SEEN+=" $KEY"
+      if [ "$PERSIST" = "false" ]; then
+        fail "$KEY (line $LINE) already sets persist-credentials: false, so it no longer belongs in CHECKOUTS_KEEPING_THE_CREDENTIAL"
+      else
+        pass
+      fi
+    elif [ "$PERSIST" = "false" ]; then
+      pass
+    else
+      fail ".github/workflows/$WORKFLOW_NAME line $LINE : the checkout in job $JOB leaves the job token in the git configuration (persist-credentials is $PERSIST). Set it to false, or, if a later step really authenticates through git, name the job in CHECKOUTS_KEEPING_THE_CREDENTIAL with the step that needs it"
+    fi
+  done <<< "$CHECKOUTS"
+
+  for ENTRY in $CHECKOUTS_KEEPING_THE_CREDENTIAL; do
+    if [[ " $SEEN " == *" $ENTRY "* ]]; then
+      pass
+    else
+      fail "CHECKOUTS_KEEPING_THE_CREDENTIAL names $ENTRY, which is not a job with an actions/checkout step"
+    fi
+  done
+}
+
 # Every step of every workflow runs shell, and none of it is shell to any tool
 # that reads this repository : shellcheck is pointed at the .sh files, bash never
 # parses a workflow, and the YAML linters read the document rather than the

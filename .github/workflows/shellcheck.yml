@@ -50,6 +50,9 @@ jobs:
     outputs:
       reuse: ${{ steps.detect.outputs.reuse }}
     steps:
+      # Keeps the credential it persists, for the reason "Tests" gives on its
+      # own "detect-reuse" checkout : the decision step below fetches the pull
+      # request's head ref from origin
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -120,6 +123,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Run shellcheck
         if: needs.detect-reuse.outputs.reuse != 'true'

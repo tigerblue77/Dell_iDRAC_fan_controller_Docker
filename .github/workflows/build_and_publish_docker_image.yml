@@ -37,6 +37,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Run the test suite
         run: ./tests/run_tests.sh --summary "$GITHUB_STEP_SUMMARY"
@@ -58,6 +60,10 @@ jobs:
           # the "latest" check below walks. The default single-commit fetch does
           # not bring them along
           fetch-depth: 0
+          # Nothing below talks to the remote through git : the walk reads the
+          # tags fetched here, and the release API and the registries are
+          # reached with their own tokens
+          persist-credentials: false
 
       - name: Calculate final Docker image name
         id: docker_image_name
