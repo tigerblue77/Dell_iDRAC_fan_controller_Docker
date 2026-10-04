@@ -152,10 +152,11 @@ function test_every_workflow_carries_the_licence_header() {
 # Almost nothing here needs that : the suite and the linters read files, the
 # sign-off check reads objects the checkout already fetched, and the registries
 # and the release API are reached with their own credentials. So every checkout
-# sets "persist-credentials: false", and with it no later step of the job can use
-# or read the credential the checkout would otherwise have left behind. A step
-# that really wants the token has to be given it by name, where a reader of the
-# workflow sees it.
+# sets "persist-credentials: false", and with it the credential the checkout set
+# up is removed right after its fetch, so no later step inherits it. That is
+# all it does : secrets.GITHUB_TOKEN stays usable by any step that names it, so a
+# step that really wants the token has to be given it by name, where a reader of
+# the workflow sees it.
 #
 # The exceptions are named in CHECKOUTS_KEEPING_THE_CREDENTIAL, each with the
 # step that authenticates to the remote through git, and there are none : the two
@@ -269,7 +270,7 @@ function test_every_checkout_drops_the_job_token_unless_a_later_step_needs_it() 
     elif [ "${PERSIST,,}" = "false" ]; then
       pass
     else
-      fail ".github/workflows/$WORKFLOW_NAME line $LINE : the checkout in job $JOB leaves the job token usable by the later steps of the job (persist-credentials is $PERSIST). Set it to false under its with:, or, if a later step really authenticates through git, name the job in CHECKOUTS_KEEPING_THE_CREDENTIAL with the step that needs it"
+      fail ".github/workflows/$WORKFLOW_NAME line $LINE : the checkout in job $JOB leaves its credential in place for the later steps of the job (persist-credentials is $PERSIST). Set it to false under its with:, or, if a later step really authenticates through git, name the job in CHECKOUTS_KEEPING_THE_CREDENTIAL with the step that needs it"
     fi
   done <<< "$CHECKOUTS"
 
