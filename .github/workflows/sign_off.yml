@@ -33,11 +33,13 @@ jobs:
     timeout-minutes: 5
     steps:
       # fetch-depth 0 because the script reads base..head, and a shallow checkout has neither end of
-      # that range
+      # that range. No credential is kept : everything the script reads is already fetched, it never
+      # talks to the remote
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # The two SHAs travel as environment variables rather than being interpolated into the script
       # line. They are hexadecimal and GitHub's own, so nothing here is waiting to be escaped, but a

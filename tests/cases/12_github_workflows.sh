@@ -146,6 +146,143 @@ function test_every_workflow_carries_the_licence_header() {
     "every workflow has to open with the two SPDX lines the scripts and the Dockerfile carry"
 }
 
+# "actions/checkout" keeps the job's token after it has finished unless it is
+# told not to : it leaves it in a credential file that git reads for the
+# checkout's remote, and from then on every later step of the job can use it.
+# Almost nothing here needs that : the suite and the linters read files, the
+# sign-off check reads objects the checkout already fetched, and the registries
+# and the release API are reached with their own credentials. So every checkout
+# sets "persist-credentials: false", and with it the credential the checkout set
+# up is removed right after its fetch, so no later step inherits it. That is
+# all it does : secrets.GITHUB_TOKEN stays usable by any step that names it, so a
+# step that really wants the token has to be given it by name, where a reader of
+# the workflow sees it.
+#
+# The exceptions are named in CHECKOUTS_KEEPING_THE_CREDENTIAL, each with the
+# step that authenticates to the remote through git, and there are none : the two
+# "detect-reuse" jobs fetch a pull request's head ref from a public repository,
+# which needs no credential, and a fetch that fails there only costs the saving
+# (the case at the end of this file runs it). A checkout that is in neither group
+# is a token left lying around for nothing, and adding one is how it stops being
+# the rule.
+#
+# The list is checked both ways. An entry whose checkout now drops the
+# credential is stale, and one that names no checkout at all is a typo, either
+# of which would leave the exception open for the next person to use. Which
+# checkout is covered is decided per job, which is enough while no job here has
+# two that differ.
+#
+# What is read, and what is not. The key has to sit under the "with:" of the very
+# step that holds the checkout, and a quoted or differently capitalised action
+# name is still a checkout. A "uses:" line the reader did not recognise as a
+# step, a workflow written with its steps dashed at another indentation say, is
+# caught by comparing the number of checkouts it found with the number of lines
+# naming the action anywhere. A composite action is not read at all, so one
+# appearing fails here until this is extended. A "with:" written as a flow
+# mapping on one line is not understood either, and fails closed : the checkout
+# reads as keeping the credential
+function test_every_checkout_drops_the_job_token_unless_a_later_step_needs_it() {
+  local -r WORKFLOW_DIRECTORY="$REPO_ROOT/.github/workflows"
+  if [ ! -d "$WORKFLOW_DIRECTORY" ]; then
+    skip_test "no .github/workflows next to the scripts"
+    return 0
+  fi
+
+  # "workflow:job" pairs, separated by spaces, each with the step that needs the
+  # credential. None today
+  local -r CHECKOUTS_KEEPING_THE_CREDENTIAL=""
+
+  # One "workflow|job|line|persist-credentials" per checkout, the last being
+  # what the step sets under its "with:" or "unset". Read with awk rather than a
+  # YAML parser for the reason the ruleset case above gives, and in the one shape
+  # every workflow here is written in : job keys two spaces in, steps opening on
+  # a "      - " line, their keys eight spaces in. A comment is never matched, the
+  # patterns being anchored on the key
+  local WORKFLOW CHECKOUTS=""
+  for WORKFLOW in "$WORKFLOW_DIRECTORY"/*.yml "$WORKFLOW_DIRECTORY"/*.yaml; do
+    [ -f "$WORKFLOW" ] || continue
+    CHECKOUTS+=$(awk -v workflow="$(basename "$WORKFLOW")" -v q="'" '
+      function indent(line) {
+        match(line, /[^ \t]/)
+        return RSTART - 1
+      }
+      function flush() {
+        if (checkout) printf "%s|%s|%d|%s\n", workflow, job, checkout_line, (persist == "" ? "unset" : persist)
+        checkout = 0; persist = ""; in_with = 0
+      }
+      /^jobs:/ { flush(); in_jobs = 1; next }
+      in_jobs && /^[^ #]/ { flush(); in_jobs = 0 }
+      !in_jobs { next }
+      /^  [A-Za-z0-9_-]+:[ ]*$/ { flush(); job = $1; sub(/:$/, "", job); next }
+      /^[ \t]*(#|$)/ { next }
+      {
+        line = $0
+        if (line ~ /^      - /) { flush(); line = "        " substr(line, 9) }
+        if (indent(line) <= 8) {
+          in_with = (line ~ /^        with:[ \t]*$/)
+          normalised = tolower(line)
+          gsub(/"/, "", normalised)
+          gsub(q, "", normalised)
+          if (normalised ~ /^        uses:[ \t]*actions\/checkout@/) { checkout = 1; checkout_line = FNR }
+        } else if (in_with && line ~ /^[ \t]+persist-credentials:/) {
+          persist = line
+          sub(/^[^:]*:[ \t]*/, "", persist)
+          sub(/[ \t]*#.*$/, "", persist)
+          gsub(/"/, "", persist)
+          gsub(q, "", persist)
+        }
+      }
+      END { flush() }
+    ' "$WORKFLOW")
+    CHECKOUTS+=$'\n'
+  done
+
+  assert_not_empty "${CHECKOUTS//$'\n'/}" \
+    "the workflows are expected to hold at least one checkout, or this reads nothing" || return 1
+
+  # Every line naming the action, wherever it sits, against the checkouts read
+  local -r NAMING_LINES=$(cat "$WORKFLOW_DIRECTORY"/*.yml "$WORKFLOW_DIRECTORY"/*.yaml 2> /dev/null |
+    grep -ciE "^[[:space:]-]*uses:[[:space:]]*[\"']?actions/checkout@")
+  local -r READ_CHECKOUTS=$(grep -c . <<< "$CHECKOUTS")
+  assert_equals "$NAMING_LINES" "$READ_CHECKOUTS" \
+    "every line naming actions/checkout has to be read as a step of a job, or a checkout is being missed"
+
+  local ACTION_FILE COMPOSITE_ACTIONS=""
+  for ACTION_FILE in "$REPO_ROOT"/action.yml "$REPO_ROOT"/action.yaml \
+    "$REPO_ROOT"/.github/actions/*/action.yml "$REPO_ROOT"/.github/actions/*/action.yaml; do
+    [ -f "$ACTION_FILE" ] && COMPOSITE_ACTIONS+=" ${ACTION_FILE#"$REPO_ROOT"/}"
+  done
+  assert_empty "$COMPOSITE_ACTIONS" \
+    "a composite action is not read by this case, so its checkouts are unchecked : extend it before adding one"
+
+  local ENTRY KEY PERSIST LINE JOB WORKFLOW_NAME SEEN=""
+  while IFS='|' read -r WORKFLOW_NAME JOB LINE PERSIST; do
+    [ -n "$WORKFLOW_NAME" ] || continue
+    KEY="$WORKFLOW_NAME:$JOB"
+
+    if [[ " $CHECKOUTS_KEEPING_THE_CREDENTIAL " == *" $KEY "* ]]; then
+      SEEN+=" $KEY"
+      if [ "${PERSIST,,}" = "false" ]; then
+        fail "$KEY (line $LINE) already sets persist-credentials: false, so it no longer belongs in CHECKOUTS_KEEPING_THE_CREDENTIAL"
+      else
+        pass
+      fi
+    elif [ "${PERSIST,,}" = "false" ]; then
+      pass
+    else
+      fail ".github/workflows/$WORKFLOW_NAME line $LINE : the checkout in job $JOB leaves its credential in place for the later steps of the job (persist-credentials is $PERSIST). Set it to false under its with:, or, if a later step really authenticates through git, name the job in CHECKOUTS_KEEPING_THE_CREDENTIAL with the step that needs it"
+    fi
+  done <<< "$CHECKOUTS"
+
+  for ENTRY in $CHECKOUTS_KEEPING_THE_CREDENTIAL; do
+    if [[ " $SEEN " == *" $ENTRY "* ]]; then
+      pass
+    else
+      fail "CHECKOUTS_KEEPING_THE_CREDENTIAL names $ENTRY, which is not a job with an actions/checkout step"
+    fi
+  done
+}
+
 # Every step of every workflow runs shell, and none of it is shell to any tool
 # that reads this repository : shellcheck is pointed at the .sh files, bash never
 # parses a workflow, and the YAML linters read the document rather than the
@@ -954,6 +1091,46 @@ function test_a_merge_level_with_its_head_only_after_a_revert_is_checked_again()
     fi
     assert_empty "$DECISION" \
       "$WORKFLOW should run for real when the pull request's head does not contain master's previous tip, however equal the trees"
+  done
+
+  teardown_reuse_sandbox
+}
+
+# The two "detect-reuse" jobs checkout without keeping a credential, so the
+# "git fetch origin refs/pull/<number>/head" in their decision step is
+# anonymous : it works because the repository is public. This is what makes
+# that safe to rely on : a fetch that fails, for any reason, leaves the head
+# unfetched, the trees are never compared, and the answer is the empty one, run
+# for real. What is lost is the saving and never a verdict. The same
+# sandbox is asked first with the origin reachable, so that the empty answer is
+# known to come from the failed fetch and not from a sandbox that never reuses
+function test_a_fetch_of_the_pull_requests_head_that_fails_runs_the_suite_for_real() {
+  if ! reuse_decision_can_run; then
+    skip_test "no .github/workflows next to the scripts, or no git"
+    return 0
+  fi
+
+  build_reuse_sandbox level
+
+  local WORKFLOW DECISION
+  for WORKFLOW in "${REUSE_DECIDING_WORKFLOWS[@]}"; do
+    if ! DECISION=$(run_reuse_decision "$WORKFLOW"); then
+      fail "$DECISION"
+      continue
+    fi
+    assert_not_empty "$DECISION" \
+      "$WORKFLOW should reuse the checks while the pull request's head can be fetched, or this case proves nothing"
+  done
+
+  git -C "$REUSE_CHECKOUT" remote set-url origin "file://$REUSE_SANDBOX/nowhere"
+
+  for WORKFLOW in "${REUSE_DECIDING_WORKFLOWS[@]}"; do
+    if ! DECISION=$(run_reuse_decision "$WORKFLOW"); then
+      fail "$DECISION"
+      continue
+    fi
+    assert_empty "$DECISION" \
+      "$WORKFLOW should run the suite for real when the pull request's head cannot be fetched"
   done
 
   teardown_reuse_sandbox

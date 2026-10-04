@@ -67,6 +67,34 @@ it costs a CI round trip, which is the cost the SessionStart hook installs `shel
 avoid. So the first two are what a session owes on any change ; the build is worth finding
 a daemon for when the change touches the `Dockerfile` or a script the image ships.
 
+**A change under `.github/workflows/` owes two more, which CI runs and requires on every
+pull request** (`.github/workflows/lint-workflows.yml`) : actionlint, for whether a
+workflow is correct, and zizmor, for whether it is safe. Neither is in a Claude Code on the
+web session, and both come without a release download, through the Go module proxy and
+PyPI, at the versions the workflow pins :
+
+```bash
+go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+"$(go env GOPATH)/bin/actionlint" -shellcheck= -pyflakes=   # what CI runs ; the shellcheck integration is off on purpose
+
+python -m venv /tmp/zizmor && /tmp/zizmor/bin/pip install zizmor==1.30.1
+/tmp/zizmor/bin/zizmor --offline --strict-collection .      # what CI runs ; offline, so the same tree gives the same answer
+```
+
+CI installs zizmor against a hash, which this does not ; the version is the same. Each
+finds its settings on its own, in `.github/actionlint.yaml` and in `.github/zizmor.yml`.
+The second records a decision rather than quieting a finding : actions are pinned to a
+version tag, not a commit hash, and Dependabot keeps the tags current. What a green zizmor
+says is less than it sounds : `--offline` skips five audits, impostor-commit,
+known-vulnerable-actions, ref-confusion, stale-action-refs and ref-version-mismatch
+(`zizmor --offline -vv` logs them), so it is not a scan for
+vulnerable actions, and a version-tag policy accepts any reference, a branch such as
+`@main` included. `--strict-collection` is what makes a file it cannot parse an error
+instead of a skipped warning. A finding that is really meant to stay is ignored on its own
+line with `# zizmor: ignore[rule]` and the reason after it, and
+`tests/cases/13_workflow_lint_gate.sh` fails on one that gives none. The ruleset file names
+both checks, but it only gates once it has been imported under Settings > Rules.
+
 ## Conventions
 
 - **Sign off every commit** with **`git signoff`**, never `git commit -s`. A commit without
@@ -146,6 +174,19 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   by hand to `.github/workflows/shellcheck.yml`.** That workflow names its files one
   by one instead of globbing, and `tests/cases/10_shell_scripts.sh` guards the list —
   a script missing from it is analysed by nothing at all.
+- **A checkout does not keep the job token.** By default the checkout action keeps the
+  job's token after it has finished, usable through git by every later step of the job.
+  Every checkout in `.github/workflows/` therefore sets `persist-credentials: false`,
+  so that the credential it set up is removed right after its fetch and no later step
+  inherits it. That is all it does, `secrets.GITHUB_TOKEN` stays usable by a step that
+  names it : a step that wants the token is given it by name, where a reader of the
+  workflow sees it.
+  That includes the `detect-reuse` job of `.github/workflows/tests.yml` and of
+  `.github/workflows/shellcheck.yml`, whose decision step fetches a pull request's head
+  ref without it. That works because the repository is public, and it costs nothing when
+  it does not : a fetch that fails makes the suite run for real, the saving is lost and
+  no verdict is. `tests/cases/12_github_workflows.sh` holds the rule, that failure and
+  a list of the checkouts allowed to keep the credential, which is empty (#530).
 - **Add a test case for what you change.** A behaviour with no test is one the next
   refactor is free to break, and this codebase's refactors span a hundred server models.
 - **Dependabot's minor and patch updates merge themselves once CI is green, in every
@@ -158,7 +199,13 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   jobs that exist. A private repository, where GitHub enforces no ruleset, does the waiting
   in its own workflow instead ; the rule is the same. What gets through is decided by the
   suite, not by a guess about which ecosystem is risky : majors wait for a human, and so
-  does anything red.
+  does anything red. The suite cannot tell a trustworthy release from a compromised one
+  though, so every entry of `.github/dependabot.yml` carries a `cooldown` longer than the
+  three days Dependabot applies on its own : a version is not proposed until it has been
+  out that long, the window in which a bad release is usually noticed and pulled. The
+  number is in that file, which says what the wait holds back here and what it does not.
+  It holds for version updates only, a security update is never delayed, and
+  `tests/cases/19_dependabot_cooldown.sh` holds it (#529).
 - **Pull requests are kept level with the default branch, and never required to be, in
   every repository of this maintainer.** "Require branches to be up to date before
   merging" stays off : whatever cannot be updated automatically — a conflict, a fork, a
