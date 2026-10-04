@@ -529,9 +529,11 @@ function test_dependabot_updates_are_only_ever_queued_never_merged_directly() {
 # the base image of the Dockerfile is not tracked by Dependabot at all,
 # base_image_refresh.yml rebuilds on it every night.
 #
-# Dependabot reports a configuration error only after the merge, on the
-# repository's Insights > Dependency graph > Dependabot page, so nothing in CI
-# can say the file is accepted : this reads what the file states, no more
+# GitHub's own check of .github/dependabot.yml runs on a pull request that
+# changes it, but what each ecosystem then does with the file shows only after
+# the merge, on the repository's Insights > Dependency graph > Dependabot page,
+# so nothing in this suite can say the file is accepted : it reads what the
+# file states, no more
 function test_every_dependabot_update_waits_out_a_cooldown() {
   local -r DEPENDABOT_CONFIG="$REPO_ROOT/.github/dependabot.yml"
   if [ ! -f "$DEPENDABOT_CONFIG" ]; then
