@@ -184,6 +184,14 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   makes alone stay made alone, and what gets asked is what changes the shape of what gets
   delivered. A default chosen silently is a decision nobody made, and it surfaces at
   review, which is the most expensive place for it to surface.
+- **Nothing is postponed on the session's own initiative.** What comes next is done now, in
+  the session that has the context for it, because a session that ends takes its context
+  with it : no "later", "tomorrow" or "in a separate pull request" unless the maintainer
+  chose it or accepted a proposal for it. A session may propose one, with its reason, and
+  then waits for the answer : waiting for the maintainer's answer (to a plan, a question, a
+  proposed deferral) is not postponing, the decision being theirs. Any deferral, a split
+  into a separate pull request included, whether theirs or accepted from a proposal, gets a
+  durable reminder (an issue), not a sentence in the chat.
 - **A reply is as short as the decision it carries.** A wall of prose is skipped whole, which
   costs more than saying too little : what got skipped included the question. So the verdict
   first, the numbers behind it, the question that needs an answer, and nothing else. The reasoning
