@@ -193,13 +193,13 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   into a separate pull request included, whether theirs or accepted from a proposal, gets a
   durable reminder (an issue), not a sentence in the chat.
 - **An issue is something to do, not something to remember.** It is opened for work to be
-  done, now or later, and it closes when that work is done. A deferral the maintainer
-  chose is such work, and so is the follow-up of a problem upstream that this repository
-  cannot fix, which stays open until upstream does. A decision, a condition to wait for, a
-  reason for not building something is never kept alive as an open issue : it is written
-  where it will be read when it matters — a line in the README, a comment above the code,
-  this file — and the issue that discussed it closes with the reasoning in its description
-  (#540).
+  done, now or later, and it closes when that work is done. A deferral the maintainer chose
+  is such work, and so is the follow-up of a problem in a third-party project that this
+  repository cannot fix, which stays open, labelled `waiting-on-third-party`, until it is
+  fixed there. A decision, a condition to wait for, a reason for not building something is
+  never kept alive as an open issue : it is written where it will be read when it matters —
+  a line in the README, a comment above the code, this file — and the issue that discussed
+  it closes with the reasoning in its description (#540, #542).
 - **A reply is as short as the decision it carries.** A wall of prose is skipped whole, which
   costs more than saying too little : what got skipped included the question. So the verdict
   first — for a decision to take, what the maintainer gains and what it costs them, in two
