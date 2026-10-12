@@ -229,7 +229,21 @@ both checks, but it only gates once it has been imported under Settings > Rules.
   maintainer's machines have none, and they already work as root where root is needed).
   It prints only what the session needs to read : a long log goes to a file on the host,
   and the chat gets it filtered, counted or summarised.
+- **Never hand over a file to download.** Any manual step is given as a **pre-filled
+  link** — an issue creation URL carrying its title and body, the GitHub settings page
+  concerned, the direct link to the item to delete.
+- **An issue's whole point lives in its description.** Nothing essential is buried in the
+  comments, fallback options considered in case the first choice fails included.
 - **One issue, one subject.** If a second subject appears, it is split off.
+- **An issue opened in a session comes with its pull request.** The issue is written for
+  the record and the branch is opened against it in the same breath, to the same standard
+  as any other (checks run, reasoning in the commit message, what could not be verified in
+  the body) ; the issue still states the problem and the options, so both survive the pull
+  request being closed. An open question in the issue is not a reason to withhold the pull
+  request : implement the reading that was actually asked for, say in the body which one
+  was taken, and leave the alternatives in the issue. The one exception is a fix that
+  would be guesswork : there the pull request is the one thing not opened, and the issue
+  says so.
 - **A fix goes to the cause, and a workaround says that it is one.** Every fix proposed
   says which of the two it is, and the one wanted is the cause. A workaround is acceptable
   only as a stopgap labelled as one where it lands — the commit, the pull request, the
@@ -237,8 +251,11 @@ both checks, but it only gates once it has been imported under Settings > Rules.
   the fix.
 - **A pull request is preceded by its plan.** Before building one, the session says in
   the chat how it means to do it — where the change lives, what it touches, what it costs,
-  what it leaves out — and builds once the maintainer has answered. A change nobody could
-  shape two ways, such as a missing README row or a typo, does not wait on a plan.
+  what it leaves out — and builds once the maintainer has answered. The plan is not an
+  exception to the rule that an issue opened in a session comes with its pull request: once
+  it is agreed, the issue and its pull request still go out together, and an open detail
+  does not hold the pull request back. A change nobody could shape two ways, such as a
+  missing README row or a typo, does not wait on a plan.
 - **A rule given in the session is written into this file, in the same session.** When the
   maintainer states one it lands here, and in the copy of every other repository of the
   maintainer that carries agent instructions when it is a shared one, as part of the work
