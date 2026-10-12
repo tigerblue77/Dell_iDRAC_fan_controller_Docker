@@ -302,7 +302,9 @@ a daemon for when the change touches the `Dockerfile` or a script the image ship
   repeating it in the chat is the second copy that drifts. Tables and lists over paragraphs, and
   never a restatement of what was just asked.
 - **A request to merge says what the pull request brings.** Merging is the maintainer's own
-  act, so the ask carries what they need in order to decide, pull request by pull request :
+  act, Dependabot's minor and patch updates apart, which merge themselves once CI is green
+  (see the rule on Dependabot above), so the ask carries what they need in order to decide,
+  pull request by pull request :
   what it does, which goal it serves, what it changes, and — whenever it changes something
   that runs — how to test it, as the command to type or the thing to watch rather than "CI
   is green". What in it could not be verified, and why, stays in. Several at once come in the
