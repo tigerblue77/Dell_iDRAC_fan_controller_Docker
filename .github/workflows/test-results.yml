@@ -17,9 +17,19 @@ name: Test results
 #
 # /!\ Like every workflow_run workflow, this one only starts working once it is
 # on the default branch : a pull request adding it does not run it.
+#
+# zizmor's dangerous-triggers audit is told to leave the trigger alone, on the
+# line it sits on. That audit cannot tell this use from the ones it exists for,
+# because what makes workflow_run dangerous is a workflow that checks out or
+# runs what the triggering run produced, and this one does neither : it has no
+# checkout, it runs no script from the artifacts, and what it downloads is
+# handed to the publishing action as data, the JUnit reports and the event
+# payload. This is the arrangement that action documents for a fork's pull
+# request, and the reason for the trigger : the token of a fork's own run is
+# read-only and cannot comment
 
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers] reads the artifacts as data and runs nothing from the fork, see the header
     workflows: [Tests]
     types: [completed]
 

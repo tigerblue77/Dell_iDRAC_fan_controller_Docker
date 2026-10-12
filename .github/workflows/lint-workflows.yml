@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: 2020-2026 Tigerblue77 and the Dell iDRAC fan controller Docker image contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: lint-workflows
+
+# The workflows are code, and the code with the most reach in this repository :
+# they hold the token that publishes the image, the credential that updates other
+# people's pull requests and the logic that decides what "latest" points at. And
+# nothing read them before this : the Shellcheck workflow lints the scripts, the
+# suite only asks bash whether the shell inside a "run:" block parses, and the
+# rest of a workflow was found out by the run that needed it, which for the
+# release build and the nightly refresh is a tag or the morning after. Two
+# linters, because they look for different things :
+#
+#  * actionlint is about whether a workflow is CORRECT : syntax, the types of
+#    expressions, a job that "needs" one that does not exist, an input an action
+#    does not take, a context that is not available where it is used.
+#  * zizmor is about whether it is SAFE : an expression interpolated into a
+#    script, a permission wider than the job needs, a checkout that leaves its
+#    token behind, a trigger that runs untrusted input with a trusted token.
+#
+# Both are required checks, which is .github/rulesets/master.json, and the
+# ruleset is only as true as the file the maintainer imports : until the updated
+# file is imported under Settings > Rules they report on a pull request without
+# blocking it, and a pull request whose branch predates the import shows them as
+# "Expected, waiting" until it is updated. tests/cases/12_github_workflows.sh
+# holds the names against the jobs here, and
+# tests/cases/13_workflow_lint_gate.sh the rest of what keeps this a gate.
+#
+# They run on every pull request and on every push to master, as "Shellcheck"
+# does, with no "detect-reuse" job in front of them, unlike it and "Tests". Each
+# takes seconds, so there is nothing to save, and a required check that is
+# skipped counts as satisfied : the one thing a gate on the workflows must not
+# be able to do is pass by not running. For the same reason no trigger carries a
+# "paths:" filter, which would hide the check from a pull request that touches
+# nothing it names and leave it waiting for ever.
+#
+# What a green run does and does not say. Both tools read the files and nothing
+# else, so the same tree gives the same answer, and that has a price : zizmor is
+# run offline, which skips five of its audits (impostor-commit,
+# known-vulnerable-actions, ref-confusion, stale-action-refs and
+# ref-version-mismatch, as "zizmor --offline -vv" logs them), so a green
+# zizmor is not a scan for vulnerable actions. And "uses:" is held to the policy
+# of .github/zizmor.yml, a version tag, which accepts any reference, a branch
+# such as @main included : it refuses an action named with no reference at all,
+# it does not refuse a moving one.
+#
+# Neither tool is installed through an action : a wrapper is one more
+# dependency, with a tag of its own that can be moved, in the workflow whose job
+# is to catch exactly that. Both are pinned, and the pin is authenticated by
+# something other than the tag it was fetched under : a module version is
+# checked against the Go checksum database, a wheel against the hash written
+# below. Nothing bumps either pin, moving to a newer release is a deliberate
+# edit.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A pull request that is pushed to again has no use for the run of the push
+# before it. The default branch is left alone, so that two merges close together
+# both get their verdict, and that holds for two : GitHub keeps one pending run
+# per group, so a third push while one runs and one waits replaces the one that
+# waits
+concurrency:
+  group: lint-workflows-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The Go on the runner builds it, from source, at the version below. A
+      # release needing a newer Go than the runner has is not a problem : go
+      # fetches the toolchain the module asks for, through the same module proxy
+      # and checked against the same database. v1.7.12 asks for Go 1.25
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      # The integrations with shellcheck and pyflakes are off, and on purpose.
+      # With them on, the result depends on whichever versions of those two the
+      # runner image ships, which moves under a pull request that touched
+      # nothing, and the shell in a workflow would be held to a standard the
+      # scripts of this repository are not : they are linted by "Shellcheck",
+      # at the version it pins, and the blocks in a workflow are only parsed by
+      # tests/cases/12_github_workflows.sh. actionlint reads the file and
+      # nothing else, so the same tree gives the same answer, and
+      # tests/cases/13_workflow_lint_gate.sh fails if either flag goes
+      #
+      # .github/actionlint.yaml is read from the repository on its own and holds
+      # the two findings that are ignored, with the reason
+      - name: Run actionlint
+        run: |
+          "$(go env GOPATH)/bin/actionlint" -shellcheck= -pyflakes=
+
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # zizmor is a binary shipped as a wheel. "--require-hashes" refuses
+      # anything pip cannot match against a hash written down here, and
+      # "--only-binary" refuses to build anything on the runner, so the one file
+      # that is installed is the one whose sha256 is below : the manylinux
+      # x86_64 wheel of 1.30.1, which is what an "ubuntu-latest" runner takes.
+      # The hash is of that file alone, so a runner on another architecture
+      # fails here instead of picking another build
+      - name: Install zizmor
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          printf '%s\n' 'zizmor==1.30.1 --hash=sha256:eee12266b793cb87ad4a7e3af2e72404f8a63e3de5eb099b80bf7b1cfd232a8e' \
+            > "$RUNNER_TEMP/zizmor-requirements.txt"
+          "$RUNNER_TEMP/zizmor/bin/pip" install \
+            --require-hashes --only-binary :all: \
+            --requirement "$RUNNER_TEMP/zizmor-requirements.txt"
+
+      # Offline, and on purpose : the online audits ask GitHub and the advisory
+      # databases about the actions a workflow uses, and the answer changes from
+      # one day to the next without anyone touching this repository, which
+      # would turn a required check red on a pull request that caused nothing.
+      # What stays is everything that can be decided from the files, which is
+      # what a pull request can be held to, and the header says what is dropped.
+      #
+      # --strict-collection makes a file zizmor cannot parse an error. Without
+      # it the file is skipped with a warning and the check stays green, and
+      # .github/dependabot.yml is read by nothing else here.
+      #
+      # .github/zizmor.yml is found on its own, and holds the policy for
+      # "uses:" : a version tag is accepted, a commit hash is not demanded.
+      # What is told to leave one place alone is said on that line of the
+      # workflow, "zizmor: ignore[...]", with the reason after it, and
+      # tests/cases/13_workflow_lint_gate.sh fails on one that gives none. There
+      # are two : the workflow_run trigger of test-results.yml, whose
+      # justification that case pins, and softprops/action-gh-release in the
+      # release build, tracked in #535. "--format github" turns each finding
+      # into an annotation on the line it is about
+      - name: Run zizmor
+        run: |
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --offline --strict-collection --format github .

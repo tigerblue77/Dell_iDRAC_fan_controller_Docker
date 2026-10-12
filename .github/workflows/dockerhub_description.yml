@@ -47,8 +47,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # No credential is kept : the generator only reads the URL of origin, and
+      # the Docker Hub call is made with its own token
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Same derivation as the two publishing workflows, lowercased : this one
       # names the repository to a Docker Hub API call rather than to

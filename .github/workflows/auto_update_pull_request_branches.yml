@@ -172,6 +172,16 @@ jobs:
         with:
           client-id: ${{ vars.PULL_REQUESTS_UPDATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PULL_REQUESTS_UPDATE_APP_PRIVATE_KEY }}
+          # The three permissions the header says the credential needs, and no
+          # more : without these the token carries every permission the App was
+          # ever granted on this installation, which is more than a pass over
+          # the pull requests uses. It is still limited to this repository, no
+          # owner or repositories being named. If the installation lacks one of
+          # the three, the token cannot be minted and this step fails saying so,
+          # which a run started by hand shows without waiting for a merge
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
 
       - name: Rebase every conflict-free pull request that is behind master
         env:

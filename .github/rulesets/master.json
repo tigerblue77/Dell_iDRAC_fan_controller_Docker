@@ -39,6 +39,14 @@
           {
             "context": "Check the commits carry a sign-off",
             "integration_id": 15368
+          },
+          {
+            "context": "actionlint",
+            "integration_id": 15368
+          },
+          {
+            "context": "zizmor",
+            "integration_id": 15368
           }
         ]
       }

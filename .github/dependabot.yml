@@ -10,6 +10,12 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    # The cooldown of the entry below, for the reason given there. This
+    # ecosystem keeps the "features" of a dev container current, and
+    # .devcontainer/devcontainer.json lists none today, so for now there is
+    # nothing for it to hold back
+    cooldown:
+      default-days: 7
     # The limit counts per entry, so the reason given on the entry below holds
     # here too
     open-pull-requests-limit: 99
@@ -30,6 +36,41 @@ updates:
     # still wait for a manual review
     schedule:
       interval: "daily"
+    # A version is proposed only once it has been published for seven days.
+    # Dependabot waits three days when no cooldown is configured, so this asks
+    # for more than the default. The number is written once per entry here, in
+    # the minimum tests/cases/19_dependabot_cooldown.sh holds the entries to, and
+    # in this sentence : change them together.
+    # Minor and patch updates merge themselves once the suite is green, and the
+    # suite says nothing about whether a release can be trusted ; a compromised
+    # one is usually noticed and pulled within days, so a longer wait is more of
+    # that window, at the price of running that much behind. The daily check above
+    # still applies, so a version is proposed the day after its cooldown ends.
+    # What it holds back here is less than it sounds. Every action is pinned to a
+    # major tag, actions/checkout@v7 and so on, and Dependabot keeps the precision
+    # of the reference it finds : it proposes the next major, never a v7.x.y for a
+    # @v7 pin, and every bump in this repository's history is one, "from 4 to 7".
+    # So the minor and patch updates that merge themselves are not what this entry
+    # produces, and the majors it does produce wait for a review anyway, that much
+    # later than they would have. What no cooldown reaches is a floating tag moved
+    # by its maintainer : the next run uses the new commit with no pull request at
+    # all, and only pinning to a commit would prevent that. Version tags were
+    # chosen over hashes on purpose, so that is a known gap and not an oversight.
+    # It holds for version updates only : a security update is never delayed, and
+    # a fix for a published vulnerability still arrives at once. Default-days is
+    # the only day count these two ecosystems take, the semver-*-days ones are for
+    # the semver ecosystems, pip for instance, and this file has none.
+    # No entry here is left without one, and leaving it out would not exempt it :
+    # an entry with no cooldown block is on Dependabot's three days. The base
+    # image of the Dockerfile is not tracked by Dependabot at all,
+    # base_image_refresh.yml checks it every night and rebuilds from the last
+    # release tag when it moved, so the entry that would want an exemption, an
+    # official base image whose freshness matters more than the delay, does not
+    # exist. If one is ever added, its dependency goes in the cooldown's exclude
+    # list, and tests/cases/19_dependabot_cooldown.sh is where an entry that is
+    # deliberately left on the default is named
+    cooldown:
+      default-days: 7
     # Opening a pull request is the only way Dependabot reports anything, and it
     # stops opening them once this many are waiting - silently, naming nothing.
     # The default is 5, and the first scan here hit it exactly : five majors
