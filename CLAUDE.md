@@ -459,3 +459,26 @@ names a file to write. `git` and `docker build` were deliberately
 left out (issue #382). That list is a standing grant to every session opened here, so
 adding to it is a decision to argue, not a line to append :
 `tests/cases/11_claude_code_settings.sh` holds it.
+
+### What a session actually has
+
+The hook is best effort, as its header says, so a tool may simply not be there, and the
+first thing a session owes itself is to find out rather than assume. The hook's closing
+lines say what it could not install ; this confirms by hand what is on the PATH and runs,
+and each command answers even when one before it fails :
+
+```bash
+shellcheck --version ; jq --version ; git --version ; docker info --format '{{.ServerVersion}}'
+```
+
+A missing `jq` or `git` is reported as a skip and not as a failure, so a run is read by
+its skipped count and not by its exit status alone. The run inside the built image needs
+the Docker daemon that *Commands* above says Claude Code on the web lacks, so for a session
+without one it runs in CI only.
+
+So the pull request body says which checks did not run and why, the build and the run
+inside the image included, and — as the rule on what a request to merge brings asks —
+which firmware generations were exercised and which were not : the suite's catalogue
+mocks every generation it covers, so a change only the suite has seen has met no real
+iDRAC. Reporting a check as passing because it normally passes is the failure this exists
+to prevent : "everything passes" while a job never ran is worse than saying nothing.
