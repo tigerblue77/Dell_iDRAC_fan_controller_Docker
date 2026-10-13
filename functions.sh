@@ -2064,6 +2064,20 @@ function redfish_request() {
   if [ -n "${REDFISH_ERRAND_DEADLINE_IN_SECONDS:-}" ]; then
     local REMAINING_IN_SECONDS=$(( REDFISH_ERRAND_DEADLINE_IN_SECONDS - SECONDS ))
 
+    # What is left is read off the errand's start in microseconds wherever the shell has them, and
+    # rounded up. SECONDS ticks over on wall-clock boundaries, so an errand opened a millisecond before
+    # one gave its first request a second it had never spent -- the flaw that moved
+    # has_the_redfish_errand_spent_real_time() off SECONDS. It stays the fallback without EPOCHREALTIME
+    local NOW_IN_MICROSECONDS=""
+    if [ -n "${REDFISH_ERRAND_STARTED_AT_MICROSECONDS:-}" ]; then
+      NOW_IN_MICROSECONDS=$(now_in_microseconds)
+    fi
+    if [ -n "$NOW_IN_MICROSECONDS" ]; then
+      local -r SPENT_IN_MICROSECONDS=$(( NOW_IN_MICROSECONDS - REDFISH_ERRAND_STARTED_AT_MICROSECONDS ))
+      local -r LEFT_IN_MICROSECONDS=$(( REDFISH_REQUEST_TIMEOUT_IN_SECONDS * 1000000 - SPENT_IN_MICROSECONDS ))
+      REMAINING_IN_SECONDS=$(( (LEFT_IN_MICROSECONDS + 999999) / 1000000 ))
+    fi
+
     if [ "$REMAINING_IN_SECONDS" -lt 1 ]; then
       REMAINING_IN_SECONDS=1
     fi
