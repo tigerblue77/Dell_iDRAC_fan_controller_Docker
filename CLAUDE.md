@@ -249,6 +249,12 @@ both checks, but it only gates once it has been imported under Settings > Rules.
   title or the body of a pull request and ignores a negation, so "this does not close #NN"
   closes it on merge. A pull request that delivers only part of an issue writes "Refs #NN"
   and describes the rest without putting the keyword next to the number.
+- **A pull request starts from the default branch, never from another open pull request.**
+  GitHub merges a pull request into the branch it targets, so one built on another's
+  branch, and merged after that one but before its branch is gone, lands there and never
+  reaches the default branch, although it reads as merged. Two changes that depend on each
+  other go in one pull request. A merge is reported only once its content has been read on
+  the default branch, never from the pull request's status alone.
 - **A fix goes to the cause, and a workaround says that it is one.** Every fix proposed
   says which of the two it is, and the one wanted is the cause. A workaround is acceptable
   only as a stopgap labelled as one where it lands — the commit, the pull request, the
