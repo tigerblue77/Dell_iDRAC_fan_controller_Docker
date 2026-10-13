@@ -1072,6 +1072,34 @@ function test_the_errand_spends_one_budget_rather_than_one_per_request() {
     "and the second is given only what the first left of it, not a second full share"
 }
 
+function test_a_budget_opened_just_before_a_second_ticks_over_is_not_a_second_short() {
+  # The regression guard for the budget being read off SECONDS, which ticks over on wall-clock boundaries :
+  # an errand opened a millisecond before one gave its first request a second it had never spent, so the
+  # case above saw 9 for 10 whenever its run straddled a boundary -- a coin toss on the runner.
+  #
+  # This case removes the luck : it puts the errand straight into the state that straddle leaves it in,
+  # opened a millisecond ago with the whole-second counter already past it. Under a whole-second reading
+  # it fails every time
+  export MOCK_PERL_CALL_LOG="$TEST_TEMPORARY_DIRECTORY/perl_calls"
+  : > "$MOCK_PERL_CALL_LOG"
+  export MOCK_REDFISH_CONFORMANT_STATUS="200"
+
+  local NOW_IN_MICROSECONDS
+  NOW_IN_MICROSECONDS=$(now_in_microseconds)
+  if [ -z "$NOW_IN_MICROSECONDS" ]; then
+    skip_test "this shell has no EPOCHREALTIME, so the budget can only be read off SECONDS"
+    return 0
+  fi
+
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=$(( SECONDS - 1 + REDFISH_REQUEST_TIMEOUT_IN_SECONDS ))
+  REDFISH_ERRAND_STARTED_AT_MICROSECONDS=$(( NOW_IN_MICROSECONDS - 1000 ))
+  redfish_get "$REDFISH_CONFORMANT_ATTRIBUTES_URI" "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" > /dev/null 2>&1
+  REDFISH_ERRAND_DEADLINE_IN_SECONDS=""
+
+  assert_equals "$REDFISH_REQUEST_TIMEOUT_IN_SECONDS" "$(awk '{ print $NF }' "$MOCK_PERL_CALL_LOG")" \
+    "a millisecond spent is not a second spent : the first request keeps the whole budget"
+}
+
 function test_a_slow_idrac_gets_one_request_per_cycle_instead_of_a_stretched_one() {
   # The rhythm the loop keeps is max(CHECK_INTERVAL, the work), so work that runs long stretches the gap
   # between two runs of is_any_CPU_overheating() -- the only thing that takes fans off the user's static
